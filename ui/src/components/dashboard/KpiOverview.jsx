@@ -123,3 +123,4 @@ export default function KpiOverview({ energySummary, productionSummary }) {
     </div>
   );
 }
+

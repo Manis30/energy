@@ -143,3 +143,4 @@ export default function EnergyEfficiencySection({ processEnergy, factoryEnergy }
     </div>
   );
 }
+

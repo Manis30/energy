@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Dashboard from './components/dashboard/Dashboard';
+import EnergyAnalytics from './pages/EnergyAnalytics';
 import { checkBackendHealth } from './services/api';
 import './theme.css';
 import './app.css';
@@ -135,6 +136,8 @@ export default function App() {
         <main className="content-area">
           {activeNav === 'dashboard' ? (
             <Dashboard />
+          ) : activeNav === 'energy-analytics' ? (
+            <EnergyAnalytics />
           ) : (
             <div className="placeholder-card">
               <div className="placeholder-header">

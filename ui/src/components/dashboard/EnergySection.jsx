@@ -241,3 +241,4 @@ export default function EnergySection({ dailyTrend, byMeter, byArea }) {
     </div>
   );
 }
+
