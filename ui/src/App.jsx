@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
+import { checkBackendHealth } from './services/api';
 import './theme.css';
 import './app.css';
 
-const PLACEHOLDER_INFO = {
+const BASE_PLACEHOLDER_INFO = {
   dashboard: {
     title: 'Industrial Energy & Production Overview',
     description: 'Central operations monitoring hub. Verified KPIs, meter summaries, and real-time production-energy ratios will be displayed here once connected to validated backend analytics.',
@@ -62,23 +63,74 @@ export default function App() {
   });
 
   const [activeNav, setActiveNav] = useState('dashboard');
+  const [backendStatus, setBackendStatus] = useState({
+    loading: true,
+    connected: false,
+    version: null,
+    error: null,
+  });
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('iei_theme', theme);
   }, [theme]);
 
+  useEffect(() => {
+    let isMounted = true;
+    async function verifyBackend() {
+      setBackendStatus({ loading: true, connected: false, version: null, error: null });
+      const result = await checkBackendHealth();
+      if (!isMounted) return;
+      if (result.success && result.data?.status === 'ok') {
+        setBackendStatus({
+          loading: false,
+          connected: true,
+          version: result.data.version,
+          error: null,
+        });
+      } else {
+        setBackendStatus({
+          loading: false,
+          connected: false,
+          version: null,
+          error: result.error || 'Backend unavailable',
+        });
+      }
+    }
+
+    verifyBackend();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const toggleTheme = () => {
     setTheme((prevTheme) => (prevTheme === 'light' ? 'dark' : 'light'));
   };
 
-  const currentInfo = PLACEHOLDER_INFO[activeNav] || PLACEHOLDER_INFO.dashboard;
+  const currentInfo = BASE_PLACEHOLDER_INFO[activeNav] || BASE_PLACEHOLDER_INFO.dashboard;
+
+  const dynamicDetails = [...currentInfo.details];
+  if (activeNav === 'dashboard') {
+    if (backendStatus.loading) {
+      dynamicDetails.push('API Integration: Connecting to FastAPI backend via Vite proxy...');
+    } else if (backendStatus.connected) {
+      dynamicDetails.push(`API Integration: FastAPI backend connected (v${backendStatus.version}) via /api proxy`);
+    } else {
+      dynamicDetails.push(`API Integration: Offline (${backendStatus.error})`);
+    }
+  }
 
   return (
     <div className="app-container">
       <Sidebar activeNav={activeNav} onNavigate={setActiveNav} />
       <div className="main-wrapper">
-        <Header activeNav={activeNav} theme={theme} onToggleTheme={toggleTheme} />
+        <Header
+          activeNav={activeNav}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          backendStatus={backendStatus}
+        />
         <main className="content-area">
           <div className="placeholder-card">
             <div className="placeholder-header">
@@ -86,7 +138,7 @@ export default function App() {
               <p className="placeholder-desc">{currentInfo.description}</p>
             </div>
             <div className="placeholder-details">
-              {currentInfo.details.map((detail, idx) => (
+              {dynamicDetails.map((detail, idx) => (
                 <div key={idx} className="placeholder-item">
                   <span className="item-bullet">›</span>
                   <span>{detail}</span>

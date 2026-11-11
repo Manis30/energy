@@ -155,20 +155,51 @@ body {
 .system-badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.2rem 0.6rem;
+  gap: 0.45rem;
+  padding: 0.25rem 0.75rem;
   border-radius: 9999px;
   font-size: 0.75rem;
   font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.system-badge.connected {
   background-color: rgba(16, 185, 129, 0.12);
   color: var(--status-success);
+}
+
+.system-badge.connected .badge-dot {
+  background-color: var(--status-success);
+}
+
+.system-badge.loading {
+  background-color: rgba(245, 138, 58, 0.12);
+  color: var(--brand-orange);
+}
+
+.system-badge.loading .badge-dot {
+  background-color: var(--brand-orange);
+  animation: badge-pulse 1.5s infinite;
+}
+
+.system-badge.disconnected {
+  background-color: rgba(239, 68, 68, 0.12);
+  color: var(--status-danger);
+}
+
+.system-badge.disconnected .badge-dot {
+  background-color: var(--status-danger);
 }
 
 .badge-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background-color: var(--status-success);
+}
+
+@keyframes badge-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }
 
 .header-actions {

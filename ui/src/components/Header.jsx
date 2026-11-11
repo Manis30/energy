@@ -9,17 +9,39 @@ const PAGE_TITLES = {
   'ai-assistant': 'Conversational AI Assistant',
 };
 
-export default function Header({ activeNav, theme, onToggleTheme }) {
+export default function Header({ activeNav, theme, onToggleTheme, backendStatus }) {
   const currentTitle = PAGE_TITLES[activeNav] || 'Industrial Energy Intelligence';
+
+  const renderBadge = () => {
+    if (!backendStatus || backendStatus.loading) {
+      return (
+        <span className="system-badge loading" title="Checking backend connection...">
+          <span className="badge-dot"></span>
+          Connecting to API...
+        </span>
+      );
+    }
+    if (backendStatus.connected) {
+      return (
+        <span className="system-badge connected" title="FastAPI backend connected via proxy">
+          <span className="badge-dot"></span>
+          Backend Connected (v{backendStatus.version || '1.0.0'})
+        </span>
+      );
+    }
+    return (
+      <span className="system-badge disconnected" title={backendStatus.error || 'FastAPI unavailable'}>
+        <span className="badge-dot"></span>
+        Backend Offline
+      </span>
+    );
+  };
 
   return (
     <header className="top-header">
       <div className="header-title-section">
         <h1 className="page-title">{currentTitle}</h1>
-        <span className="system-badge">
-          <span className="badge-dot"></span>
-          System Ready
-        </span>
+        {renderBadge()}
       </div>
 
       <div className="header-actions">
