@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     DOMO_BASE_URL: Optional[str] = None
     DOMO_DEVELOPER_TOKEN: Optional[str] = None
     MODEL_NAME: Optional[str] = None
+    DOMO_TIMEOUT_SECONDS: float = 30.0
+    DOMO_MAX_RETRIES: int = 3
 
     model_config = SettingsConfigDict(
         env_file=(".env", "backend/.env"),
@@ -34,4 +36,3 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return cached settings instance."""
     return Settings()
-
