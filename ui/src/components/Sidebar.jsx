@@ -1,8 +1,9 @@
 import React from 'react';
+import { NavLink } from 'react-router-dom';
 
 const NAV_ITEMS = [
   {
-    id: 'dashboard',
+    path: '/',
     label: 'Dashboard',
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -12,9 +13,10 @@ const NAV_ITEMS = [
         <rect width="7" height="5" x="3" y="16" rx="1"/>
       </svg>
     ),
+    end: true,
   },
   {
-    id: 'energy-analytics',
+    path: '/energy-analytics',
     label: 'Energy Analytics',
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -23,7 +25,7 @@ const NAV_ITEMS = [
     ),
   },
   {
-    id: 'production-analytics',
+    path: '/production-analytics',
     label: 'Production Analytics',
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -32,7 +34,7 @@ const NAV_ITEMS = [
     ),
   },
   {
-    id: 'anomalies',
+    path: '/anomalies',
     label: 'Anomalies',
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -43,7 +45,7 @@ const NAV_ITEMS = [
     ),
   },
   {
-    id: 'daily-analysis',
+    path: '/daily-analysis',
     label: 'Daily Analysis',
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -55,7 +57,7 @@ const NAV_ITEMS = [
     ),
   },
   {
-    id: 'ai-assistant',
+    path: '/ai-assistant',
     label: 'AI Assistant',
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -70,7 +72,7 @@ const NAV_ITEMS = [
   },
 ];
 
-export default function Sidebar({ activeNav, onNavigate }) {
+export default function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
@@ -84,21 +86,21 @@ export default function Sidebar({ activeNav, onNavigate }) {
 
       <nav className="sidebar-nav">
         {NAV_ITEMS.map((item) => (
-          <button
-            key={item.id}
-            className={`nav-item ${activeNav === item.id ? 'active' : ''}`}
-            onClick={() => onNavigate(item.id)}
-            type="button"
+          <NavLink
+            key={item.path}
+            to={item.path}
+            end={item.end}
+            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           >
             <span className="nav-icon">{item.icon}</span>
             <span>{item.label}</span>
-          </button>
+          </NavLink>
         ))}
       </nav>
 
       <div className="sidebar-footer">
         <div>Platform v1.0.0</div>
-        <div style={{ marginTop: '0.25rem', opacity: 0.8 }}>Industrial Analytics</div>
+        <div>Industrial Energy Intel</div>
       </div>
     </aside>
   );

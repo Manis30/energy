@@ -1,72 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
-import Dashboard from './components/dashboard/Dashboard';
-import EnergyAnalytics from './pages/EnergyAnalytics';
-import ProductionAnalytics from './pages/ProductionAnalytics';
-import AnomalyMonitoring from './pages/AnomalyMonitoring';
+import PageLoader from './components/PageLoader';
 import { checkBackendHealth } from './services/api';
 import './theme.css';
 import './app.css';
 
-const BASE_PLACEHOLDER_INFO = {
-  dashboard: {
-    title: 'Industrial Energy & Production Overview',
-    description: 'Central operations monitoring hub. Verified KPIs, meter summaries, and real-time production-energy ratios will be displayed here once connected to validated backend analytics.',
-    details: [
-      'Source Datasets: 4 approved factory files verified',
-      'Calculations: Deterministic backend calculation services',
-      'Database: Neon PostgreSQL data store foundation ready',
-    ],
-  },
-  'energy-analytics': {
-    title: 'Energy Consumption & Meter Analytics',
-    description: 'Detailed analysis of factory energy meters, interval consumption, demand peaks, and power factor distributions across monitored production zones.',
-    details: [
-      'Temporal granularity: Hourly intervals and daily rollups',
-      'Boundary verification: Submeter isolation to prevent double counting',
-    ],
-  },
-  'production-analytics': {
-    title: 'Production Performance & Product Correlation',
-    description: 'Tracking manufacturing output by production line, shift, and product SKU to contextualize plant energy consumption.',
-    details: [
-      'Lines: SMT lines and Final Assembly lines',
-      'Products: Aster 15 & Aster Pro variants',
-    ],
-  },
-  anomalies: {
-    title: 'Automated Energy Anomaly Detection',
-    description: 'Deterministic identification of statistical deviations, off-hour baseline spikes, and non-production consumption events.',
-    details: [
-      'Detection methods: Historical rolling baselines and standard deviations',
-      'Investigation guidance: Operational recommendations and severity ratings',
-    ],
-  },
-  'daily-analysis': {
-    title: 'Automated Daily Energy Analysis',
-    description: 'One-click daily energy reporting workflow generating verified executive summaries, anomaly audits, and evidence-backed energy savings actions.',
-    details: [
-      'Action: Run Today\'s Energy Analysis trigger ready for integration',
-      'Persistence: Neon report storage and historical audit log',
-    ],
-  },
-  'ai-assistant': {
-    title: 'Conversational Energy Intelligence Assistant',
-    description: 'Interactive analytical assistant powered by LangChain and Domo AI Services with deterministic tools and read-only database query execution.',
-    details: [
-      'Safety: Read-only analytics connection with strict single-statement validation',
-      'Traceability: Direct inspection of tool inputs, outputs, and execution steps',
-    ],
-  },
-};
+// Route-based lazy loading with React.lazy
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const EnergyAnalytics = lazy(() => import('./pages/EnergyAnalytics'));
+const ProductionAnalytics = lazy(() => import('./pages/ProductionAnalytics'));
+const AnomalyMonitoring = lazy(() => import('./pages/AnomalyMonitoring'));
+const DailyAnalysis = lazy(() => import('./pages/DailyAnalysis'));
+const AIAssistant = lazy(() => import('./pages/AIAssistant'));
 
 export default function App() {
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('iei_theme') || 'light';
   });
 
-  const [activeNav, setActiveNav] = useState('dashboard');
   const [backendStatus, setBackendStatus] = useState({
     loading: true,
     connected: false,
@@ -112,54 +65,27 @@ export default function App() {
     setTheme((prevTheme) => (prevTheme === 'light' ? 'dark' : 'light'));
   };
 
-  const currentInfo = BASE_PLACEHOLDER_INFO[activeNav] || BASE_PLACEHOLDER_INFO.dashboard;
-
-  const dynamicDetails = [...currentInfo.details];
-  if (activeNav === 'dashboard') {
-    if (backendStatus.loading) {
-      dynamicDetails.push('API Integration: Connecting to FastAPI backend via Vite proxy...');
-    } else if (backendStatus.connected) {
-      dynamicDetails.push(`API Integration: FastAPI backend connected (v${backendStatus.version}) via /api proxy`);
-    } else {
-      dynamicDetails.push(`API Integration: Offline (${backendStatus.error})`);
-    }
-  }
-
   return (
     <div className="app-container">
-      <Sidebar activeNav={activeNav} onNavigate={setActiveNav} />
+      <Sidebar />
       <div className="main-wrapper">
         <Header
-          activeNav={activeNav}
           theme={theme}
           onToggleTheme={toggleTheme}
           backendStatus={backendStatus}
         />
         <main className="content-area">
-          {activeNav === 'dashboard' ? (
-            <Dashboard />
-          ) : activeNav === 'energy-analytics' ? (
-            <EnergyAnalytics />
-          ) : activeNav === 'production-analytics' ? (
-            <ProductionAnalytics />
-          ) : activeNav === 'anomalies' ? (
-            <AnomalyMonitoring />
-          ) : (
-            <div className="placeholder-card">
-              <div className="placeholder-header">
-                <h2 className="placeholder-heading">{currentInfo.title}</h2>
-                <p className="placeholder-desc">{currentInfo.description}</p>
-              </div>
-              <div className="placeholder-details">
-                {dynamicDetails.map((detail, idx) => (
-                  <div key={idx} className="placeholder-item">
-                    <span className="item-bullet">›</span>
-                    <span>{detail}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <Suspense fallback={<PageLoader />}>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/energy-analytics" element={<EnergyAnalytics />} />
+              <Route path="/production-analytics" element={<ProductionAnalytics />} />
+              <Route path="/anomalies" element={<AnomalyMonitoring />} />
+              <Route path="/daily-analysis" element={<DailyAnalysis />} />
+              <Route path="/ai-assistant" element={<AIAssistant />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
         </main>
       </div>
     </div>

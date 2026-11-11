@@ -135,3 +135,4 @@ export default function AnomalyKpis({ data }) {
     </div>
   );
 }
+

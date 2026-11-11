@@ -1,16 +1,18 @@
 import React from 'react';
+import { useLocation } from 'react-router-dom';
 
-const PAGE_TITLES = {
-  dashboard: 'Overview Dashboard',
-  'energy-analytics': 'Energy Analytics',
-  'production-analytics': 'Production Analytics',
-  anomalies: 'Anomaly Detection',
-  'daily-analysis': 'Daily Energy Analysis',
-  'ai-assistant': 'Conversational AI Assistant',
+const PATH_TITLES = {
+  '/': 'Overview Dashboard',
+  '/energy-analytics': 'Energy Analytics',
+  '/production-analytics': 'Production Analytics',
+  '/anomalies': 'Anomaly Detection',
+  '/daily-analysis': 'Daily Energy Analysis',
+  '/ai-assistant': 'Conversational AI Assistant',
 };
 
-export default function Header({ activeNav, theme, onToggleTheme, backendStatus }) {
-  const currentTitle = PAGE_TITLES[activeNav] || 'Industrial Energy Intelligence';
+export default function Header({ theme, onToggleTheme, backendStatus }) {
+  const location = useLocation();
+  const currentTitle = PATH_TITLES[location.pathname] || 'Industrial Energy Intelligence';
 
   const renderBadge = () => {
     if (!backendStatus || backendStatus.loading) {

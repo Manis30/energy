@@ -15,8 +15,8 @@ export default function PowerFactorAnomalySection({ lpfData }) {
           </p>
         </div>
         <div className="section-tag-group">
-          <span className={`section-tag ${isCompliant ? 'quality' : 'scrap'}`}>
-            {isCompliant ? '100.0% Compliant (0 Violations)' : `${violationCount} Violations Logged`}
+          <span className="section-tag quality">
+            Zero readings below 0.90 threshold
           </span>
         </div>
       </div>
@@ -28,19 +28,19 @@ export default function PowerFactorAnomalySection({ lpfData }) {
               <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
               <polyline points="22 4 12 14.01 9 11.01"/>
             </svg>
-            <span>Verified 100% Regulatory Power Factor Compliance</span>
+            <span>Zero readings below the configured 0.90 detection threshold</span>
           </div>
 
           <div className="pf-stat-summary-row">
             <div className="pf-stat-item">
-              <span className="pf-stat-label">Regulatory Threshold</span>
+              <span className="pf-stat-label">Detection Threshold</span>
               <span className="pf-stat-value">PF &ge; {threshold.toFixed(2)}</span>
-              <span className="pf-stat-sub">Statutory utility benchmark</span>
+              <span className="pf-stat-sub">Configured baseline cutoff</span>
             </div>
             <div className="pf-stat-item">
               <span className="pf-stat-label">Minimum Recorded Reading</span>
               <span className="pf-stat-value">0.9100</span>
-              <span className="pf-stat-sub">+0.0100 margin above limit</span>
+              <span className="pf-stat-sub">+0.0100 margin above cutoff</span>
             </div>
             <div className="pf-stat-item">
               <span className="pf-stat-label">Plant Average PF</span>
@@ -48,7 +48,7 @@ export default function PowerFactorAnomalySection({ lpfData }) {
               <span className="pf-stat-sub">High electrical power quality</span>
             </div>
             <div className="pf-stat-item success">
-              <span className="pf-stat-label">Violations Detected</span>
+              <span className="pf-stat-label">Readings Below Threshold</span>
               <span className="pf-stat-value text-success">{violationCount}</span>
               <span className="pf-stat-sub">0 readings below threshold</span>
             </div>
@@ -61,7 +61,7 @@ export default function PowerFactorAnomalySection({ lpfData }) {
               </svg>
             </div>
             <div className="notice-text">
-              <strong>Telemetry Verification:</strong> Across all 22,080 hourly readings recorded at plants IN-TN-01 and IN-KA-01, zero power factor measurements fell below the 0.90 threshold. Because no non-compliant intervals exist in the source telemetry, no electricity billing penalties, reactive power surcharges, or power factor adjustment costs are incurred.
+              <strong>Telemetry Verification:</strong> Across all 22,080 hourly readings recorded at plants IN-TN-01 and IN-KA-01, zero power factor measurements fell below the configured 0.90 detection threshold. Billing penalties and regulatory compliance have not been assessed without specific utility tariff contracts.
             </div>
           </div>
         </div>
@@ -69,3 +69,4 @@ export default function PowerFactorAnomalySection({ lpfData }) {
     </div>
   );
 }
+
