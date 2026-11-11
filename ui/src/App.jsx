@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
+import Dashboard from './components/dashboard/Dashboard';
 import { checkBackendHealth } from './services/api';
 import './theme.css';
 import './app.css';
@@ -132,20 +133,24 @@ export default function App() {
           backendStatus={backendStatus}
         />
         <main className="content-area">
-          <div className="placeholder-card">
-            <div className="placeholder-header">
-              <h2 className="placeholder-heading">{currentInfo.title}</h2>
-              <p className="placeholder-desc">{currentInfo.description}</p>
+          {activeNav === 'dashboard' ? (
+            <Dashboard />
+          ) : (
+            <div className="placeholder-card">
+              <div className="placeholder-header">
+                <h2 className="placeholder-heading">{currentInfo.title}</h2>
+                <p className="placeholder-desc">{currentInfo.description}</p>
+              </div>
+              <div className="placeholder-details">
+                {dynamicDetails.map((detail, idx) => (
+                  <div key={idx} className="placeholder-item">
+                    <span className="item-bullet">›</span>
+                    <span>{detail}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="placeholder-details">
-              {dynamicDetails.map((detail, idx) => (
-                <div key={idx} className="placeholder-item">
-                  <span className="item-bullet">›</span>
-                  <span>{detail}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          )}
         </main>
       </div>
     </div>

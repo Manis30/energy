@@ -63,3 +63,4 @@ export const anomalyApi = {
    */
   getAllAnomalies: (params = {}) => apiRequest('/api/anomalies/all', { params }),
 };
+

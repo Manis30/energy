@@ -51,3 +51,4 @@ export const energyApi = {
    */
   getPowerFactorSummary: (params = {}) => apiRequest('/api/energy/power-factor', { params }),
 };
+

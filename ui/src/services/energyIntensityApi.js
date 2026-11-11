@@ -41,3 +41,4 @@ export const energyIntensityApi = {
    */
   getZeroProductionEnergy: (params = {}) => apiRequest('/api/energy-intensity/zero-production', { params }),
 };
+

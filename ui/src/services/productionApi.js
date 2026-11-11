@@ -64,3 +64,4 @@ export const productionApi = {
    */
   getDailyTrend: (params = {}) => apiRequest('/api/production/daily-trend', { params }),
 };
+
