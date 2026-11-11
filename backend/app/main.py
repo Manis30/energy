@@ -45,3 +45,4 @@ async def health_check() -> dict:
         "version": settings.API_VERSION,
         "environment": settings.APP_ENV,
     }
+

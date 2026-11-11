@@ -1,0 +1,82 @@
+/* Theme tokens and global variables */
+:root {
+  /* Typography */
+  --font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* Brand Palette (Light) */
+  --brand-purple: #6f3dba;
+  --brand-blue: #4d8eeb;
+  --brand-orange: #f58a3a;
+  --brand-navy: #1f2f59;
+
+  /* Surfaces & Backgrounds */
+  --bg-app: #f5f7fa;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #ffffff;
+  --bg-sidebar: #ffffff;
+  --bg-header: #ffffff;
+  --bg-hover: rgba(111, 61, 186, 0.06);
+  --bg-active: rgba(111, 61, 186, 0.12);
+
+  /* Text Colors */
+  --text-primary: #1f2f59;
+  --text-secondary: #4a5568;
+  --text-muted: #718096;
+  --text-inverse: #ffffff;
+
+  /* Borders & Dividers */
+  --border-color: #e2e8f0;
+  --border-color-light: #edf2f7;
+  --border-focus: #6f3dba;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+
+  /* Status Colors */
+  --status-success: #10b981;
+  --status-warning: #f58a3a;
+  --status-danger: #ef4444;
+  --status-info: #4d8eeb;
+
+  /* Component Dimensions */
+  --sidebar-width: 260px;
+  --header-height: 64px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+}
+
+[data-theme="dark"] {
+  /* Brand Palette (Dark) */
+  --brand-purple: #a684ee;
+  --brand-blue: #78acf5;
+  --brand-orange: #ffab63;
+  --brand-navy: #e7edfa;
+
+  /* Surfaces & Backgrounds */
+  --bg-app: #090e1a;
+  --bg-surface: #111827;
+  --bg-surface-elevated: #1a2234;
+  --bg-sidebar: #0f172a;
+  --bg-header: #0f172a;
+  --bg-hover: rgba(166, 132, 238, 0.1);
+  --bg-active: rgba(166, 132, 238, 0.2);
+
+  /* Text Colors */
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --text-inverse: #090e1a;
+
+  /* Borders & Dividers */
+  --border-color: #1e293b;
+  --border-color-light: #283548;
+  --border-focus: #a684ee;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.6), 0 4px 6px -2px rgba(0, 0, 0, 0.4);
+}
