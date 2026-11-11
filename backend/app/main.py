@@ -3,13 +3,18 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+from app.api.anomalies import router as anomalies_router
+from app.api.energy import router as energy_router
+from app.api.energy_intensity import router as energy_intensity_router
+from app.api.production import router as production_router
 from app.config import get_settings
 
 settings = get_settings()
 
 app = FastAPI(
     title="Industrial Energy Intelligence Platform",
-    description="Backend API for Industrial Energy Intelligence Platform",
+    description="Deterministic REST API for factory energy, production, SEC intensity, and anomaly detection.",
     version=settings.API_VERSION,
 )
 
@@ -36,7 +41,8 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
     )
 
 
-@app.get("/api/health")
+# Health check
+@app.get("/api/health", tags=["System"])
 async def health_check() -> dict:
     """Health check endpoint confirming backend status."""
     return {
@@ -46,3 +52,9 @@ async def health_check() -> dict:
         "environment": settings.APP_ENV,
     }
 
+
+# Include analytical and anomaly routers
+app.include_router(energy_router, prefix="/api/energy", tags=["Energy Analytics"])
+app.include_router(production_router, prefix="/api/production", tags=["Production Analytics"])
+app.include_router(energy_intensity_router, prefix="/api/energy-intensity", tags=["Energy Intensity & SEC"])
+app.include_router(anomalies_router, prefix="/api/anomalies", tags=["Deterministic Anomaly Detection"])

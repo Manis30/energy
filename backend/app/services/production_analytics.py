@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
 from app.models.source_data import DimProduct, DimProductionLine, FactHourlyProduction
@@ -299,7 +299,7 @@ def get_downtime_by_reason(
         FactHourlyProduction.downtime_reason,
         func.sum(FactHourlyProduction.downtime_min).label("total_downtime_min"),
         func.count(FactHourlyProduction.event_id).label("event_count"),
-        func.sum(case_zero_output := func.case((FactHourlyProduction.actual_qty == 0, 1), else_=0)).label("zero_output_events"),
+        func.sum(case((FactHourlyProduction.actual_qty == 0, 1), else_=0)).label("zero_output_events"),
     ).group_by(FactHourlyProduction.downtime_reason).order_by(func.sum(FactHourlyProduction.downtime_min).desc())
 
     q = _apply_production_filters(q, plant_id=plant_id, line_id=line_id, start_date=start_date, end_date=end_date)
