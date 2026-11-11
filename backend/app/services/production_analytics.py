@@ -118,6 +118,18 @@ def get_production_summary(
         "downtime_min": downtime_min,
         "event_count": event_count,
         "quantity_balance_valid": actual_qty == good_qty + reject_qty,
+        "oee": {
+            "status": "unavailable",
+            "quality_rate": rates["good_rate"],
+            "availability": None,
+            "performance": None,
+            "overall_oee": None,
+            "reason": (
+                "Standard OEE (ISO 22400) cannot be reliably calculated from source datasets without unverified assumptions: "
+                "Planned Production Time (planned vs unscheduled shifts) is not provided, and target_qty is an hourly gross quota "
+                "rather than a net operating time target."
+            ),
+        },
         **rates,
     }
 
@@ -340,3 +352,4 @@ def get_production_daily_trend(
             **rates,
         })
     return results
+

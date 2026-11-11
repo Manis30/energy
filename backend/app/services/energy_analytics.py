@@ -257,3 +257,4 @@ def get_power_factor_summary(
         "low_pf_percentage": round(low_pct, 2),
         "low_pf_by_meter": meter_breakdown,
     }
+

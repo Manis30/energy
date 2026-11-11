@@ -1,5 +1,12 @@
 """Analytics and data services package for Industrial Energy Intelligence Platform."""
 
+from app.services.anomaly_detection import (
+    detect_all_anomalies,
+    detect_energy_statistical_anomalies,
+    detect_low_power_factor_anomalies,
+    detect_rolling_baseline_anomalies,
+    detect_zero_production_standby_anomalies,
+)
 from app.services.energy_analytics import (
     get_energy_by_area,
     get_energy_by_meter,
@@ -41,4 +48,10 @@ __all__ = [
     "get_factory_energy_analytics",
     "get_product_process_energy",
     "get_zero_production_period_energy",
+    # Anomaly Detection
+    "detect_energy_statistical_anomalies",
+    "detect_rolling_baseline_anomalies",
+    "detect_low_power_factor_anomalies",
+    "detect_zero_production_standby_anomalies",
+    "detect_all_anomalies",
 ]

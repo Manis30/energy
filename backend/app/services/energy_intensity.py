@@ -467,3 +467,4 @@ def get_zero_production_period_energy(
         "by_downtime_reason": reason_summaries,
         "classification_note": "Energy recorded during zero production represents fixed equipment standby/idle draw during downtime events, not automatically avoidable waste.",
     }
+
