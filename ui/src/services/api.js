@@ -3,15 +3,42 @@
  * Communicates with FastAPI backend through the Vite proxy (/api).
  */
 
+import { ApiError, apiRequest } from './apiClient';
+import { energyApi } from './energyApi';
+import { productionApi } from './productionApi';
+import { energyIntensityApi } from './energyIntensityApi';
+import { anomalyApi } from './anomalyApi';
+
+/**
+ * Health check verification against /api/health.
+ * @returns {Promise<{ success: boolean, data?: any, error?: string }>}
+ */
 export async function checkBackendHealth() {
   try {
-    const response = await fetch('/api/health');
-    if (!response.ok) {
-      throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
-    }
-    const data = await response.json();
+    const data = await apiRequest('/api/health');
     return { success: true, data };
   } catch (err) {
-    return { success: false, error: err.message || 'Unable to connect to backend' };
+    return {
+      success: false,
+      error: err.message || 'Unable to connect to backend',
+      status: err.status || 0,
+    };
   }
 }
+
+export {
+  ApiError,
+  apiRequest,
+  energyApi,
+  productionApi,
+  energyIntensityApi,
+  anomalyApi,
+};
+
+export default {
+  checkBackendHealth,
+  energy: energyApi,
+  production: productionApi,
+  intensity: energyIntensityApi,
+  anomalies: anomalyApi,
+};
