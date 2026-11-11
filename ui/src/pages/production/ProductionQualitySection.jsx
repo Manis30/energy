@@ -101,3 +101,4 @@ export default function ProductionQualitySection({ summary }) {
     </div>
   );
 }
+

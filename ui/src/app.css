@@ -2064,3 +2064,288 @@ body {
   line-height: 1.5;
   margin: 0;
 }
+
+/* ===================================================
+   ANOMALY MONITORING PAGE STYLES
+   =================================================== */
+
+.kpi-card.accent-danger::before {
+  background-color: var(--status-danger);
+}
+
+.kpi-card.accent-danger .kpi-icon-wrap {
+  background-color: rgba(239, 68, 68, 0.12);
+  color: var(--status-danger);
+}
+
+/* Expandable Anomaly Table Row & Detail Panel */
+.expand-indicator-cell {
+  width: 24px;
+  padding: 0.5rem 0.25rem 0.5rem 0.75rem !important;
+  text-align: center;
+}
+
+.expand-chevron {
+  display: inline-block;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.expand-chevron.open {
+  transform: rotate(90deg);
+  color: var(--brand-purple);
+}
+
+.anomaly-data-row:hover .expand-chevron {
+  color: var(--brand-purple);
+}
+
+.anomaly-data-row.is-expanded {
+  background-color: var(--bg-hover) !important;
+}
+
+.anomaly-detail-row {
+  background-color: var(--bg-surface-subtle);
+}
+
+.anomaly-detail-panel {
+  padding: 1rem 1.5rem;
+  border-left: 3px solid var(--brand-purple);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.detail-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--brand-purple);
+}
+
+.detail-flags-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+}
+
+.flag-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.flag-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+
+.flag-val {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.detail-panel-note {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  background-color: var(--bg-surface);
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+}
+
+/* Standby Overview Grid */
+.standby-overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.standby-split-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  margin-top: 0.5rem;
+}
+
+.standby-bar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.standby-bar-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+}
+
+.standby-progress-track {
+  width: 100%;
+  height: 10px;
+  background-color: var(--border-color);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.standby-progress-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.3s ease;
+}
+
+.standby-bar-sub {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.standby-reasons-summary {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color-light);
+}
+
+.reasons-summary-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.reasons-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.reason-tag-pill {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-surface-subtle);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.standby-engineering-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.engineering-notice-item {
+  background-color: var(--bg-surface-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.engineering-notice-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--brand-purple);
+}
+
+.engineering-notice-text {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  margin: 0;
+}
+
+/* Power Factor Anomaly Card & Stats */
+.pf-anomaly-card {
+  padding: 1.5rem;
+}
+
+.pf-stat-summary-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.pf-stat-item {
+  background-color: var(--bg-surface-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.pf-stat-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.pf-stat-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: monospace;
+}
+
+.pf-stat-sub {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.pf-audit-notice-box {
+  margin-top: 1.25rem;
+  background-color: var(--bg-surface-subtle);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--status-success);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.pf-audit-notice-box .notice-icon {
+  color: var(--status-success);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.pf-audit-notice-box .notice-text {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+@media (max-width: 1024px) {
+  .detail-flags-grid,
+  .standby-overview-grid {
+    grid-template-columns: 1fr;
+  }
+  .pf-stat-summary-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 540px) {
+  .pf-stat-summary-row {
+    grid-template-columns: 1fr;
+  }
+}

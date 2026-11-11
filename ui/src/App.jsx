@@ -4,6 +4,7 @@ import Header from './components/Header';
 import Dashboard from './components/dashboard/Dashboard';
 import EnergyAnalytics from './pages/EnergyAnalytics';
 import ProductionAnalytics from './pages/ProductionAnalytics';
+import AnomalyMonitoring from './pages/AnomalyMonitoring';
 import { checkBackendHealth } from './services/api';
 import './theme.css';
 import './app.css';
@@ -141,6 +142,8 @@ export default function App() {
             <EnergyAnalytics />
           ) : activeNav === 'production-analytics' ? (
             <ProductionAnalytics />
+          ) : activeNav === 'anomalies' ? (
+            <AnomalyMonitoring />
           ) : (
             <div className="placeholder-card">
               <div className="placeholder-header">

@@ -194,3 +194,4 @@ export default function ProductionDowntimeSection({ downtimeData = [], totalDown
     </div>
   );
 }
+
