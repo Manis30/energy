@@ -1857,12 +1857,16 @@ body {
   margin: 0;
 }
 
-/* Media Query Additions for Energy Analytics */
+/* Media Query Additions for Energy Analytics & Production Analytics */
 @media (max-width: 1024px) {
   .meters-overview-grid,
   .area-analytics-grid,
   .pf-details-grid,
-  .cost-emissions-grid {
+  .cost-emissions-grid,
+  .lines-overview-grid,
+  .product-shift-grid,
+  .downtime-overview-grid,
+  .quality-audit-notice-grid {
     grid-template-columns: 1fr;
   }
   .pf-overview-grid {
@@ -1874,4 +1878,189 @@ body {
   .pf-overview-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ===================================================
+   PRODUCTION ANALYTICS PAGE STYLES
+   =================================================== */
+
+/* Lines Overview Grid */
+.lines-overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 1.5rem;
+}
+
+.production-line-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.production-line-table th {
+  padding: 0.75rem 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  border-bottom: 2px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.production-line-table td {
+  padding: 0.75rem 0.65rem;
+  border-bottom: 1px solid var(--border-color-light);
+  color: var(--text-primary);
+  vertical-align: middle;
+}
+
+.production-line-table tbody tr:hover {
+  background-color: var(--bg-hover);
+}
+
+/* Product & Shift Grid */
+.product-shift-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
+.sku-summary-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color-light);
+}
+
+.sku-summary-item {
+  background-color: var(--bg-surface-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.85rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sku-item-left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.sku-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sku-id {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: monospace;
+}
+
+.sku-item-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+}
+
+.sku-actual {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: monospace;
+}
+
+.sku-scrap {
+  font-size: 0.7rem;
+  color: var(--brand-orange);
+}
+
+/* Downtime Stoppage Analysis Grid */
+.downtime-overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.downtime-audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.downtime-audit-table th {
+  padding: 0.75rem 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  border-bottom: 2px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.downtime-audit-table td {
+  padding: 0.75rem 0.65rem;
+  border-bottom: 1px solid var(--border-color-light);
+  color: var(--text-primary);
+  vertical-align: middle;
+}
+
+.downtime-audit-table tbody tr:hover {
+  background-color: var(--bg-hover);
+}
+
+.downtime-reason-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.downtime-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Quality Audit Notice Grid */
+.quality-audit-notice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.audit-notice-card {
+  background-color: var(--bg-surface-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.audit-notice-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--brand-purple);
+}
+
+.audit-notice-text {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
 }

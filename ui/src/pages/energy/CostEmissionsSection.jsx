@@ -137,3 +137,4 @@ export default function CostEmissionsSection({ energySummary, byArea = [] }) {
     </div>
   );
 }
+

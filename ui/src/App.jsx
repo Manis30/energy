@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Dashboard from './components/dashboard/Dashboard';
 import EnergyAnalytics from './pages/EnergyAnalytics';
+import ProductionAnalytics from './pages/ProductionAnalytics';
 import { checkBackendHealth } from './services/api';
 import './theme.css';
 import './app.css';
@@ -138,6 +139,8 @@ export default function App() {
             <Dashboard />
           ) : activeNav === 'energy-analytics' ? (
             <EnergyAnalytics />
+          ) : activeNav === 'production-analytics' ? (
+            <ProductionAnalytics />
           ) : (
             <div className="placeholder-card">
               <div className="placeholder-header">

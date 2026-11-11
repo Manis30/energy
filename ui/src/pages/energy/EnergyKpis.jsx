@@ -124,3 +124,4 @@ export default function EnergyKpis({ energySummary, dailyTrendCount = 92 }) {
     </div>
   );
 }
+

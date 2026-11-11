@@ -150,3 +150,4 @@ export default function PowerFactorSection({ powerFactorData, byMeter = [] }) {
     </div>
   );
 }
+
