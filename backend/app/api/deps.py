@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db import get_db
+from app.services.agent import IndustrialEnergyAgent
 
 
 def get_db_session(session: Optional[Session] = Depends(get_db)) -> Session:
@@ -17,3 +18,12 @@ def get_db_session(session: Optional[Session] = Depends(get_db)) -> Session:
             detail="Database service is unavailable. Please verify database connectivity.",
         )
     return session
+
+
+def get_agent() -> IndustrialEnergyAgent:
+    """
+    Dependency provider returning an IndustrialEnergyAgent instance.
+    Reuses the global DomoClient singleton.
+    """
+    return IndustrialEnergyAgent()
+

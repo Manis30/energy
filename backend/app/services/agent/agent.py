@@ -271,7 +271,6 @@ class IndustrialEnergyAgent:
             try:
                 domo_response = await client.generate_text(
                     prompt=full_prompt,
-                    session_id=session_id,
                 )
                 raw_output = domo_response.output
             except DomoAuthenticationError as e:
@@ -469,3 +468,4 @@ class IndustrialEnergyAgent:
         raise MaxModelCallsError(
             f"Agent reached maximum model reasoning limit of {self.max_model_calls} calls without resolving the question."
         )
+

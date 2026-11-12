@@ -8,6 +8,12 @@ from app.schemas.anomalies import (
     UnifiedAnomaliesResponse,
     ZeroProductionStandbyResponse,
 )
+from app.schemas.assistant import (
+    AssistantChatRequest,
+    AssistantChatResponse,
+    ChatMessage,
+    ToolEvidenceItem,
+)
 from app.schemas.common import (
     ErrorResponse,
     validate_date_range,
@@ -39,6 +45,11 @@ from app.schemas.production import (
 )
 
 __all__ = [
+    # Assistant
+    "ChatMessage",
+    "AssistantChatRequest",
+    "ToolEvidenceItem",
+    "AssistantChatResponse",
     # Common
     "ErrorResponse",
     "validate_date_range",
