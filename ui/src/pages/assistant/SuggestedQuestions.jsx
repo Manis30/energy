@@ -1,14 +1,15 @@
 import React from 'react';
 
 const SUGGESTED_QUESTIONS = [
-  'What is the total energy consumption across both plants?',
-  'Compare energy intensity between SMT and Final Assembly.',
-  'Which meters have the highest energy consumption?',
-  'Explain the most significant energy anomalies.',
-  'How much energy was consumed during zero-production periods?',
+  'What is our total energy consumption?',
+  'Compare energy consumption between plants.',
+  'Which production line has the highest energy intensity?',
+  'What anomalies were detected?',
+  'Explain our zero-production energy consumption.',
+  'What is our factory SEC?',
 ];
 
-export default function SuggestedQuestions({ onSelectQuestion }) {
+export default function SuggestedQuestions({ onSelectQuestion, disabled = false }) {
   return (
     <div className="assistant-suggestions-container">
       <div className="assistant-suggestions-title">
@@ -26,6 +27,7 @@ export default function SuggestedQuestions({ onSelectQuestion }) {
             type="button"
             className="assistant-suggestion-pill"
             onClick={() => onSelectQuestion(question)}
+            disabled={disabled}
           >
             {question}
           </button>

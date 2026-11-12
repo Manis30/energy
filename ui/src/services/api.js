@@ -8,6 +8,7 @@ import { energyApi } from './energyApi';
 import { productionApi } from './productionApi';
 import { energyIntensityApi } from './energyIntensityApi';
 import { anomalyApi } from './anomalyApi';
+import { assistantApi, sendAssistantMessage } from './assistantApi';
 
 /**
  * Health check verification against /api/health.
@@ -33,6 +34,8 @@ export {
   productionApi,
   energyIntensityApi,
   anomalyApi,
+  assistantApi,
+  sendAssistantMessage,
 };
 
 export default {
@@ -41,4 +44,5 @@ export default {
   production: productionApi,
   intensity: energyIntensityApi,
   anomalies: anomalyApi,
+  assistant: assistantApi,
 };

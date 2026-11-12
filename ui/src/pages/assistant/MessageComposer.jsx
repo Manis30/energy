@@ -1,5 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 
+const MAX_CHARS = 2000;
+
 export default function MessageComposer({ input, setInput, onSendMessage, disabled = false }) {
   const textareaRef = useRef(null);
 
@@ -20,27 +22,31 @@ export default function MessageComposer({ input, setInput, onSendMessage, disabl
   };
 
   const handleSubmit = () => {
-    if (!input || !input.trim() || disabled) return;
-    onSendMessage(input.trim());
+    const trimmed = (input || '').trim();
+    if (!trimmed || trimmed.length > MAX_CHARS || disabled) return;
+    onSendMessage(trimmed);
     setInput('');
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
   };
 
-  const isSendDisabled = !input || !input.trim() || disabled;
+  const trimmedLength = (input || '').trim().length;
+  const isSendDisabled = trimmedLength === 0 || trimmedLength > MAX_CHARS || disabled;
+  const showCharWarning = (input || '').length > 1500;
 
   return (
     <div className="assistant-composer-wrapper">
-      <div className="assistant-composer-box">
+      <div className={`assistant-composer-box ${disabled ? 'disabled' : ''}`}>
         <textarea
           ref={textareaRef}
           className="assistant-textarea"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask about plant energy, line intensity, anomalies, or shift performance..."
+          placeholder={disabled ? 'Waiting for assistant response...' : 'Ask about plant energy, line intensity, anomalies, or shift performance...'}
           rows={1}
+          maxLength={MAX_CHARS}
           disabled={disabled}
         />
         <button
@@ -51,14 +57,25 @@ export default function MessageComposer({ input, setInput, onSendMessage, disabl
           aria-label="Send message"
           title={isSendDisabled ? 'Type a question to send' : 'Send message (Enter)'}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13"/>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-          </svg>
+          {disabled ? (
+            <svg className="composer-spinner" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          )}
         </button>
       </div>
       <div className="assistant-composer-hints">
         <span>Enter to send &bull; Shift + Enter for new line</span>
+        {showCharWarning && (
+          <span className={`char-counter ${trimmedLength >= MAX_CHARS ? 'limit' : ''}`}>
+            {trimmedLength} / {MAX_CHARS}
+          </span>
+        )}
         <span className="assistant-safe-notice">Read-only SQL telemetry access &bull; Non-destructive</span>
       </div>
     </div>

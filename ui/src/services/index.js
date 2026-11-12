@@ -7,5 +7,6 @@ export * from './energyApi';
 export * from './productionApi';
 export * from './energyIntensityApi';
 export * from './anomalyApi';
+export * from './assistantApi';
 export { checkBackendHealth, default } from './api';
 

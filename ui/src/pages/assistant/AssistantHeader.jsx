@@ -1,6 +1,34 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { checkBackendHealth } from '../../services/api';
 
-export default function AssistantHeader({ onClearChat, messageCount }) {
+export default function AssistantHeader({ onNewConversation, messageCount = 0 }) {
+  const [backendStatus, setBackendStatus] = useState('checking'); // 'checking' | 'online' | 'offline'
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function verifyHealth() {
+      try {
+        const res = await checkBackendHealth();
+        if (isMounted) {
+          setBackendStatus(res.success ? 'online' : 'offline');
+        }
+      } catch {
+        if (isMounted) {
+          setBackendStatus('offline');
+        }
+      }
+    }
+
+    verifyHealth();
+    // Poll every 30 seconds
+    const interval = setInterval(verifyHealth, 30000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
   return (
     <div className="assistant-header-card">
       <div className="assistant-header-main">
@@ -17,13 +45,30 @@ export default function AssistantHeader({ onClearChat, messageCount }) {
               </svg>
             </div>
             <h2 className="assistant-title">AI Energy Assistant</h2>
-            <span className="assistant-status-badge pending" title="LLM backend integration scheduled for Phase 7">
-              <span className="status-dot-pending" />
-              Backend integration pending
-            </span>
+
+            {backendStatus === 'online' && (
+              <span className="assistant-status-badge online" title="Backend connected and operational">
+                <span className="status-dot-online" />
+                Operational
+              </span>
+            )}
+
+            {backendStatus === 'offline' && (
+              <span className="assistant-status-badge offline" title="Backend unreachable via Vite proxy">
+                <span className="status-dot-offline" />
+                Backend Offline
+              </span>
+            )}
+
+            {backendStatus === 'checking' && (
+              <span className="assistant-status-badge pending" title="Verifying backend connection">
+                <span className="status-dot-pending" />
+                Verifying...
+              </span>
+            )}
           </div>
           <p className="assistant-subtitle">
-            Conversational industrial energy intelligence powered by deterministic calculations and read-only Neon telemetry.
+            Autonomous industrial intelligence powered by Domo AI, 21 deterministic analytics tools, and read-only PostgreSQL execution.
           </p>
         </div>
 
@@ -32,15 +77,13 @@ export default function AssistantHeader({ onClearChat, messageCount }) {
             <button
               type="button"
               className="assistant-btn-secondary"
-              onClick={onClearChat}
-              title="Clear current conversation messages"
+              onClick={onNewConversation}
+              title="Start a fresh conversation and reset context"
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 6h18"/>
-                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
-                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                <path d="M12 5v14M5 12h14"/>
               </svg>
-              <span>Clear Chat</span>
+              <span>New Conversation</span>
             </button>
           </div>
         )}
