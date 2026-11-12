@@ -45,9 +45,9 @@ class TestToolRegistry(unittest.TestCase):
         self.session.close()
 
     def test_registry_completeness_and_categories(self):
-        """Verify all 20 required deterministic tools are present and categorized."""
+        """Verify all 21 tools (20 deterministic + 1 read-only SQL) are present and categorized."""
         tools = get_all_tools()
-        self.assertEqual(len(tools), 20)
+        self.assertEqual(len(tools), 21)
 
         expected_energy_tools = {
             "energy_summary",
@@ -77,12 +77,16 @@ class TestToolRegistry(unittest.TestCase):
             "zero_production_standby_anomalies",
             "unified_anomaly_detection",
         }
+        expected_sql_tools = {
+            "read_only_sql_query",
+        }
 
         all_expected = (
             expected_energy_tools
             | expected_production_tools
             | expected_intensity_tools
             | expected_anomaly_tools
+            | expected_sql_tools
         )
         self.assertEqual(set(tools.keys()), all_expected)
 
@@ -95,6 +99,8 @@ class TestToolRegistry(unittest.TestCase):
             self.assertEqual(tools[name].category, "energy_intensity")
         for name in expected_anomaly_tools:
             self.assertEqual(tools[name].category, "anomalies")
+        for name in expected_sql_tools:
+            self.assertEqual(tools[name].category, "sql")
 
     def test_input_schema_validation(self):
         """Verify that date and time validation enforces logical ranges."""
@@ -178,6 +184,14 @@ class TestToolRegistry(unittest.TestCase):
         self.assertIsNotNone(lc_tool)
         self.assertEqual(lc_tool.name, "energy_summary")
         self.assertEqual(lc_tool.description, tool.description)
+
+
+    def test_execute_sql_tool_via_registry(self):
+        """Verify execution of read_only_sql_query via execute_tool."""
+        result = execute_tool("read_only_sql_query", {"query": "SELECT count(*) AS cnt FROM dim_product"})
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["row_count"], 1)
+        self.assertEqual(result["rows"][0][0], 3)
 
 
 if __name__ == "__main__":

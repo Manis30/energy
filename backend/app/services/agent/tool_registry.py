@@ -48,6 +48,10 @@ from app.services.production_analytics import (
     get_production_daily_trend,
     get_production_summary,
 )
+from app.services.agent.sql_tool import (
+    ReadOnlySQLQueryInput,
+    execute_read_only_sql,
+)
 
 try:
     from langchain_core.tools import StructuredTool
@@ -495,6 +499,29 @@ register_tool(
 )
 
 
+# ===========================================================================
+# 5. Read-Only SQL Tool
+# ===========================================================================
+
+def _run_sql_query_tool(session: Optional[Session] = None, query: str = "") -> Dict[str, Any]:
+    """Execute validated read-only SQL query against dedicated reader role."""
+    return execute_read_only_sql(query=query)
+
+
+register_tool(
+    name="read_only_sql_query",
+    description=(
+        "Execute a single validated, read-only SQL SELECT query against the 4 approved factory tables "
+        "(dim_product, dim_production_line, fact_energy_meter_hourly, fact_hourly_production). "
+        "Enforces a 5-second database execution timeout and caps output at a maximum of 100 rows. "
+        "Strictly rejects data modification (INSERT/UPDATE/DELETE), DDL, multiple statements, and system catalogs."
+    ),
+    category="sql",
+    args_schema=ReadOnlySQLQueryInput,
+    func=_run_sql_query_tool,
+)
+
+
 # ---------------------------------------------------------------------------
 # Registry Access Functions
 # ---------------------------------------------------------------------------
@@ -537,3 +564,4 @@ def get_tool_descriptions() -> str:
     for tool in TOOL_REGISTRY.values():
         lines.append(f"- **{tool.name}** ({tool.category}): {tool.description}")
     return "\n".join(lines)
+
