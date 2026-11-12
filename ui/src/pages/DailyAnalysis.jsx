@@ -56,11 +56,12 @@ export default function DailyAnalysis() {
     }
     setError(null);
 
-    // Compute bounded 7-day start date for contextual trend
+    // Compute bounded 7-day start date for contextual trend (strictly within dataset range)
     const dObj = new Date(selectedDate + 'T00:00:00Z');
     dObj.setUTCDate(dObj.getUTCDate() - 6);
     const raw7DayStart = dObj.toISOString().split('T')[0];
-    const trendStartDate = raw7DayStart < MIN_DATE ? MIN_DATE : raw7DayStart;
+    const trendStartDate = raw7DayStart < MIN_DATE ? MIN_DATE : (raw7DayStart > MAX_DATE ? MAX_DATE : raw7DayStart);
+    const trendEndDate = selectedDate > MAX_DATE ? MAX_DATE : (selectedDate < MIN_DATE ? MIN_DATE : selectedDate);
 
     const baseParams = {
       start_date: selectedDate,
@@ -76,7 +77,7 @@ export default function DailyAnalysis() {
 
     const trendParams = {
       start_date: trendStartDate,
-      end_date: selectedDate,
+      end_date: trendEndDate,
       ...(selectedPlant ? { plant_id: selectedPlant } : {}),
     };
 

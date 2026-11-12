@@ -51,7 +51,7 @@ function CustomMeterTooltip({ active, payload }) {
           <span className="tooltip-val">{formatCurrency(data.cost_inr)}</span>
         </div>
         <div className="tooltip-row">
-          <span className="tooltip-label">Peak Draw:</span>
+          <span className="tooltip-label">Peak Hourly Energy:</span>
           <span className="tooltip-val">{formatNumber(data.peak_kwh, 2)} kWh</span>
         </div>
         <div className="tooltip-row">
@@ -206,7 +206,7 @@ export default function DailyChartsSection({
           <div className="chart-card-header">
             <div>
               <h4 className="chart-card-title">Energy Consumption by Submeter</h4>
-              <p className="chart-card-subtitle">Daily kWh load distribution across all 5 monitored factory submeters</p>
+              <p className="chart-card-subtitle">Daily kWh consumption across all 5 monitored factory submeters</p>
             </div>
           </div>
           <div className="chart-body">

@@ -150,12 +150,13 @@ export default function DailyPageHeader({
 
       {lastRefreshed && (
         <div className="dashboard-meta-footer">
-          <span className="live-pulse-dot"></span>
+          <span className="dataset-status-dot"></span>
           <span>
-            Telemetry for {formatDate(selectedDate)} ({selectedPlant || 'All Plants'}) • Verified deterministic records • Last updated: {lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            Last refreshed: {lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} • Historical dataset records for {formatDate(selectedDate)} ({selectedPlant || 'All Plants'})
           </span>
         </div>
       )}
     </div>
   );
 }
+

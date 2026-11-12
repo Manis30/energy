@@ -49,7 +49,7 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
       title: 'Carbon Emissions',
       value: formatNumber(totalCo2e, 2),
       unit: 'kg CO₂e',
-      sublabel: `${(Number(totalCo2e || 0) / 1000).toFixed(2)} MT CO₂e • CEA factor 0.716 kg/kWh`,
+      sublabel: `${(Number(totalCo2e || 0) / 1000).toFixed(2)} MT CO₂e • Dataset emissions factor ~0.716 kg CO₂e/kWh`,
       accent: 'cyan',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -65,9 +65,9 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
       title: 'Average Power Factor',
       value: avgPf ? avgPf.toFixed(4) : '—',
       unit: 'PF',
-      sublabel: minPf && maxPf ? `Min: ${minPf} • Max: ${maxPf} (Threshold ≥ 0.90)` : 'Threshold ≥ 0.90',
+      sublabel: minPf && maxPf ? `Min: ${minPf} • Max: ${maxPf} (Configured threshold ≥ 0.90)` : 'Configured threshold ≥ 0.90',
       accent: lowPfEvents > 0 ? 'danger' : 'orange',
-      badge: lowPfEvents === 0 ? 'Compliant' : `${lowPfEvents} Under-limit Events`,
+      badge: lowPfEvents === 0 ? 'Within configured threshold' : `${lowPfEvents} Under-threshold Events`,
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
@@ -106,14 +106,14 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
       {peak && (
         <div className="daily-peak-strip">
           <div className="peak-strip-left">
-            <span className="peak-tag">Peak Hourly Load</span>
+            <span className="peak-tag">Peak Hourly Energy Consumption</span>
             <span className="peak-info">
-              <strong>{formatNumber(peak.consumption_kwh, 2)} kWh</strong> logged by meter <strong>{peak.meter_id}</strong> ({peak.plant_id}) at <strong>{formatDateTime(peak.timestamp)}</strong>
+              <strong>{formatNumber(peak.consumption_kwh, 2)} kWh</strong> recorded by meter <strong>{peak.meter_id}</strong> ({peak.plant_id}) at <strong>{formatDateTime(peak.timestamp)}</strong>
             </span>
           </div>
           <div className="peak-strip-right">
             <span className="peak-avg-note">
-              Daily Hourly Average: <strong>{formatNumber(energySummary?.avg_hourly_consumption_kwh, 2)} kWh/h</strong>
+              Daily Average Hourly Consumption: <strong>{formatNumber(energySummary?.avg_hourly_consumption_kwh, 2)} kWh/h</strong>
             </span>
           </div>
         </div>
@@ -121,3 +121,4 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
     </div>
   );
 }
+

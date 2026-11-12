@@ -106,7 +106,7 @@ export default function DailyAnomalySummary({ anomaliesData }) {
           <div className="detector-card-header">
             <span className="detector-name">Low Power Factor</span>
             <span className={`detector-status-pill ${lpfData?.total_anomalies_detected > 0 ? 'alert' : 'nominal'}`}>
-              {lpfData?.total_anomalies_detected > 0 ? `${lpfData.total_anomalies_detected} Events` : 'Compliant'}
+              {lpfData?.total_anomalies_detected > 0 ? `${lpfData.total_anomalies_detected} Events` : 'Within threshold'}
             </span>
           </div>
           <div className="detector-count">
@@ -114,11 +114,11 @@ export default function DailyAnomalySummary({ anomaliesData }) {
             <span className="detector-unit">events</span>
           </div>
           <div className="detector-meta">
-            <span>Limit: &lt; {lpfData?.threshold || '0.90'} PF</span>
-            <span>Grid Penalty Check: Active</span>
+            <span>Detection Threshold: &lt; {lpfData?.threshold || '0.90'} PF</span>
+            <span>Application Threshold Check: Active</span>
           </div>
           <div className="detector-desc">
-            Monitors reactive power and utility tariff surcharge thresholds.
+            Monitors hourly power factor against application detection threshold (0.90).
           </div>
         </div>
 
@@ -132,14 +132,14 @@ export default function DailyAnomalySummary({ anomaliesData }) {
           </div>
           <div className="detector-count">
             {formatNumber(standbyData?.total_standby_energy_kwh || 0, 1)}
-            <span className="detector-unit">kWh standby</span>
+            <span className="detector-unit">kWh recorded</span>
           </div>
           <div className="detector-meta">
             <span>Events: {standbyData?.total_events_detected || 0}</span>
             <span>Stoppage: {formatNumber(standbyData?.total_stoppage_minutes || 0)} min</span>
           </div>
           <div className="detector-desc">
-            Idle power observed during zero-output line stoppages.
+            Process-meter energy recorded during zero-output line stoppages.
           </div>
         </div>
       </div>
@@ -208,7 +208,7 @@ export default function DailyAnomalySummary({ anomaliesData }) {
                   <th>Meter / Line</th>
                   <th>Detector Module</th>
                   <th>Severity</th>
-                  <th>Actual vs Baseline</th>
+                  <th>Recorded vs Baseline</th>
                   <th>Operational Finding</th>
                 </tr>
               </thead>
@@ -239,11 +239,15 @@ export default function DailyAnomalySummary({ anomaliesData }) {
                         <div className="val-primary">
                           {formatNumber(incident.actual_value, 2)} kWh
                         </div>
-                        {incident.baseline_value && (
+                        {incident.detector === 'Zero-Production Standby' ? (
+                          <div className="val-secondary">
+                            Output: 0 units ({incident.context_flags?.downtime_min || 60}m stoppage)
+                          </div>
+                        ) : incident.baseline_value ? (
                           <div className="val-secondary">
                             Base: {formatNumber(incident.baseline_value, 2)} kWh
                           </div>
-                        )}
+                        ) : null}
                       </td>
                       <td className="explanation-cell">
                         <span className="explanation-text">{incident.explanation}</span>
@@ -279,3 +283,4 @@ export default function DailyAnomalySummary({ anomaliesData }) {
     </div>
   );
 }
+
