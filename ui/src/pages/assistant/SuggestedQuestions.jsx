@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 const SUGGESTED_QUESTIONS = [
   'What is our total energy consumption?',
@@ -10,28 +10,109 @@ const SUGGESTED_QUESTIONS = [
 ];
 
 export default function SuggestedQuestions({ onSelectQuestion, disabled = false }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const anchorRef = useRef(null);
+  const triggerRef = useRef(null);
+
+  const closeAndReturnFocus = () => {
+    setIsOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  // Close popover when clicking outside or pressing Escape
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (anchorRef.current && !anchorRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') {
+        closeAndReturnFocus();
+      }
+    }
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
+
+  const handleSelect = (question) => {
+    if (disabled) return;
+    onSelectQuestion(question);
+    setIsOpen(false);
+  };
+
   return (
-    <div className="assistant-suggestions-container">
-      <div className="assistant-suggestions-title">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="16" x2="12" y2="12"/>
-          <line x1="12" y1="8" x2="12.01" y2="8"/>
+    <div className="assistant-suggestions-popover-anchor" ref={anchorRef}>
+      <button
+        type="button"
+        className={`assistant-suggestions-trigger ${isOpen ? 'active' : ''}`}
+        onClick={() => setIsOpen((prev) => !prev)}
+        disabled={disabled}
+        ref={triggerRef}
+        title="View suggested energy analytics queries"
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+        aria-controls="assistant-suggestions-dialog"
+      >
+        <span className="trigger-icon" aria-hidden="true">💡</span>
+        <span className="trigger-label">Suggestions</span>
+        <svg
+          className={`trigger-chevron ${isOpen ? 'open' : ''}`}
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <polyline points="6 9 12 15 18 9"/>
         </svg>
-        <span>Suggested Analytics Queries</span>
-      </div>
-      <div className="assistant-pills-row">
-        {SUGGESTED_QUESTIONS.map((question, idx) => (
-          <button
-            key={idx}
-            type="button"
-            className="assistant-suggestion-pill"
-            onClick={() => onSelectQuestion(question)}
-            disabled={disabled}
-          >
-            {question}
-          </button>
-        ))}
+      </button>
+
+      <div
+        id="assistant-suggestions-dialog"
+        className="assistant-suggestions-popover"
+        role="dialog"
+        aria-label="Suggested Energy Queries"
+        hidden={!isOpen}
+      >
+          <div className="suggestions-popover-header">
+            <span className="popover-title">Suggested Energy Queries</span>
+            <button
+              type="button"
+              className="popover-close-btn"
+              onClick={closeAndReturnFocus}
+              aria-label="Close suggestions"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="suggestions-popover-list">
+            {SUGGESTED_QUESTIONS.map((question, idx) => (
+              <button
+                key={idx}
+                type="button"
+                className="popover-suggestion-item"
+                onClick={() => handleSelect(question)}
+                disabled={disabled}
+              >
+                <span className="suggestion-bullet">›</span>
+                <span className="suggestion-text">{question}</span>
+              </button>
+            ))}
+          </div>
       </div>
     </div>
   );

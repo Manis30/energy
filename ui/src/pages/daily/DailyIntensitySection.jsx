@@ -1,7 +1,12 @@
 import React from 'react';
 import { formatNumber, formatPercent } from '../../utils/formatters';
 
-export default function DailyIntensitySection({ processEnergy, factoryEnergy }) {
+export default function DailyIntensitySection({
+  processEnergy,
+  factoryEnergy,
+  productionAvailable = false,
+  productionSummary,
+}) {
   // SMT Area Data
   const smtSec = processEnergy?.smt_summary?.overall_process_sec_kwh_per_board;
   const smtKwh = processEnergy?.smt_summary?.total_process_kwh;
@@ -20,7 +25,9 @@ export default function DailyIntensitySection({ processEnergy, factoryEnergy }) 
   const utilitySharePct = factoryEnergy?.facility_utilities?.utility_share_percentage;
   const totalUtilityKwh = factoryEnergy?.facility_utilities?.total_utility_consumption_kwh;
 
-  const hasProduction = (smtUnits && Number(smtUnits) > 0) || (falUnits && Number(falUnits) > 0);
+  const productionQuantityKnown = productionSummary?.actual_qty != null
+    && Number.isFinite(Number(productionSummary.actual_qty));
+  const hasProduction = productionQuantityKnown && Number(productionSummary.actual_qty) > 0;
 
   return (
     <div className="dashboard-section daily-intensity-section">
@@ -43,7 +50,31 @@ export default function DailyIntensitySection({ processEnergy, factoryEnergy }) 
         </div>
       </div>
 
-      {!hasProduction ? (
+      {!productionAvailable ? (
+        <div className="intensity-unavailable-banner">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <div>
+            <strong>Production data unavailable</strong>
+            <p>SEC cannot be evaluated because the production summary was not returned for this selection.</p>
+          </div>
+        </div>
+      ) : !productionQuantityKnown ? (
+        <div className="intensity-unavailable-banner">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <div>
+            <strong>Production quantity unavailable</strong>
+            <p>SEC cannot be evaluated because the production quantity was not returned for this selection.</p>
+          </div>
+        </div>
+      ) : !hasProduction ? (
         <div className="intensity-unavailable-banner">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10"/>
@@ -69,7 +100,7 @@ export default function DailyIntensitySection({ processEnergy, factoryEnergy }) 
               <span className="sec-value">
                 {smtSec !== null && smtSec !== undefined ? formatNumber(smtSec, 4) : '—'}
               </span>
-              <span className="sec-unit">kWh / board</span>
+              <span className="sec-unit">kWh / board <span className={`daily-value-kind ${smtSec == null ? 'unavailable' : ''}`}>{smtSec == null ? 'Unavailable' : 'Calculated'}</span></span>
             </div>
 
             <div className="sec-details-table">
@@ -104,7 +135,7 @@ export default function DailyIntensitySection({ processEnergy, factoryEnergy }) 
               <span className="sec-value">
                 {falSec !== null && falSec !== undefined ? formatNumber(falSec, 4) : '—'}
               </span>
-              <span className="sec-unit">kWh / phone</span>
+              <span className="sec-unit">kWh / phone <span className={`daily-value-kind ${falSec == null ? 'unavailable' : ''}`}>{falSec == null ? 'Unavailable' : 'Calculated'}</span></span>
             </div>
 
             <div className="sec-details-table">
@@ -139,7 +170,7 @@ export default function DailyIntensitySection({ processEnergy, factoryEnergy }) 
               <span className="sec-value">
                 {factorySec !== null && factorySec !== undefined ? formatNumber(factorySec, 4) : '—'}
               </span>
-              <span className="sec-unit">kWh / finished phone</span>
+              <span className="sec-unit">kWh / finished phone <span className={`daily-value-kind ${factorySec == null ? 'unavailable' : ''}`}>{factorySec == null ? 'Unavailable' : 'Calculated'}</span></span>
             </div>
 
             <div className="sec-details-table">

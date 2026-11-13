@@ -164,7 +164,7 @@ class TestAnomalyDetectionServices(unittest.TestCase):
         # Check an event record
         event = res["anomalies"][0]
         self.assertEqual(event["anomaly_type"], "ZERO_PRODUCTION_STANDBY_ENERGY")
-        self.assertEqual(event["baseline_value"], Decimal("0.0000"))
+        self.assertIsNone(event["baseline_value"])
         self.assertFalse(event["context_flags"]["avoidable_waste_claimed"])
         self.assertEqual(event["context_flags"]["category"], "STANDBY_POWER")
 

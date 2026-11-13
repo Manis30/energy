@@ -20,7 +20,10 @@ export default function DailyProductionSection({ productionSummary }) {
       title: 'Actual Production Output',
       value: formatNumber(actualQty),
       unit: 'units',
-      sublabel: `${formatNumber(eventCount)} line production batches logged`,
+      sublabel: eventCount != null
+        ? `${formatNumber(eventCount)} line production batches logged`
+        : 'Production event count unavailable',
+      kind: actualQty != null ? 'Calculated' : 'Unavailable',
       accent: 'purple',
       icon: (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -35,7 +38,8 @@ export default function DailyProductionSection({ productionSummary }) {
       title: 'Good Production Output',
       value: formatNumber(goodQty),
       unit: 'units',
-      sublabel: `Quality First-Pass Yield: ${goodRate ? formatPercent(goodRate) : '—'}`,
+      sublabel: `Quality First-Pass Yield: ${goodRate != null ? formatPercent(goodRate) : '—'}`,
+      kind: goodQty != null ? 'Calculated' : 'Unavailable',
       accent: 'teal',
       icon: (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -49,7 +53,8 @@ export default function DailyProductionSection({ productionSummary }) {
       title: 'Scrap Rejections',
       value: formatNumber(rejectQty),
       unit: 'units',
-      sublabel: `Scrap Rate: ${rejectRate ? formatPercent(rejectRate) : '—'} of actual output`,
+      sublabel: `Scrap Rate: ${rejectRate != null ? formatPercent(rejectRate) : '—'} of actual output`,
+      kind: rejectQty != null ? 'Calculated' : 'Unavailable',
       accent: 'danger',
       icon: (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -64,7 +69,8 @@ export default function DailyProductionSection({ productionSummary }) {
       title: 'Rework Units',
       value: formatNumber(reworkQty),
       unit: 'units',
-      sublabel: `Rework Rate: ${reworkRate ? formatPercent(reworkRate) : '—'} • Segregated from scrap`,
+      sublabel: `Rework Rate: ${reworkRate != null ? formatPercent(reworkRate) : '—'} • Segregated from scrap`,
+      kind: reworkQty != null ? 'Calculated' : 'Unavailable',
       accent: 'orange',
       icon: (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -80,7 +86,10 @@ export default function DailyProductionSection({ productionSummary }) {
       title: 'Total Line Downtime',
       value: formatNumber(downtimeMin),
       unit: 'minutes',
-      sublabel: `${downtimeHours} cumulative stoppage hours across lines`,
+      sublabel: downtimeHours !== null
+        ? `${downtimeHours} cumulative stoppage hours across lines`
+        : 'Downtime total unavailable',
+      kind: downtimeMin != null ? 'Calculated' : 'Unavailable',
       accent: 'navy',
       icon: (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -97,12 +106,12 @@ export default function DailyProductionSection({ productionSummary }) {
         <div>
           <h3 className="section-title">Daily Production Performance</h3>
           <p className="section-desc">
-            Throughput, quality yield, rework volume, and machine downtime minutes across assembly lines.
+            Aggregated production events, calculated quality rates, rework volume, and reported line downtime.
           </p>
         </div>
         <div className="section-tag-group">
           <span className="section-tag info">
-            {formatNumber(actualQty)} Units Manufactured
+            {actualQty != null ? `${formatNumber(actualQty)} Units Manufactured` : 'Production output unavailable'}
           </span>
         </div>
       </div>
@@ -112,7 +121,10 @@ export default function DailyProductionSection({ productionSummary }) {
           <div key={card.id} className={`kpi-card accent-${card.accent}`}>
             <div className="kpi-card-inner">
               <div className="kpi-header">
-                <span className="kpi-title">{card.title}</span>
+                <span className="kpi-title">
+                  {card.title}
+                  <span className={`daily-value-kind ${card.kind === 'Unavailable' ? 'unavailable' : ''}`}>{card.kind}</span>
+                </span>
                 <div className="kpi-icon-wrap">{card.icon}</div>
               </div>
               <div className="kpi-body">
@@ -140,7 +152,7 @@ export default function DailyProductionSection({ productionSummary }) {
             Standard Overall Equipment Effectiveness (OEE per ISO 22400) and target adherence are intentionally disclaimed as unavailable. 
             Source manufacturing datasets do not establish explicit Planned Production Time (scheduled shifts vs unscheduled maintenance), 
             and hourly quota values represent gross machine capacities rather than net operational targets. 
-            In strict compliance with platform integrity guidelines, rework units are segregated from scrap rejects to eliminate false quality penalties.
+            In accordance with platform data integrity guidelines, rework units are segregated from scrap rejects to prevent yield distortion.
           </p>
         </div>
       </div>

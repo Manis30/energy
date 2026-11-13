@@ -18,6 +18,7 @@ from datetime import date, datetime
 from decimal import Decimal
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional, Set, Union
 
 from app.services.agent.action_parser import (
@@ -149,6 +150,104 @@ def _serialize_tool_output(result: Any) -> str:
         return json.dumps({"raw": str(result)})
 
 
+def _prepare_tool_output_for_llm(tool_name: str, result: Any) -> Any:
+    """
+    Prepare a sanitized, size-controlled representation of tool output for LLM prompt context.
+    Preserves exact aggregate totals and counts while summarizing large item collections
+    (e.g., >5 anomaly records or >10 SQL rows) to prevent prompt bloat or silent truncation.
+    Note: Full, unaltered results remain safely stored in ToolEvidence.result.
+    """
+    if result is None:
+        return {"status": "empty", "result": None}
+
+    if not isinstance(result, dict):
+        if isinstance(result, list) and len(result) > 10:
+            return {
+                "total_items": len(result),
+                "sample_items": result[:10],
+                "note": f"Displaying 10 of {len(result)} items for LLM context. Full records preserved in evidence.",
+            }
+        return result
+
+    summary = dict(result)
+
+    # 1. Anomaly tools with 'anomalies' list
+    if "anomalies" in summary and isinstance(summary["anomalies"], list) and len(summary["anomalies"]) > 5:
+        total = len(summary["anomalies"])
+        summary["anomalies_sample"] = summary["anomalies"][:5]
+        summary["total_anomalies_detected"] = total
+        summary["note"] = f"Displaying top 5 sample anomalies out of {total} total records. Complete records preserved in tool evidence."
+        del summary["anomalies"]
+
+    # 2. Unified anomaly detection category lists
+    for cat in ("statistical_anomalies", "rolling_baseline_anomalies", "low_pf_anomalies", "standby_anomalies"):
+        if cat in summary and isinstance(summary[cat], list) and len(summary[cat]) > 5:
+            total = len(summary[cat])
+            summary[f"{cat}_sample"] = summary[cat][:5]
+            summary[f"total_{cat}_detected"] = total
+            del summary[cat]
+
+    # 3. SQL query rows
+    if "rows" in summary and isinstance(summary["rows"], list) and len(summary["rows"]) > 10:
+        total = len(summary["rows"])
+        summary["rows_sample"] = summary["rows"][:10]
+        summary["total_rows_returned"] = total
+        summary["note"] = f"Displaying 10 sample rows out of {total} total rows."
+        del summary["rows"]
+
+    return summary
+
+
+# Analytical and educational query detection patterns
+ANALYTICAL_INDICATORS = [
+    r'\b(yesterday|today|last week|last month|in \d{4}|\d{4}-\d{2}-\d{2})\b',
+    r'\b(plant|line|meter|shift|sku|product)\b',
+    r'\b(in-tn-01|smt-l1|smt-l2|fal-l1|fal-l2|mtr-\w+|sph-\w+)\b',
+    r'\b(how much|how many|total|average|peak|highest|lowest|sum|cost|kwh|inr|count)\b',
+    r'\b(show me|give me|list|find|display|get|fetch|calculate|trend|breakdown)\b',
+    r'\b(anomal(?:y|ies)|outlier|spike|downtime|reject|scrap|rework|produced|units|sec|intensity)\b',
+]
+
+EDUCATIONAL_PATTERNS = [
+    r'^(what is|what are|explain|define|how do you calculate|how is .* calculated|what does .* mean|what does .* stand for)\b',
+    r'\b(methodology|definition|formula|concept|difference between)\b',
+    r'^(what tools|list tools|help)\b',
+]
+
+UNSUPPORTED_DOMAINS = [
+    r'\b(oee|overall equipment effectiveness)\b',
+    r'\b(reactive power|kvar|kvarh)\b',
+    r'\b(cleanroom|office lighting|building lighting)\b',
+    r'\b(penalty|tariff penalty|grid penalty|billing penalty|penalties|surcharge)\b',
+    r'\b(bearing wear|air leak|leak detection|mechanical failure|motor failure|root cause|breakdown reason)\b',
+]
+
+
+def _is_analytical_question(question: str) -> bool:
+    """
+    Determine if a user question requires empirical database evidence.
+    Educational, methodology, and explicitly unsupported concept questions (such as OEE,
+    reactive power, or tariff penalties) can be answered without tool execution,
+    while factual, quantitative, and operational data queries require verified tool evidence.
+    """
+    q_lower = question.lower().strip()
+    # 1. Unsupported domain metrics: never require database tools (no tools exist for them)
+    if any(re.search(pat, q_lower) for pat in UNSUPPORTED_DOMAINS):
+        return False
+    # 2. Educational/methodology queries without specific entity IDs
+    is_edu = any(re.search(pat, q_lower) for pat in EDUCATIONAL_PATTERNS)
+    has_specific_entity = bool(
+        re.search(
+            r'\b(in-tn-01|smt-l[12]|fal-l[12]|mtr-\w+|sph-\w+|\d{4}-\d{2}-\d{2}|yesterday|last (week|month|year))\b',
+            q_lower,
+        )
+    )
+    if is_edu and not has_specific_entity:
+        return False
+    # 3. Operational analytics indicators
+    return any(re.search(pat, q_lower) for pat in ANALYTICAL_INDICATORS)
+
+
 def _format_evidence_summary(evidence: List[ToolEvidence]) -> str:
     """Produce concise technical summary of executed tools and outcomes for prompt injection."""
     if not evidence:
@@ -248,7 +347,9 @@ class IndustrialEnergyAgent:
         # Step error / correction state
         correction_message: Optional[str] = None
         limit_reached_message: Optional[str] = None
-        step_corrections = 0
+        parse_corrections = 0
+        grounding_corrections = 0
+        citation_corrections = 0
         limit_reached = False
 
         while model_calls_count < self.max_model_calls:
@@ -293,15 +394,15 @@ class IndustrialEnergyAgent:
             try:
                 action = parse_agent_action(raw_output)
             except (ActionParseError, ToolNotFoundError, ToolArgumentError) as parse_err:
-                step_corrections += 1
+                parse_corrections += 1
                 logger.warning(
                     "Model action parsing failed (attempt %d/%d): %s",
-                    step_corrections,
+                    parse_corrections,
                     self.max_corrections_per_step,
                     str(parse_err),
                 )
 
-                if step_corrections <= self.max_corrections_per_step:
+                if parse_corrections <= self.max_corrections_per_step:
                     # Provide targeted correction feedback without executing any tool
                     correction_message = get_correction_prompt(str(parse_err))
                     continue
@@ -325,25 +426,62 @@ class IndustrialEnergyAgent:
                         f"Model failed to produce a valid action after {self.max_corrections_per_step} correction attempts: {str(parse_err)}"
                     ) from parse_err
 
-            # Action successfully parsed; reset step correction counter
-            step_corrections = 0
+            # Action successfully parsed; reset parse correction counter
+            parse_corrections = 0
 
             # ---------------------------------------------------------------
             # 4. Handle Final Answer Action
             # ---------------------------------------------------------------
             if isinstance(action, FinalAnswerAction):
-                # Verify tool references: model must not claim tools that were never run
+                # 4a. Numerical Grounding Enforcement
+                is_analytical = _is_analytical_question(clean_question)
+                successful_tools = [e for e in evidence if e.success]
+
+                if is_analytical and not successful_tools:
+                    grounding_corrections += 1
+                    # Model attempted to answer an analytical/data query without successful tool execution
+                    if grounding_corrections <= self.max_corrections_per_step:
+                        correction_message = (
+                            "CRITICAL REQUIREMENT: The user's query asks for analytical or factory operational data, "
+                            "which requires empirical database evidence. You attempted to provide a direct final answer "
+                            "without executing any analytics tools, or all attempted tool executions failed.\n"
+                            "You must execute an appropriate registered tool (or read_only_sql_query) to retrieve "
+                            "verified data before answering. If tools fail or data is missing, report that fact explicitly."
+                        )
+                        continue
+                    else:
+                        # Corrections exhausted: enforce safe unverified response to prevent hallucination
+                        logger.warning(
+                            "Agent attempted to bypass numerical grounding for analytical query '%s'. Returning safe unverified fallback.",
+                            clean_question[:60],
+                        )
+                        return AgentResponse(
+                            answer=(
+                                "This question requires verified factory data from the operational database, "
+                                "but no successful analytics tool execution was completed to ground the response. "
+                                "To maintain strict numerical integrity and prevent ungrounded or fabricated metrics, "
+                                "data-specific figures cannot be reported without successful tool execution. "
+                                "Please verify system parameters or rephrase your request."
+                            ),
+                            tool_references=[],
+                            evidence=evidence,
+                            tool_executions_count=tool_executions_count,
+                            model_calls_count=model_calls_count,
+                            limit_reached=limit_reached,
+                        )
+
+                # 4b. Verify tool references: model must not claim tools that were never run or failed
                 executed_tools: Set[str] = {e.tool_name for e in evidence if e.success}
                 unexecuted_citations = [t for t in action.tool_references if t not in executed_tools]
 
                 if unexecuted_citations:
-                    if step_corrections < self.max_corrections_per_step:
-                        step_corrections += 1
+                    citation_corrections += 1
+                    if citation_corrections <= self.max_corrections_per_step:
                         correction_message = (
                             f"CRITICAL ERROR: Your 'tool_references' cited tool(s) {unexecuted_citations} "
-                            f"which were NOT executed during this turn. "
+                            f"which were NOT successfully executed during this turn. "
                             f"Successfully executed tools: {sorted(list(executed_tools)) if executed_tools else 'None'}.\n"
-                            "You must strictly cite ONLY tools that were actually executed. "
+                            "You must strictly cite ONLY tools that were successfully executed. "
                             "Please output a corrected final answer now."
                         )
                         continue
@@ -403,8 +541,9 @@ class IndustrialEnergyAgent:
                     )
                     evidence.append(evidence_record)
 
-                    # Serialize output for prompt
-                    serialized_res = _serialize_tool_output(result)
+                    # Serialize summarized view for prompt while keeping full output in ToolEvidence
+                    llm_view = _prepare_tool_output_for_llm(tool_name, result)
+                    serialized_res = _serialize_tool_output(llm_view)
                     step_history.append({
                         "action_raw": raw_output.strip(),
                         "tool_output": serialized_res,

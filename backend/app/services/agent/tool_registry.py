@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Type
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
+from app.config import DEFAULT_POWER_FACTOR_THRESHOLD
 from app.db import get_session_factory
 from app.services.anomaly_detection import (
     detect_all_anomalies,
@@ -113,14 +114,14 @@ class EnergyDailyTrendInput(BaseDateRangeInput):
 
 class PowerFactorSummaryInput(BaseDateRangeInput):
     low_pf_threshold: Optional[Decimal] = Field(
-        default=Decimal("0.9200"),
-        description="Threshold below which power factor readings are flagged (default 0.92)",
+        default=DEFAULT_POWER_FACTOR_THRESHOLD,
+        description="Application monitoring threshold below which power factor readings are flagged (default 0.90)",
     )
 
 
 class ProductionSummaryInput(BaseDateRangeInput):
     line_id: Optional[str] = Field(None, description="Optional line filter: 'SMT-L1', 'SMT-L2', 'FAL-L1', 'FAL-L2'")
-    product_id: Optional[str] = Field(None, description="Optional product SKU filter: 'PROD-A15-128', 'PROD-APRO-256', 'PROD-APRO-512'")
+    product_id: Optional[str] = Field(None, description="Optional product SKU filter: 'SPH-A15-128', 'SPH-A15-256', 'SPH-PRO-256'")
     shift_id: Optional[str] = Field(None, description="Optional manufacturing shift filter: 'A', 'B', or 'C'")
 
 
@@ -164,28 +165,33 @@ class StatisticalAnomaliesInput(BaseTimeRangeInput):
     meter_id: Optional[str] = Field(None, description="Optional meter filter: 'MTR-SMT', 'MTR-FAL', 'MTR-HVAC', 'MTR-COMPRESSOR', 'MTR-CHILLER'")
     threshold_z: float = Field(default=3.0, ge=1.0, le=10.0, description="Z-score deviation threshold (default 3.0)")
     min_observations: int = Field(default=10, ge=2, description="Minimum sample size required per group (default 10)")
+    limit: Optional[int] = Field(None, ge=1, le=5000, description="Optional maximum number of anomalies to return")
 
 
 class RollingBaselineAnomaliesInput(BaseTimeRangeInput):
     meter_id: Optional[str] = Field(None, description="Optional meter filter")
-    window_size: int = Field(default=24, ge=2, le=720, description="Rolling historical window size in hours (default 24)")
+    window_size: int = Field(default=24, ge=2, le=720, description="Elapsed-time rolling historical window in hours (default 24)")
     min_observations: int = Field(default=12, ge=2, description="Minimum observations in rolling window (default 12)")
     threshold_z: float = Field(default=3.0, ge=1.0, le=10.0, description="Z-score deviation threshold (default 3.0)")
+    limit: Optional[int] = Field(None, ge=1, le=5000, description="Optional maximum number of anomalies to return")
 
 
 class LowPowerFactorAnomaliesInput(BaseTimeRangeInput):
     meter_id: Optional[str] = Field(None, description="Optional meter filter")
-    threshold: Decimal = Field(default=Decimal("0.90"), description="Power factor compliance cutoff (default 0.90)")
+    threshold: Decimal = Field(default=Decimal("0.90"), description="Application power factor monitoring threshold (default 0.90)")
+    limit: Optional[int] = Field(None, ge=1, le=5000, description="Optional maximum number of anomalies to return")
 
 
 class ZeroProductionStandbyAnomaliesInput(BaseTimeRangeInput):
     line_id: Optional[str] = Field(None, description="Optional line filter: 'SMT-L1', 'SMT-L2', 'FAL-L1', 'FAL-L2'")
+    limit: Optional[int] = Field(None, ge=1, le=5000, description="Optional maximum number of anomalies to return")
 
 
 class UnifiedAnomalyDetectionInput(BaseTimeRangeInput):
     z_threshold: float = Field(default=3.0, description="Z-score threshold for statistical anomalies (default 3.0)")
-    rolling_window_hours: int = Field(default=24, description="Window size for rolling baseline (default 24)")
+    rolling_window_hours: int = Field(default=24, description="Elapsed-time window for rolling baseline (default 24)")
     pf_threshold: Decimal = Field(default=Decimal("0.90"), description="Power factor threshold (default 0.90)")
+    limit: Optional[int] = Field(None, ge=1, le=5000, description="Optional maximum number of anomalies to return")
 
 
 # ---------------------------------------------------------------------------
@@ -260,8 +266,10 @@ register_tool(
     name="energy_summary",
     description=(
         "Retrieve aggregated factory energy consumption metrics including total kWh, "
-        "utility electricity cost (INR), CO2e emissions (kg), average power factor, distinct hours, "
-        "and peak hourly consumption reading. Use when asked for overall energy usage or costs."
+        "dataset-calculated cost (INR), estimated CO2e emissions (kg), average power factor, distinct hours, "
+        "and peak hourly consumption. Cost is a deterministic analytics result, not a verified utility bill; "
+        "the power-factor aggregate may be null when no readings are available. "
+        "Use when asked for overall energy usage or costs."
     ),
     category="energy",
     args_schema=EnergySummaryInput,
@@ -272,8 +280,9 @@ register_tool(
     name="energy_by_meter",
     description=(
         "Retrieve energy consumption breakdown ranked by individual electrical meter (MTR-HVAC, "
-        "MTR-SMT, MTR-FAL, MTR-COMPRESSOR, MTR-CHILLER). Provides total kWh, cost, emissions, "
-        "peak draw, and percentage of total plant energy. Use when analyzing meter-level distribution."
+        "MTR-SMT, MTR-FAL, MTR-COMPRESSOR, MTR-CHILLER). Provides total kWh, dataset-calculated cost, "
+        "estimated emissions, peak hourly consumption, and percentage of returned plant energy. "
+        "Cost is not a verified utility bill. Use when analyzing meter-level distribution."
     ),
     category="energy",
     args_schema=EnergyByMeterInput,
@@ -284,7 +293,8 @@ register_tool(
     name="energy_by_area",
     description=(
         "Retrieve energy consumption grouped by operational factory area (HVAC, SMT, FAL, Utilities). "
-        "Shows total kWh, electricity cost, emissions, and area percentage of plant consumption."
+        "Shows total kWh, dataset-calculated cost, estimated emissions, and area share of returned energy. "
+        "Cost is not a verified utility bill."
     ),
     category="energy",
     args_schema=EnergyByAreaInput,
@@ -294,8 +304,10 @@ register_tool(
 register_tool(
     name="energy_daily_trend",
     description=(
-        "Retrieve daily time series of factory energy consumption, electricity cost, CO2e emissions, "
-        "average power factor, and peak hourly demand. Use when asked about daily energy trends over time."
+        "Retrieve daily time series of factory energy consumption, dataset-calculated cost, estimated CO2e, "
+        "average power factor, and peak hourly energy consumption (kWh). Cost is not a verified bill, and "
+        "peak hourly energy consumption is not a demand measurement. "
+        "Use when asked about daily energy trends over time."
     ),
     category="energy",
     args_schema=EnergyDailyTrendInput,
@@ -305,9 +317,10 @@ register_tool(
 register_tool(
     name="power_factor_summary",
     description=(
-        "Analyze electrical power factor distribution, minimum/maximum readings, and identify readings "
-        "falling below configured detection cutoff (default 0.92). Note: Low readings reflect configured "
-        "technical benchmarks; billing penalties require site-specific utility contracts."
+        "Analyze electrical power factor distribution, minimum/maximum readings, and readings falling below "
+        "the configured detection cutoff (default 0.90). Aggregate averages use energy-weighted averaging "
+        "where applicable; summary metrics may be null when no readings are available. Low readings reflect "
+        "an application monitoring threshold, not a billing penalty; billing requires site-specific utility contracts."
     ),
     category="energy",
     args_schema=PowerFactorSummaryInput,
@@ -346,7 +359,7 @@ register_tool(
     name="production_by_product",
     description=(
         "Retrieve production output and quality metrics grouped by product SKU (Aster 15 128GB, "
-        "Aster Pro 256GB, Aster Pro 512GB). Reports units manufactured, good count, and quality yield."
+        "Aster 15 256GB, Aster Pro 256GB). Reports units manufactured, good count, and quality yield."
     ),
     category="production",
     args_schema=ProductionByProductInput,
@@ -429,9 +442,10 @@ register_tool(
 register_tool(
     name="zero_production_period_energy",
     description=(
-        "Analyze energy consumed by dedicated process meters during hours where line output was 0. "
-        "Classified strictly as standby/idle equipment consumption during downtime events, not automatically "
-        "avoidable waste."
+        "Analyze positive energy consumption from the corresponding dedicated process meter during matched "
+        "zero-output intervals (SMT with MTR-SMT, FAL with MTR-FAL). This finding does not include facility "
+        "utility consumption, which must be queried independently. It is observed zero-output consumption, "
+        "not automatically avoidable waste or an expected-energy baseline."
     ),
     category="energy_intensity",
     args_schema=ZeroProductionPeriodEnergyInput,
@@ -446,8 +460,9 @@ register_tool(
 register_tool(
     name="statistical_energy_anomalies",
     description=(
-        "Detect hourly energy consumption spikes and drops using sample Z-score relative to each meter's "
-        "historical baseline. Handles zero variance safely and never compares unrelated meters or plants."
+        "Flag hourly energy readings that are statistical outliers relative to the per-meter distribution "
+        "within the analyzed period. This is not an expected-energy baseline or proof of waste or equipment fault. "
+        "Handles zero variance safely and never compares unrelated meters or plants."
     ),
     category="anomalies",
     args_schema=StatisticalAnomaliesInput,
@@ -457,8 +472,8 @@ register_tool(
 register_tool(
     name="rolling_baseline_anomalies",
     description=(
-        "Detect dynamic anomalies using a rolling historical baseline window (default 24h). Enforces strict "
-        "exclusion of the current observation from its own baseline to prevent statistical masking."
+        "Detect dynamic anomalies using an elapsed-time rolling historical baseline window (default 24h). "
+        "Excludes the current observation from its own baseline to prevent statistical masking."
     ),
     category="anomalies",
     args_schema=RollingBaselineAnomaliesInput,
@@ -468,8 +483,8 @@ register_tool(
 register_tool(
     name="low_power_factor_anomalies",
     description=(
-        "Identify meter readings where measured power factor falls below the configured 0.90 threshold. "
-        "Reports deficit magnitude and timestamps without asserting unverified financial billing penalties."
+        "Identify meter readings where measured power factor falls below the configured application threshold "
+        "(default 0.90). Reports deficit magnitude and timestamps without asserting unverified financial billing penalties."
     ),
     category="anomalies",
     args_schema=LowPowerFactorAnomaliesInput,
@@ -479,8 +494,9 @@ register_tool(
 register_tool(
     name="zero_production_standby_anomalies",
     description=(
-        "Detect process meter standby power drawn during line stoppages (actual_qty = 0). Tracks standby "
-        "kWh and stoppage reasons. Preserves facility utility segregation."
+        "Report positive process-meter energy (kWh) during matched zero-output intervals (actual_qty = 0), "
+        "with reported downtime and reason where available. Facility utility consumption is queried separately "
+        "and is not part of this finding. This is not proof of avoidable waste and has no validated expected-energy baseline."
     ),
     category="anomalies",
     args_schema=ZeroProductionStandbyAnomaliesInput,
@@ -491,7 +507,8 @@ register_tool(
     name="unified_anomaly_detection",
     description=(
         "Run the complete unified anomaly detection suite combining statistical Z-score, rolling baseline, "
-        "power factor, and standby energy surveillance across plants and meters."
+        "power factor, and zero-output energy findings. Aggregate counts sum detector findings; the same "
+        "underlying observation may be flagged by more than one detector."
     ),
     category="anomalies",
     args_schema=UnifiedAnomalyDetectionInput,

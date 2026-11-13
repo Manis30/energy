@@ -1,0 +1,230 @@
+.tariff-what-if {
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.tariff-what-if-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.tariff-what-if-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tariff-what-if-summary:focus-visible,
+.tariff-what-if-reset:focus-visible,
+.tariff-what-if-input-wrap input:focus-visible {
+  outline: 2px solid var(--brand-purple);
+  outline-offset: 2px;
+}
+
+.tariff-what-if-title,
+.tariff-what-if-subtitle {
+  display: block;
+}
+
+.tariff-what-if-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.tariff-what-if-subtitle {
+  margin-top: 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.tariff-what-if-chevron {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  transition: transform 160ms ease;
+}
+
+.tariff-what-if[open] .tariff-what-if-chevron {
+  transform: rotate(180deg);
+}
+
+.tariff-what-if-content {
+  padding: 0 1.25rem 1.25rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.tariff-what-if-scope,
+.tariff-what-if-disclaimer,
+.tariff-what-if-help,
+.tariff-what-if-unavailable {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.tariff-what-if-scope {
+  margin: 0.85rem 0 0.35rem;
+}
+
+.tariff-what-if-disclaimer {
+  margin: 0 0 1rem;
+}
+
+.tariff-what-if-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.75fr) minmax(0, 1.5fr);
+  gap: 1rem;
+}
+
+.tariff-what-if-input-panel,
+.tariff-what-if-result-group {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-subtle);
+}
+
+.tariff-what-if-input-panel label {
+  display: block;
+  margin-bottom: 0.45rem;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.tariff-what-if-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.7rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+
+.tariff-what-if-input-wrap.has-error {
+  border-color: var(--status-critical, #ef5350);
+}
+
+.tariff-what-if-input-wrap input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.tariff-what-if-input-wrap input:focus-visible {
+  outline-offset: 1px;
+}
+
+.tariff-what-if-unit {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.tariff-what-if-help {
+  min-height: 2.3em;
+  margin: 0.45rem 0;
+}
+
+.tariff-what-if-error {
+  min-height: 1.2em;
+  margin: 0 0 0.55rem;
+  color: var(--status-critical, #ef5350);
+  font-size: 0.75rem;
+}
+
+.tariff-what-if-reset {
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.tariff-what-if-reset:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.tariff-what-if-results {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.tariff-what-if-result-group h4 {
+  margin: 0 0 0.65rem;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+}
+
+.tariff-what-if-formula {
+  margin: -0.3rem 0 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.tariff-what-if-result-group.hypothetical {
+  border-color: rgba(139, 92, 246, 0.38);
+}
+
+.tariff-what-if-metric {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0;
+  border-top: 1px solid var(--border-color);
+  font-size: 0.76rem;
+}
+
+.tariff-what-if-metric span {
+  color: var(--text-secondary);
+}
+
+.tariff-what-if-metric strong {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.tariff-what-if-unavailable {
+  margin: 0.6rem 0 0;
+}
+
+@media (max-width: 900px) {
+  .tariff-what-if-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .tariff-what-if-results {
+    grid-template-columns: 1fr;
+  }
+
+  .tariff-what-if-summary,
+  .tariff-what-if-content {
+    padding-left: 0.9rem;
+    padding-right: 0.9rem;
+  }
+}

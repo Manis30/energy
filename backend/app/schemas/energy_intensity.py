@@ -77,7 +77,14 @@ class ProductProcessEnergyItem(BaseModel):
     total_process_cost_inr: Decimal
     smt_process_sec_kwh_per_board: Optional[Decimal]
     fal_process_sec_kwh_per_phone: Optional[Decimal]
-    finished_phone_process_sec_kwh_per_unit: Optional[Decimal]
+    finished_phone_process_sec_kwh_per_unit: Optional[Decimal] = Field(
+        None,
+        description="Finished-phone combined SEC (kWh/phone). Unavailable across decoupled SMT/FAL stages without WIP lot tracking.",
+    )
+    finished_phone_sec_status: Optional[str] = Field(
+        None,
+        description="Status explaining availability of finished-phone SEC calculation.",
+    )
     scope_note: str
 
 

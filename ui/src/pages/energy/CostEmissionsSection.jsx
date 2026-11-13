@@ -9,23 +9,29 @@ const AREA_COLOR_MAP = {
   HVAC: 'var(--brand-orange)',
 };
 
-export default function CostEmissionsSection({ energySummary, byArea = [] }) {
-  const totalCost = energySummary ? Number(energySummary.total_cost_inr) : 16154228.24;
-  const totalCo2e = energySummary ? Number(energySummary.total_co2e_kg) : 1401991.13;
-  const totalCo2eTonnes = totalCo2e / 1000;
+const hasNumber = (value) => value !== null
+  && value !== undefined
+  && value !== ''
+  && Number.isFinite(Number(value));
+
+export default function CostEmissionsSection({
+  energySummary,
+  byArea = [],
+  summaryAvailable = true,
+  areaAvailable = true,
+}) {
+  const totalCost = hasNumber(energySummary?.total_cost_inr) ? Number(energySummary.total_cost_inr) : null;
+  const totalCo2e = hasNumber(energySummary?.total_co2e_kg) ? Number(energySummary.total_co2e_kg) : null;
+  const totalCo2eTonnes = totalCo2e === null ? null : totalCo2e / 1000;
 
   return (
     <div className="dashboard-section">
       <div className="section-header">
         <div>
-          <h3 className="section-title">Energy Cost & Carbon Emissions Accounting</h3>
+          <h3 className="section-title">Dataset Cost & Estimated Emissions</h3>
           <p className="section-desc">
-            Direct financial and carbon footprint breakdown derived strictly from validated source dataset constants.
+            Cost and CO₂e values are calculated from dataset inputs; they are not verified utility bills or emissions measurements.
           </p>
-        </div>
-        <div className="section-tag-group">
-          <span className="section-tag info">Constant Tariff: ₹8.25/kWh</span>
-          <span className="section-tag process">Grid Factor: 0.716 kg CO₂e/kWh</span>
         </div>
       </div>
 
@@ -34,16 +40,20 @@ export default function CostEmissionsSection({ energySummary, byArea = [] }) {
         <div className="chart-card cost-card">
           <div className="chart-card-header">
             <div>
-              <h4 className="chart-card-title">Total Electricity Spend</h4>
-              <span className="chart-card-subtitle">Calculated strictly at fixed ₹8.25/kWh</span>
+              <h4 className="chart-card-title">Dataset-calculated cost</h4>
+              <span className="chart-card-subtitle">Not a verified utility bill</span>
             </div>
             <div className="cost-total-badge">
-              {formatCurrency(totalCost)}
+              {summaryAvailable && totalCost !== null ? formatCurrency(totalCost) : 'Unavailable'}
             </div>
           </div>
 
           <div className="breakdown-list">
-            {(byArea || []).map((areaItem) => (
+            {!areaAvailable || !byArea.length ? (
+              <div className="chart-empty-state">
+                {!areaAvailable ? 'Area cost data is unavailable.' : 'No area cost records were returned.'}
+              </div>
+            ) : byArea.map((areaItem) => (
               <div key={areaItem.area} className="breakdown-item">
                 <div className="breakdown-header">
                   <span className="breakdown-name">
@@ -51,22 +61,24 @@ export default function CostEmissionsSection({ energySummary, byArea = [] }) {
                       className="breakdown-dot"
                       style={{ background: AREA_COLOR_MAP[areaItem.area] || 'var(--brand-blue)' }}
                     ></span>
-                    {areaItem.area}
+                    {areaItem.area || 'Area unavailable'}
                   </span>
-                  <span className="breakdown-val font-mono">{formatCurrency(areaItem.cost_inr)}</span>
+                  <span className="breakdown-val font-mono">
+                    {hasNumber(areaItem.cost_inr) ? formatCurrency(areaItem.cost_inr) : 'Unavailable'}
+                  </span>
                 </div>
                 <div className="breakdown-bar-track">
                   <div
                     className="breakdown-bar-fill"
                     style={{
-                      width: `${areaItem.percentage_of_total}%`,
+                      width: `${hasNumber(areaItem.percentage_of_total) ? Math.min(100, Math.max(0, Number(areaItem.percentage_of_total))) : 0}%`,
                       background: AREA_COLOR_MAP[areaItem.area] || 'var(--brand-blue)',
                     }}
                   ></div>
                 </div>
                 <div className="breakdown-sub">
-                  <span>{formatPercent(areaItem.percentage_of_total)} of total spend</span>
-                  <span>{formatNumber(areaItem.consumption_kwh, 0)} kWh</span>
+                  <span>{hasNumber(areaItem.percentage_of_total) ? `${formatPercent(areaItem.percentage_of_total)} of returned energy` : 'Energy share unavailable'}</span>
+                  <span>{hasNumber(areaItem.consumption_kwh) ? `${formatNumber(areaItem.consumption_kwh, 0)} kWh` : 'Energy unavailable'}</span>
                 </div>
               </div>
             ))}
@@ -77,17 +89,21 @@ export default function CostEmissionsSection({ energySummary, byArea = [] }) {
         <div className="chart-card emissions-card">
           <div className="chart-card-header">
             <div>
-              <h4 className="chart-card-title">Greenhouse Gas Emissions</h4>
-              <span className="chart-card-subtitle">Grid factor: 0.716 kg CO₂e / kWh</span>
+              <h4 className="chart-card-title">Estimated CO₂e</h4>
+              <span className="chart-card-subtitle">Calculated using the dataset emission factor</span>
             </div>
             <div className="emissions-total-badge">
-              {formatNumber(totalCo2eTonnes, 2)} t CO₂e
+              {summaryAvailable && totalCo2eTonnes !== null ? `${formatNumber(totalCo2eTonnes, 2)} t CO₂e` : 'Unavailable'}
             </div>
           </div>
 
           <div className="breakdown-list">
-            {(byArea || []).map((areaItem) => {
-              const itemTonnes = Number(areaItem.co2e_kg) / 1000;
+            {!areaAvailable || !byArea.length ? (
+              <div className="chart-empty-state">
+                {!areaAvailable ? 'Area emissions data is unavailable.' : 'No area emissions records were returned.'}
+              </div>
+            ) : byArea.map((areaItem) => {
+              const itemTonnes = hasNumber(areaItem.co2e_kg) ? Number(areaItem.co2e_kg) / 1000 : null;
               return (
                 <div key={areaItem.area} className="breakdown-item">
                   <div className="breakdown-header">
@@ -96,22 +112,24 @@ export default function CostEmissionsSection({ energySummary, byArea = [] }) {
                         className="breakdown-dot"
                         style={{ background: AREA_COLOR_MAP[areaItem.area] || 'var(--brand-cyan)' }}
                       ></span>
-                      {areaItem.area}
+                      {areaItem.area || 'Area unavailable'}
                     </span>
-                    <span className="breakdown-val font-mono">{formatNumber(areaItem.co2e_kg, 2)} kg</span>
+                    <span className="breakdown-val font-mono">
+                      {hasNumber(areaItem.co2e_kg) ? `${formatNumber(areaItem.co2e_kg, 2)} kg` : 'Unavailable'}
+                    </span>
                   </div>
                   <div className="breakdown-bar-track">
                     <div
                       className="breakdown-bar-fill"
                       style={{
-                        width: `${areaItem.percentage_of_total}%`,
+                        width: `${hasNumber(areaItem.percentage_of_total) ? Math.min(100, Math.max(0, Number(areaItem.percentage_of_total))) : 0}%`,
                         background: AREA_COLOR_MAP[areaItem.area] || 'var(--brand-cyan)',
                       }}
                     ></div>
                   </div>
                   <div className="breakdown-sub">
-                    <span>{formatPercent(areaItem.percentage_of_total)} of emissions</span>
-                    <span>{formatNumber(itemTonnes, 2)} metric tons</span>
+                    <span>{hasNumber(areaItem.percentage_of_total) ? `${formatPercent(areaItem.percentage_of_total)} of returned energy` : 'Energy share unavailable'}</span>
+                    <span>{itemTonnes !== null ? `${formatNumber(itemTonnes, 2)} t CO₂e` : 'Unavailable'}</span>
                   </div>
                 </div>
               );
@@ -130,7 +148,7 @@ export default function CostEmissionsSection({ energySummary, byArea = [] }) {
         <div className="integrity-content">
           <div className="integrity-title">Source Data Accounting Notice</div>
           <p className="integrity-text">
-            Electricity spend is computed using the constant contractual tariff rate of <strong>₹8.25 / kWh</strong> recorded in the source factory dataset. This is a constant rate and is not subject to time-of-day or peak-demand billing structures in the current telemetry. Carbon emissions are calculated using the source grid emission factor of <strong>0.716 kg CO₂e / kWh</strong>. No hypothetical cost savings, tariff adjustments, or unverified financial projections are introduced.
+            Cost is dataset-calculated and may not match the current electricity contract or bill. CO₂e is an estimate based on a dataset emission factor, not a verified emissions measurement. No cost savings or tariff adjustments are inferred here.
           </p>
         </div>
       </div>

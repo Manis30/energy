@@ -1,8 +1,15 @@
 import React from 'react';
 import { formatDateTime, formatNumber } from '../../utils/formatters';
 
-export default function AnomalySection({ anomaliesData }) {
-  const totalAnomalies = anomaliesData?.total_anomalies_detected || 0;
+const hasNumber = (value) => value !== null
+  && value !== undefined
+  && value !== ''
+  && Number.isFinite(Number(value));
+
+export default function AnomalySection({ anomaliesData, dataAvailable = true }) {
+  const totalAnomalies = hasNumber(anomaliesData?.total_anomalies_detected)
+    ? Number(anomaliesData.total_anomalies_detected)
+    : null;
   const zscoreStats = anomaliesData?.statistical_zscore;
   const rollingStats = anomaliesData?.rolling_baseline;
   const pfStats = anomaliesData?.low_power_factor;
@@ -17,7 +24,10 @@ export default function AnomalySection({ anomaliesData }) {
   const combinedSample = [
     ...rollingAnomalies.slice(0, 3),
     ...statAnomalies.slice(0, 3),
-  ].sort((a, b) => Math.abs(b.deviation_score) - Math.abs(a.deviation_score));
+  ].sort((a, b) => (
+    (hasNumber(b.deviation_score) ? Math.abs(Number(b.deviation_score)) : -1)
+    - (hasNumber(a.deviation_score) ? Math.abs(Number(a.deviation_score)) : -1)
+  ));
 
   return (
     <div className="dashboard-section">
@@ -25,13 +35,23 @@ export default function AnomalySection({ anomaliesData }) {
         <div>
           <h3 className="section-title">Automated Operational Anomaly Monitoring</h3>
           <p className="section-desc">
-            Deterministic surveillance of consumption spikes, dynamic rolling baselines, power factor compliance, and line stoppage standby draw.
+            Returned detector flags from energy, power-factor, and zero-output analytics. Flags are not confirmed equipment faults or proof of avoidable waste.
           </p>
         </div>
         <div className="section-tag-group">
-          <span className="section-tag anomaly-count">Total Flagged Events: {totalAnomalies}</span>
+          <span className="section-tag anomaly-count">
+            {totalAnomalies === null
+              ? 'Detector flag count unavailable'
+              : `${totalAnomalies} detector flag(s) · may overlap`}
+          </span>
         </div>
       </div>
+
+      {!dataAvailable && (
+        <div className="chart-empty-state">
+          Anomaly analysis request failed. No conclusion about the presence or absence of anomalies is available.
+        </div>
+      )}
 
       {/* 4 Summary Stat Cards */}
       <div className="anomaly-summary-grid">
@@ -45,8 +65,16 @@ export default function AnomalySection({ anomaliesData }) {
           </div>
           <div className="anomaly-stat-info">
             <span className="anomaly-stat-label">Statistical Z-Score (Spikes/Drops)</span>
-            <span className="anomaly-stat-val">{zscoreStats?.total_anomalies_detected || 0}</span>
-            <span className="anomaly-stat-sub">|Z| ≥ 3.0σ extreme hourly deviations</span>
+            <span className="anomaly-stat-val">
+              {hasNumber(zscoreStats?.total_anomalies_detected)
+                ? formatNumber(zscoreStats.total_anomalies_detected)
+                : 'Unavailable'}
+            </span>
+            <span className="anomaly-stat-sub">
+              {hasNumber(zscoreStats?.threshold_z)
+                ? `|Z| ≥ ${Number(zscoreStats.threshold_z).toFixed(1)}σ`
+                : 'Z-score threshold unavailable'}
+            </span>
           </div>
         </div>
 
@@ -59,8 +87,16 @@ export default function AnomalySection({ anomaliesData }) {
           </div>
           <div className="anomaly-stat-info">
             <span className="anomaly-stat-label">Rolling Baseline Deviations</span>
-            <span className="anomaly-stat-val">{rollingStats?.total_anomalies_detected || 0}</span>
-            <span className="anomaly-stat-sub">Prior 24-hr historical window (current excluded)</span>
+            <span className="anomaly-stat-val">
+              {hasNumber(rollingStats?.total_anomalies_detected)
+                ? formatNumber(rollingStats.total_anomalies_detected)
+                : 'Unavailable'}
+            </span>
+            <span className="anomaly-stat-sub">
+              {hasNumber(rollingStats?.window_size_hours)
+                ? `Prior ${formatNumber(rollingStats.window_size_hours)}-hour window (current excluded)`
+                : 'Rolling window duration unavailable'}
+            </span>
           </div>
         </div>
 
@@ -72,9 +108,15 @@ export default function AnomalySection({ anomaliesData }) {
             </svg>
           </div>
           <div className="anomaly-stat-info">
-            <span className="anomaly-stat-label">Power Factor Compliance</span>
-            <span className="anomaly-stat-val text-success">100% Compliant</span>
-            <span className="anomaly-stat-sub">0 readings below 0.90 (plant avg: 0.9497)</span>
+            <span className="anomaly-stat-label">Power Factor Threshold Monitoring</span>
+            <span className={`anomaly-stat-val ${hasNumber(pfStats?.total_anomalies_detected) && Number(pfStats.total_anomalies_detected) > 0 ? 'text-danger' : ''}`}>
+              {hasNumber(pfStats?.total_anomalies_detected)
+                ? `${formatNumber(pfStats.total_anomalies_detected)} low-PF flag(s)`
+                : 'Unavailable'}
+            </span>
+            <span className="anomaly-stat-sub">
+              {hasNumber(pfStats?.threshold) ? `Application threshold: PF < ${Number(pfStats.threshold).toFixed(2)}` : 'Threshold unavailable'}
+            </span>
           </div>
         </div>
 
@@ -87,9 +129,17 @@ export default function AnomalySection({ anomaliesData }) {
             </svg>
           </div>
           <div className="anomaly-stat-info">
-            <span className="anomaly-stat-label">Zero-Production Standby Power</span>
-            <span className="anomaly-stat-val">{formatNumber(standbyStats?.total_standby_energy_kwh, 2)} kWh</span>
-            <span className="anomaly-stat-sub">155 hours stoppage draw across SMT & FAL</span>
+            <span className="anomaly-stat-label">Energy During Zero-Output Intervals</span>
+            <span className="anomaly-stat-val">
+              {hasNumber(standbyStats?.total_standby_energy_kwh)
+                ? `${formatNumber(standbyStats.total_standby_energy_kwh, 2)} kWh`
+                : 'Unavailable'}
+            </span>
+            <span className="anomaly-stat-sub">
+              {hasNumber(standbyStats?.total_stoppage_minutes)
+                ? `${formatNumber(standbyStats.total_stoppage_minutes)} min reported downtime in flagged intervals; this does not establish avoidable waste`
+                : 'Zero-output observation context unavailable'}
+            </span>
           </div>
         </div>
       </div>
@@ -100,7 +150,7 @@ export default function AnomalySection({ anomaliesData }) {
           <div>
             <h4 className="chart-card-title">Recent Significant Deviations</h4>
             <span className="chart-card-subtitle">
-              Highest-deviation statistical observations requiring operational review (not assumed equipment failures)
+              Returned statistical/rolling observations for human review; references are detector-specific, not expected-energy baselines.
             </span>
           </div>
           <span className="anomaly-audit-note">
@@ -117,15 +167,19 @@ export default function AnomalySection({ anomaliesData }) {
                 <th>Anomaly Type</th>
                 <th>Severity</th>
                 <th>Measured Value</th>
-                <th>Baseline</th>
+                <th>Detector Reference</th>
                 <th>Deviation</th>
                 <th>Deterministic Explanation</th>
               </tr>
             </thead>
             <tbody>
-              {combinedSample.length === 0 ? (
+              {!dataAvailable || combinedSample.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="empty-table-cell">No significant anomalies to display for current filter selection.</td>
+                  <td colSpan="8" className="empty-table-cell">
+                    {!dataAvailable
+                      ? 'Anomaly details unavailable.'
+                      : 'No statistical or rolling detail records were returned; other detector flags may still exist.'}
+                  </td>
                 </tr>
               ) : (
                 combinedSample.map((item, idx) => (
@@ -143,10 +197,18 @@ export default function AnomalySection({ anomaliesData }) {
                         {item.severity}
                       </span>
                     </td>
-                    <td className="numeric-cell">{formatNumber(item.actual_value, 2)} kWh</td>
-                    <td className="numeric-cell">{formatNumber(item.baseline_value, 2)} kWh</td>
+                    <td className="numeric-cell">
+                      {hasNumber(item.actual_value) ? `${formatNumber(item.actual_value, 2)} kWh` : 'Unavailable'}
+                    </td>
+                    <td className="numeric-cell">
+                      {hasNumber(item.baseline_value) ? `${formatNumber(item.baseline_value, 2)} kWh` : 'Unavailable'}
+                    </td>
                     <td className="numeric-cell font-mono">
-                      {item.deviation_score > 0 ? `+${item.deviation_score.toFixed(2)}σ` : `${item.deviation_score.toFixed(2)}σ`}
+                      {hasNumber(item.deviation_score)
+                        ? Number(item.deviation_score) > 0
+                          ? `+${Number(item.deviation_score).toFixed(2)}σ`
+                          : `${Number(item.deviation_score).toFixed(2)}σ`
+                        : 'Unavailable'}
                     </td>
                     <td className="explanation-cell" title={item.explanation}>
                       {item.explanation}

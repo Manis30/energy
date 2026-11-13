@@ -31,8 +31,12 @@ function CustomDowntimeTooltip({ active, payload }) {
           <span className="tooltip-val font-bold">{formatNumber(data.total_downtime_min)} min</span>
         </div>
         <div className="tooltip-row">
-          <span className="tooltip-label">Hours Lost:</span>
-          <span className="tooltip-val font-mono">{(data.total_downtime_min / 60).toFixed(1)} hrs</span>
+          <span className="tooltip-label">Duration (hours):</span>
+          <span className="tooltip-val font-mono">
+            {data.total_downtime_min == null || !Number.isFinite(Number(data.total_downtime_min))
+              ? 'Unavailable'
+              : `${(Number(data.total_downtime_min) / 60).toFixed(1)} hrs`}
+          </span>
         </div>
         <div className="tooltip-row">
           <span className="tooltip-label">Event Count:</span>
@@ -48,19 +52,32 @@ function CustomDowntimeTooltip({ active, payload }) {
   return null;
 }
 
-export default function ProductionDowntimeSection({ downtimeData = [], totalDowntimeMin = 60290 }) {
+export default function ProductionDowntimeSection({
+  downtimeData = [],
+  totalDowntimeMin = null,
+  dataAvailable = true,
+}) {
+  const hasTotalDowntime = totalDowntimeMin !== null
+    && totalDowntimeMin !== undefined
+    && Number.isFinite(Number(totalDowntimeMin));
+  const totalDowntime = hasTotalDowntime ? Number(totalDowntimeMin) : null;
   const chartData = (downtimeData || []).map((d) => {
     let clean = d.downtime_reason?.replace(/_/g, ' ');
     if (d.downtime_reason === 'NONE') clean = 'Routine / Unspecified';
+    const hasDuration = d.total_downtime_min !== null
+      && d.total_downtime_min !== undefined
+      && Number.isFinite(Number(d.total_downtime_min));
     return {
       ...d,
       cleanReason: clean,
       duration_min: d.total_downtime_min,
-      share_pct: totalDowntimeMin > 0 ? (d.total_downtime_min / totalDowntimeMin) * 100 : 0,
+      share_pct: hasDuration && totalDowntime !== null && totalDowntime > 0
+        ? (Number(d.total_downtime_min) / totalDowntime) * 100
+        : null,
     };
   });
 
-  const totalDowntimeHours = (totalDowntimeMin / 60).toFixed(1);
+  const totalDowntimeHours = totalDowntime !== null ? (totalDowntime / 60).toFixed(1) : null;
 
   return (
     <div className="dashboard-section">
@@ -68,12 +85,14 @@ export default function ProductionDowntimeSection({ downtimeData = [], totalDown
         <div>
           <h3 className="section-title">Production Downtime & Stoppage Analysis</h3>
           <p className="section-desc">
-            Granular stoppage tracking by root failure category, frequency, and zero-output severity.
+            Returned downtime totals by logged reason and zero-output event count; a logged reason does not independently establish root cause.
           </p>
         </div>
         <div className="section-tag-group">
           <span className="section-tag scrap">
-            Total Stoppages: {formatNumber(totalDowntimeMin)} min ({formatNumber(totalDowntimeHours)} hrs)
+            {totalDowntime === null
+              ? 'Reported downtime unavailable'
+              : `Reported downtime: ${formatNumber(totalDowntime)} min (${formatNumber(totalDowntimeHours, 1)} hrs)`}
           </span>
         </div>
       </div>
@@ -83,13 +102,21 @@ export default function ProductionDowntimeSection({ downtimeData = [], totalDown
         <div className="chart-card downtime-chart-card">
           <div className="chart-card-header">
             <div>
-              <h4 className="chart-card-title">Downtime Duration by Root Reason</h4>
+              <h4 className="chart-card-title">Downtime Duration by Logged Reason</h4>
               <span className="chart-card-subtitle">Stoppage minutes across all monitored manufacturing lines</span>
             </div>
           </div>
 
-          <div className="chart-wrapper">
-            <ResponsiveContainer width="100%" height={300}>
+          <div
+            className="chart-wrapper"
+            role="group"
+            aria-label="Downtime bar chart in minutes by reported reason; a table below lists returned details"
+          >
+            {!dataAvailable || chartData.length === 0 ? (
+              <div className="chart-empty-state">
+                {!dataAvailable ? 'Downtime-by-reason data is unavailable.' : 'No downtime-reason records were returned.'}
+              </div>
+            ) : <ResponsiveContainer width="100%" height={300}>
               <BarChart
                 data={chartData}
                 layout="vertical"
@@ -121,7 +148,7 @@ export default function ProductionDowntimeSection({ downtimeData = [], totalDown
                   ))}
                 </Bar>
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer>}
           </div>
         </div>
 
@@ -129,8 +156,8 @@ export default function ProductionDowntimeSection({ downtimeData = [], totalDown
         <div className="chart-card downtime-table-card">
           <div className="chart-card-header">
             <div>
-              <h4 className="chart-card-title">Stoppage Cause & Severity Audit</h4>
-              <span className="chart-card-subtitle">Validated occurrences and zero-production impact</span>
+              <h4 className="chart-card-title">Logged Reason & Duration</h4>
+              <span className="chart-card-subtitle">Returned occurrences and zero-output counts</span>
             </div>
           </div>
 
@@ -138,7 +165,7 @@ export default function ProductionDowntimeSection({ downtimeData = [], totalDown
             <table className="downtime-audit-table">
               <thead>
                 <tr>
-                  <th>Stoppage Cause</th>
+                  <th>Logged Reason</th>
                   <th className="text-right">Duration (min)</th>
                   <th className="text-right">Share</th>
                   <th className="text-right">Occurrences</th>
@@ -146,7 +173,13 @@ export default function ProductionDowntimeSection({ downtimeData = [], totalDown
                 </tr>
               </thead>
               <tbody>
-                {chartData.map((item) => (
+                {!dataAvailable || chartData.length === 0 ? (
+                  <tr>
+                    <td colSpan="5">
+                      {!dataAvailable ? 'Downtime-by-reason data unavailable' : 'No downtime-reason records returned'}
+                    </td>
+                  </tr>
+                ) : chartData.map((item) => (
                   <tr key={item.downtime_reason}>
                     <td>
                       <span className="downtime-reason-cell">
@@ -185,9 +218,9 @@ export default function ProductionDowntimeSection({ downtimeData = [], totalDown
           </svg>
         </div>
         <div className="integrity-content">
-          <div className="integrity-title">Downtime Accounting Integrity Rule</div>
+          <div className="integrity-title">Downtime Data Interpretation</div>
           <p className="integrity-text">
-            Stoppage metrics represent actual observed line downtime logged in factory telemetry records. In accordance with strict data integrity guidelines, line downtime is reported in physical time units (<strong>minutes</strong> and <strong>hours</strong>) and is not converted into speculative lost production volume or hypothetical financial penalty estimates without validated contractual loss models.
+            Stoppage metrics represent actual observed line downtime logged in factory telemetry records. In accordance with strict data integrity guidelines, line downtime is reported in physical time units (<strong>minutes</strong> and <strong>hours</strong>) and is not converted into speculative lost production volume or hypothetical financial loss estimates without validated plant financial models.
           </p>
         </div>
       </div>

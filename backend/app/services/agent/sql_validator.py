@@ -69,6 +69,118 @@ DANGEROUS_FUNCTIONS: Set[str] = {
     "current_setting",
 }
 
+# Approved analytical SQL functions (allowlist)
+ALLOWED_SQL_FUNCTIONS: Set[str] = {
+    # Aggregates
+    "count",
+    "sum",
+    "avg",
+    "min",
+    "max",
+    "stddev",
+    "stddev_samp",
+    "stddev_pop",
+    "var_samp",
+    "var_pop",
+    "variance",
+    # Math & Numeric
+    "round",
+    "trunc",
+    "floor",
+    "ceil",
+    "ceiling",
+    "abs",
+    "power",
+    "sqrt",
+    "mod",
+    "sign",
+    "greatest",
+    "least",
+    # Date / Time
+    "date_trunc",
+    "timestamptrunc",
+    "timestamp_trunc",
+    "extract",
+    "date_part",
+    "to_char",
+    "time_to_str",
+    "to_date",
+    "str_to_date",
+    "to_timestamp",
+    "str_to_time",
+    "age",
+    "now",
+    "current_date",
+    "current_time",
+    "current_timestamp",
+    "currentdate",
+    "currenttime",
+    "currenttimestamp",
+    # String / Formatting
+    "lower",
+    "upper",
+    "trim",
+    "ltrim",
+    "rtrim",
+    "substr",
+    "substring",
+    "concat",
+    "replace",
+    "length",
+    "left",
+    "right",
+    "coalesce",
+    "nullif",
+    # Window / Ranking
+    "row_number",
+    "rownumber",
+    "rank",
+    "dense_rank",
+    "denserank",
+    "ntile",
+    "lag",
+    "lead",
+    "first_value",
+    "firstvalue",
+    "last_value",
+    "lastvalue",
+    # Type conversion
+    "cast",
+}
+
+# Explicitly prohibited information disclosure functions
+FORBIDDEN_INFO_FUNCTIONS: Set[str] = {
+    "version",
+    "currentversion",
+    "current_version",
+    "current_user",
+    "currentuser",
+    "session_user",
+    "sessionuser",
+    "current_database",
+    "currentdatabase",
+    "current_schema",
+    "currentschema",
+    "current_schemas",
+    "inet_server_addr",
+    "inet_client_addr",
+    "inet_server_port",
+    "inet_client_port",
+    "txid_current",
+    "txid_current_snapshot",
+    "pg_backend_pid",
+    "current_setting",
+}
+
+# Forbidden system columns / pseudo-columns
+FORBIDDEN_SYSTEM_COLUMNS: Set[str] = {
+    "user",
+    "current_user",
+    "session_user",
+    "current_role",
+    "current_schema",
+}
+
 
 def validate_sql(sql: str) -> str:
     """
@@ -136,7 +248,48 @@ def validate_sql(sql: str) -> str:
         if not isinstance(cte_query, (exp.Select, exp.Union)):
             raise SQLValidationError("All Common Table Expressions (CTEs) must be read-only SELECT queries.")
 
-    # 8. Table Whitelist Enforcement
+    # 8. Function Call and System Information Validation (Allowlist Enforcement)
+    for func in root.find_all(exp.Func):
+        # Ignore syntactic AST structures like AND/OR connectors and CASE/IF clauses
+        if isinstance(func, (exp.Connector, exp.Case, exp.If)):
+            continue
+
+        raw_name = str(func.this).lower() if isinstance(func, exp.Anonymous) else ""
+        sql_name = func.sql_name().lower() if hasattr(func, "sql_name") else ""
+        key = getattr(func, "key", "").lower()
+        cls_name = type(func).__name__.lower()
+
+        candidate_names = {c for c in (raw_name, sql_name, key, cls_name) if c}
+
+        # Check dangerous functions and pg_ prefixes
+        for name in candidate_names:
+            if name in DANGEROUS_FUNCTIONS or name.startswith("pg_"):
+                display_name = raw_name or sql_name or name
+                raise SQLValidationError(f"Function call '{display_name}()' is strictly prohibited.")
+
+        # Check forbidden information disclosure functions
+        if candidate_names & FORBIDDEN_INFO_FUNCTIONS:
+            prohibited_func = raw_name or sql_name or next(iter(candidate_names & FORBIDDEN_INFO_FUNCTIONS))
+            raise SQLValidationError(
+                f"Information disclosure function '{prohibited_func}()' is strictly prohibited."
+            )
+
+        # Allowlist enforcement: at least one candidate must be in ALLOWED_SQL_FUNCTIONS
+        if not (candidate_names & ALLOWED_SQL_FUNCTIONS):
+            display_name = raw_name or sql_name or cls_name or "unknown"
+            raise SQLValidationError(
+                f"Function '{display_name}()' is not in the approved analytical function allowlist."
+            )
+
+    # Check forbidden system column / variable references
+    for col in root.find_all(exp.Column):
+        col_name = (col.name or "").lower()
+        if col_name in FORBIDDEN_SYSTEM_COLUMNS:
+            raise SQLValidationError(
+                f"Reference to system variable '{col_name}' is strictly prohibited."
+            )
+
+    # 9. Table Whitelist Enforcement
     tables_found = list(root.find_all(exp.Table))
     if not tables_found and not root.find(exp.Literal):
         raise SQLValidationError("Query does not reference any valid table.")
@@ -162,12 +315,6 @@ def validate_sql(sql: str) -> str:
                 f"Access to table '{tbl_name}' is not permitted. "
                 f"Approved tables: {', '.join(sorted(APPROVED_TABLES))}."
             )
-
-    # 9. Function Call Validation
-    for func in root.find_all((exp.Func, exp.Anonymous)):
-        fname = (func.name if hasattr(func, "name") else str(func.this)).lower()
-        if fname in DANGEROUS_FUNCTIONS or fname.startswith("pg_"):
-            raise SQLValidationError(f"Function call '{fname}()' is strictly prohibited.")
 
     # 10. Enforce safe LIMIT policy (maximum 100 rows)
     existing_limit = root.args.get("limit")

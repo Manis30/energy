@@ -158,6 +158,8 @@ export default function DailyChartsSection({
   byLine = [],
   dailyTrend = [],
   selectedDate,
+  trendPeriod,
+  trendAvailable = false,
 }) {
   // Meter chart data
   const meterChartData = [...(byMeter || [])].sort(
@@ -188,6 +190,13 @@ export default function DailyChartsSection({
     consumption_num: Number(t.consumption_kwh),
     isSelected: t.date === selectedDate,
   }));
+  const trendDates = trendChartData
+    .map((item) => item.date)
+    .filter((date) => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date))
+    .sort();
+  const trendDuration = trendPeriod
+    ? Math.floor((Date.parse(`${trendPeriod.end_date}T00:00:00Z`) - Date.parse(`${trendPeriod.start_date}T00:00:00Z`)) / 86400000) + 1
+    : null;
 
   return (
     <div className="dashboard-section daily-charts-section">
@@ -206,10 +215,10 @@ export default function DailyChartsSection({
           <div className="chart-card-header">
             <div>
               <h4 className="chart-card-title">Energy Consumption by Submeter</h4>
-              <p className="chart-card-subtitle">Daily kWh consumption across all 5 monitored factory submeters</p>
+              <p className="chart-card-subtitle">Returned daily kWh totals by meter; meter scopes are not normalized for efficiency comparison</p>
             </div>
           </div>
-          <div className="chart-body">
+          <div className="chart-body" role="group" aria-label="Daily submeter energy bar chart in kilowatt-hours by meter">
             {meterChartData.length === 0 ? (
               <div className="chart-empty-state">No meter data recorded for this date</div>
             ) : (
@@ -244,7 +253,7 @@ export default function DailyChartsSection({
             )}
           </div>
           <div className="chart-card-footer">
-            <span className="chart-legend-hint">Includes process meters (SMT, FAL) and baseline utility meters</span>
+            <span className="chart-legend-hint">SMT, FAL, and utility meter totals may reflect different production scopes and operating conditions.</span>
           </div>
         </div>
 
@@ -256,7 +265,7 @@ export default function DailyChartsSection({
               <p className="chart-card-subtitle">Relative proportion of process manufacturing vs plant utilities</p>
             </div>
           </div>
-          <div className="chart-body">
+          <div className="chart-body" role="group" aria-label="Daily energy share pie chart by returned area in kilowatt-hours">
             {areaChartData.length === 0 ? (
               <div className="chart-empty-state">No area data recorded for this date</div>
             ) : (
@@ -303,7 +312,7 @@ export default function DailyChartsSection({
               <p className="chart-card-subtitle">Actual vs Good unit volumes across SMT and Final Assembly lines</p>
             </div>
           </div>
-          <div className="chart-body">
+          <div className="chart-body" role="group" aria-label="Daily production bar chart comparing actual, good, and rejected output by line; production stages use different units">
             {lineChartData.length === 0 ? (
               <div className="chart-empty-state">No line production records for this date</div>
             ) : (
@@ -348,12 +357,21 @@ export default function DailyChartsSection({
           <div className="chart-card-header">
             <div>
               <h4 className="chart-card-title">7-Day Energy Consumption Context</h4>
-              <p className="chart-card-subtitle">Trailing daily energy trend leading up to and including {formatDate(selectedDate)}</p>
+              <p className="chart-card-subtitle">
+                Requested window: {trendPeriod && trendDuration > 0
+                  ? `${formatDate(trendPeriod.start_date)} – ${formatDate(trendPeriod.end_date)} (${trendDuration} calendar days)`
+                  : 'unavailable'}; {trendChartData.length} returned daily records
+                {trendDates.length > 0 && ` from ${formatDate(trendDates[0])} to ${formatDate(trendDates[trendDates.length - 1])}`}.
+              </p>
             </div>
           </div>
-          <div className="chart-body">
-            {trendChartData.length === 0 ? (
-              <div className="chart-empty-state">No trend history available for this period</div>
+          <div className="chart-body" role="group" aria-label="Daily energy consumption area chart in kilowatt-hours over the returned trend period">
+            {!trendAvailable || trendChartData.length === 0 ? (
+              <div className="chart-empty-state">
+                {!trendAvailable
+                  ? 'The historical trend request failed; no period context is available.'
+                  : 'No daily trend records were returned for this period.'}
+              </div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
                 <AreaChart data={trendChartData} margin={{ top: 10, right: 20, left: 10, bottom: 25 }}>
@@ -411,7 +429,9 @@ export default function DailyChartsSection({
             )}
           </div>
           <div className="chart-card-footer">
-            <span className="chart-legend-hint">Purple marker indicates the selected date ({selectedDate})</span>
+            <span className="chart-legend-hint">
+              Purple marker indicates the selected date ({selectedDate}); other points are historical daily totals. This is context only—not an expected-energy baseline or normalized comparison. Production volume and operating conditions may affect total kWh; changes alone do not prove efficiency changes or savings.
+            </span>
           </div>
         </div>
       </div>

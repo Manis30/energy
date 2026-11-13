@@ -1,0 +1,1563 @@
+"""Service for daily energy and production report parsing, validation, and database ingestion."""
+
+import csv
+import io
+import json
+import math
+import os
+import re
+import uuid
+import zipfile
+from datetime import date, datetime, time
+from decimal import Decimal, InvalidOperation
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+import openpyxl
+from sqlalchemy import delete, inspect, select, text
+from sqlalchemy.orm import Session
+
+from app.config import get_settings
+from app.models.source_data import (
+    DimProduct,
+    DimProductionLine,
+    FactEnergyMeterHourly,
+    FactHourlyProduction,
+)
+from app.models.upload_history import UploadHistory
+from app.schemas.daily_reports import (
+    InspectResponse,
+    PreviewRow,
+    RowValidationError,
+    ValidationSummary,
+)
+
+# Operational & Security Constraints from Settings
+_settings = get_settings()
+MAX_FILE_SIZE_BYTES = getattr(_settings, "MAX_UPLOAD_SIZE_MB", 25) * 1024 * 1024
+MAX_ROW_COUNT = getattr(_settings, "MAX_UPLOAD_ROWS", 50000)
+
+SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
+
+# Approved Schema Column Specifications
+ENERGY_REQUIRED_COLUMNS = [
+    "timestamp",
+    "date",
+    "plant_id",
+    "meter_id",
+    "area",
+    "energy_source",
+    "consumption_kwh",
+    "demand_kw",
+    "power_factor",
+    "tariff_inr_per_kwh",
+    "cost_inr",
+    "co2e_kg",
+    "reading_quality",
+]
+
+ENERGY_OPTIONAL_COLUMNS = ["meter_reading_id"]
+
+PRODUCTION_REQUIRED_COLUMNS = [
+    "event_ts",
+    "event_date",
+    "plant_id",
+    "line_id",
+    "shift_id",
+    "product_id",
+    "production_order_id",
+    "target_qty",
+    "actual_qty",
+    "good_qty",
+    "reject_qty",
+    "rework_qty",
+    "downtime_min",
+    "downtime_reason",
+    "operator_team",
+    "source_system",
+    "data_quality",
+]
+
+PRODUCTION_OPTIONAL_COLUMNS = [
+    "event_id",
+    "year",
+    "month",
+    "week",
+    "day",
+    "hour",
+]
+
+UNSUPPORTED_UNIT_PATTERNS = {
+    r"^consumption_(?!kwh$)": "Unsupported energy consumption unit in '{col}': expected 'consumption_kwh'",
+    r"^demand_(?!kw$)": "Unsupported power demand unit in '{col}': expected 'demand_kw'",
+    r"^tariff_(?!inr_per_kwh$)": "Unsupported tariff currency/unit in '{col}': expected 'tariff_inr_per_kwh'",
+    r"^cost_(?!inr$)": "Unsupported cost currency unit in '{col}': expected 'cost_inr'",
+    r"^co2e_(?!kg$)": "Unsupported emissions unit in '{col}': expected 'co2e_kg'",
+    r"^downtime_(?!min$|reason$)": "Unsupported downtime duration unit in '{col}': expected 'downtime_min'",
+}
+
+# Registered Master Submeter to Area Mappings
+METER_AREA_MAPPING = {
+    "MTR-SMT": "SMT",
+    "MTR-FAL": "FAL",
+    "MTR-HVAC": "HVAC",
+    "MTR-COMPRESSOR": "COMPRESSOR",
+    "MTR-CHILLER": "CHILLER",
+}
+
+NON_FINITE_STRINGS = {"nan", "infinity", "-infinity", "inf", "-inf", "null", "none"}
+
+
+
+def check_header_schema(
+    headers: List[str], report_type: str
+) -> Tuple[List[str], List[str], List[str]]:
+    """
+    Validate headers against approved source schema.
+    Returns (missing_required, unknown_columns, unsupported_unit_messages).
+    """
+    header_set = set(headers)
+    missing_required = []
+    unknown_cols = []
+    unsupported_units = []
+
+    approved_required = ENERGY_REQUIRED_COLUMNS if report_type == "ENERGY" else PRODUCTION_REQUIRED_COLUMNS
+    approved_optional = ENERGY_OPTIONAL_COLUMNS if report_type == "ENERGY" else PRODUCTION_OPTIONAL_COLUMNS
+    approved_all = set(approved_required + approved_optional)
+
+    for req in approved_required:
+        if req not in header_set:
+            missing_required.append(req)
+
+    for col in headers:
+        if col not in approved_all:
+            # Check if this matches a unit variant
+            unit_flagged = False
+            for pat, msg_template in UNSUPPORTED_UNIT_PATTERNS.items():
+                if re.search(pat, col):
+                    unsupported_units.append(msg_template.format(col=col))
+                    unit_flagged = True
+                    break
+            if not unit_flagged:
+                unknown_cols.append(col)
+
+    return missing_required, unknown_cols, unsupported_units
+
+
+
+def normalize_col_name(col: str) -> str:
+    """Normalize column header: strip BOM, lowercase, strip spaces and underscores."""
+    if not col:
+        return ""
+    cleaned = str(col).strip().lstrip("\ufeff").lower()
+    # Normalize common variations
+    cleaned = re.sub(r"\s+", "_", cleaned)
+    return cleaned
+
+
+def detect_file_format(filename: str, file_bytes: bytes) -> str:
+    """Validate file extension and file signature/magic bytes."""
+    lower_name = filename.lower()
+    ext = None
+    for s_ext in SUPPORTED_EXTENSIONS:
+        if lower_name.endswith(s_ext):
+            ext = s_ext
+            break
+
+    if not ext:
+        raise ValueError(
+            f"Unsupported file format for '{filename}'. Allowed formats: .csv, .xlsx, .xls"
+        )
+
+    # Magic byte verification
+    if ext == ".xlsx":
+        if not file_bytes.startswith(b"PK\x03\x04"):
+            raise ValueError("Invalid XLSX file: missing standard ZIP/OpenXML signature.")
+    elif ext == ".xls":
+        if not file_bytes.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+            raise ValueError("Invalid XLS file: missing standard OLE2 compound document signature.")
+    elif ext == ".csv":
+        # Check that CSV is not binary executable
+        if file_bytes.startswith(b"MZ") or file_bytes.startswith(b"\x7fELF"):
+            raise ValueError("Security violation: Binary executable detected instead of CSV text.")
+
+    return ext.lstrip(".").upper()
+
+
+def inspect_file(filename: str, file_bytes: bytes) -> InspectResponse:
+    """Inspect file content, enumerate worksheets if Excel, and detect report types."""
+    if len(file_bytes) > MAX_FILE_SIZE_BYTES:
+        raise ValueError(
+            f"File exceeds maximum allowed size of {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB."
+        )
+
+    file_format = detect_file_format(filename, file_bytes)
+    sheet_names: List[str] = []
+    estimated_rows = 0
+    detected_report_type: Optional[str] = None
+
+    if file_format == "CSV":
+        sheet_names = ["Sheet1"]
+        # Fast row count estimate
+        try:
+            text_sample = file_bytes.decode("utf-8-sig", errors="replace")
+            lines = [line for line in text_sample.splitlines() if line.strip()]
+            estimated_rows = max(0, len(lines) - 1)
+            if lines:
+                header = [normalize_col_name(h) for h in csv.reader([lines[0]]).__next__()]
+                detected_report_type = classify_columns(header)
+        except Exception:
+            estimated_rows = 0
+    elif file_format == "XLSX":
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+            sheet_names = wb.sheetnames
+            # Check first sheet
+            ws = wb[sheet_names[0]]
+            rows_iter = ws.iter_rows(values_only=True)
+            header_row = next(rows_iter, None)
+            if header_row:
+                header = [normalize_col_name(str(c)) for c in header_row if c is not None]
+                detected_report_type = classify_columns(header)
+            wb.close()
+        except Exception as e:
+            raise ValueError(f"Failed to parse XLSX workbook: {str(e)}")
+    elif file_format == "XLS":
+        try:
+            import xlrd
+            wb = xlrd.open_workbook(file_contents=file_bytes, on_demand=True)
+            sheet_names = wb.sheet_names()
+            if sheet_names:
+                ws = wb.sheet_by_name(sheet_names[0])
+                if ws.nrows > 0:
+                    header = [normalize_col_name(str(ws.cell_value(0, c))) for c in range(ws.ncols)]
+                    detected_report_type = classify_columns(header)
+                    estimated_rows = ws.nrows - 1
+            wb.release_resources()
+        except Exception as e:
+            raise ValueError(f"Failed to parse XLS workbook: {str(e)}")
+
+    return InspectResponse(
+        filename=filename,
+        file_format=file_format,
+        file_size_bytes=len(file_bytes),
+        sheet_names=sheet_names,
+        is_multi_sheet=len(sheet_names) > 1,
+        detected_report_type=detected_report_type,
+        estimated_rows=estimated_rows,
+    )
+
+
+def classify_columns(columns: List[str]) -> str:
+    """Classify column set into ENERGY, PRODUCTION, or UNKNOWN."""
+    col_set = set(columns)
+    has_energy = "consumption_kwh" in col_set or "meter_id" in col_set or "power_factor" in col_set
+    has_prod = "target_qty" in col_set or "actual_qty" in col_set or "line_id" in col_set
+
+    if has_energy and has_prod:
+        return "ENERGY_AND_PRODUCTION"
+    if has_energy:
+        return "ENERGY"
+    if has_prod:
+        return "PRODUCTION"
+    return "UNKNOWN"
+
+
+def parse_raw_sheet_rows(
+    file_bytes: bytes, file_format: str, sheet_name: Optional[str] = None
+) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """
+    Parse the target worksheet or CSV into header names and a list of row dictionaries.
+    Protects against formula execution, spreadsheet macros, and malformed files.
+    """
+    headers: List[str] = []
+    rows: List[Dict[str, Any]] = []
+
+    if file_format == "CSV":
+        # Check for binary NUL bytes
+        if b"\x00" in file_bytes:
+            raise ValueError("Malformed CSV: Binary NUL byte detected in file.")
+
+        try:
+            content = file_bytes.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            try:
+                content = file_bytes.decode("latin-1")
+            except Exception as e:
+                raise ValueError(f"Unable to decode CSV text: {str(e)}")
+
+        reader = csv.reader(content.splitlines())
+        raw_header = None
+        for r in reader:
+            if not r or all(c.strip() == "" for c in r):
+                continue
+            if raw_header is None:
+                raw_header = [normalize_col_name(c) for c in r]
+                headers = raw_header
+            else:
+                row_dict = {}
+                for idx, col_name in enumerate(headers):
+                    val = r[idx].strip() if idx < len(r) else ""
+                    # Security: formula injection defense
+                    if isinstance(val, str) and val.startswith(("=", "+", "-", "@")):
+                        val = val.lstrip("=+-@")
+                    row_dict[col_name] = val
+                rows.append(row_dict)
+
+    elif file_format == "XLSX":
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+        except zipfile.BadZipFile:
+            raise ValueError("Invalid XLSX file: Corrupted or incomplete ZIP container.")
+        except Exception as e:
+            raise ValueError(f"Failed to open XLSX workbook: {str(e)}")
+
+        target_sheet = sheet_name if (sheet_name and sheet_name in wb.sheetnames) else wb.sheetnames[0]
+        ws = wb[target_sheet]
+
+        raw_header = None
+        consecutive_empty = 0
+        for row in ws.iter_rows(values_only=True):
+            if not row or all(c is None or str(c).strip() == "" for c in row):
+                if raw_header is not None:
+                    consecutive_empty += 1
+                    if consecutive_empty >= 30:
+                        break
+                continue
+            consecutive_empty = 0
+
+            if raw_header is None:
+                raw_header = [normalize_col_name(str(c)) for c in row if c is not None]
+                headers = raw_header
+            else:
+                row_dict = {}
+                for idx, col_name in enumerate(headers):
+                    val = row[idx] if idx < len(row) else None
+                    if val is not None:
+                        # Prevent formula execution
+                        if isinstance(val, str) and val.startswith(("=", "+", "-", "@")):
+                            val = val.lstrip("=+-@")
+                    row_dict[col_name] = val
+                rows.append(row_dict)
+        wb.close()
+
+    elif file_format == "XLS":
+        try:
+            import xlrd
+            wb = xlrd.open_workbook(file_contents=file_bytes, on_demand=True)
+        except Exception as e:
+            raise ValueError(f"Failed to open XLS spreadsheet: {str(e)}")
+
+        target_sheet = sheet_name if (sheet_name and sheet_name in wb.sheet_names()) else wb.sheet_names()[0]
+        ws = wb.sheet_by_name(target_sheet)
+
+        if ws.nrows > 0:
+            headers = [normalize_col_name(str(ws.cell_value(0, c))) for c in range(ws.ncols)]
+            for r_idx in range(1, ws.nrows):
+                row_dict = {}
+                is_empty = True
+                for c_idx, col_name in enumerate(headers):
+                    cell = ws.cell(r_idx, c_idx)
+                    val = cell.value
+                    if cell.ctype == xlrd.XL_CELL_DATE:
+                        # Convert date tuple to datetime
+                        date_tuple = xlrd.xldate_as_tuple(val, wb.datemode)
+                        val = datetime(*date_tuple)
+                    elif isinstance(val, str) and val.startswith(("=", "+", "-", "@")):
+                        val = val.lstrip("=+-@")
+                    if val is not None and str(val).strip() != "":
+                        is_empty = False
+                    row_dict[col_name] = val
+                if not is_empty:
+                    rows.append(row_dict)
+        wb.release_resources()
+
+    if len(rows) > MAX_ROW_COUNT:
+        raise ValueError(
+            f"File row count ({len(rows)}) exceeds maximum limit of {MAX_ROW_COUNT} records."
+        )
+
+    return headers, rows
+
+
+def parse_cell_datetime(val: Any) -> Optional[datetime]:
+    """Parse various datetime representations into Python datetime."""
+    if val is None or str(val).strip() == "":
+        return None
+    if isinstance(val, datetime):
+        return val
+    if isinstance(val, date):
+        return datetime.combine(val, time.min)
+
+    s = str(val).strip()
+    if s.lower() in NON_FINITE_STRINGS:
+        return None
+
+    # Try ISO format
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        pass
+
+    # Try common formats
+    formats = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%d-%m-%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S",
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(s, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def parse_cell_date(val: Any) -> Optional[date]:
+    """Parse various date representations into Python date."""
+    if val is None or str(val).strip() == "":
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+
+    s = str(val).strip().split("T")[0].split(" ")[0]
+    if s.lower() in NON_FINITE_STRINGS:
+        return None
+
+    try:
+        return date.fromisoformat(s)
+    except Exception:
+        pass
+
+    formats = ["%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y"]
+    for fmt in formats:
+        try:
+            return datetime.strptime(s, fmt).date()
+        except Exception:
+            continue
+    return None
+
+
+def parse_cell_decimal(val: Any) -> Optional[Decimal]:
+    """Parse numeric cell safely into finite Decimal, rejecting NaN, Inf, and non-numbers."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s or s.lower() in NON_FINITE_STRINGS:
+        return None
+    try:
+        cleaned = s.replace(",", "")
+        d = Decimal(cleaned)
+        if not d.is_finite():
+            return None
+        return d
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def parse_cell_int(val: Any) -> Optional[int]:
+    """Parse numeric cell safely into Integer, rejecting non-finite, fractions, or overflow."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s or s.lower() in NON_FINITE_STRINGS:
+        return None
+    try:
+        cleaned = s.replace(",", "")
+        f = float(cleaned)
+        if not math.isfinite(f):
+            return None
+        if f != math.floor(f) and f != math.ceil(f):
+            return None
+        return int(f)
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+
+class MasterDataCache:
+    """Cached master dimension references for fast foreign key validation."""
+
+    def __init__(self, session: Session):
+        self.products: Set[str] = set()
+        self.lines_by_plant: Set[Tuple[str, str]] = set()
+        self.plants: Set[str] = set()
+
+        # Load dim_product
+        prods = session.execute(select(DimProduct.product_id)).scalars().all()
+        self.products = set(prods)
+
+        # Load dim_production_line
+        lines = session.execute(
+            select(DimProductionLine.line_id, DimProductionLine.plant_id)
+        ).all()
+        for l_id, p_id in lines:
+            self.lines_by_plant.add((l_id, p_id))
+            self.plants.add(p_id)
+
+
+def detect_reporting_dates_from_rows(
+    rows: List[Dict[str, Any]], report_type: str
+) -> List[date]:
+    """Detect all unique dates present across data rows."""
+    found_dates = set()
+    date_col = "date" if report_type == "ENERGY" else "event_date"
+    ts_col = "timestamp" if report_type == "ENERGY" else "event_ts"
+
+    for r in rows:
+        d_val = r.get(date_col)
+        parsed_d = parse_cell_date(d_val)
+        if not parsed_d:
+            ts_val = r.get(ts_col)
+            parsed_ts = parse_cell_datetime(ts_val)
+            if parsed_ts:
+                parsed_d = parsed_ts.date()
+
+        if parsed_d:
+            found_dates.add(parsed_d)
+
+    return sorted(list(found_dates))
+
+
+def validate_energy_rows(
+    rows: List[Dict[str, Any]],
+    confirmed_date: Optional[date],
+    master_cache: MasterDataCache,
+    existing_db_keys: Set[Tuple[datetime, str, str]],
+    mode: str = "INCREMENTAL",
+) -> Tuple[List[Dict[str, Any]], List[RowValidationError], List[PreviewRow], ValidationSummary]:
+    """Validate all rows against fact_energy_meter_hourly schema and domain rules."""
+    valid_records: List[Dict[str, Any]] = []
+    errors: List[RowValidationError] = []
+    preview: List[PreviewRow] = []
+
+    seen_file_keys: Set[Tuple[datetime, str, str]] = set()
+    duplicate_count = 0
+    rejected_count = 0
+
+    plants_found: Set[str] = set()
+    meters_found: Set[str] = set()
+
+    for idx, row in enumerate(rows, start=1):
+        row_errors: List[str] = []
+        is_duplicate = False
+
+        # 1. Required fields presence check
+        for req in ENERGY_REQUIRED_COLUMNS:
+            val = row.get(req)
+            if val is None or str(val).strip() == "":
+                row_errors.append(f"Missing required field: '{req}'")
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column=req,
+                        error_type="MISSING_FIELD",
+                        message=f"Missing required value for '{req}'",
+                    )
+                )
+
+        # 2. Timestamp & Date validation
+        ts = parse_cell_datetime(row.get("timestamp"))
+        if not ts:
+            row_errors.append("Invalid or unparseable timestamp")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="timestamp",
+                    error_type="INVALID_TIMESTAMP",
+                    message=f"Cannot parse timestamp: '{row.get('timestamp')}'",
+                    value=str(row.get("timestamp")),
+                )
+            )
+
+        row_date = parse_cell_date(row.get("date"))
+        if not row_date and ts:
+            row_date = ts.date()
+
+        if row_date and ts and row_date != ts.date():
+            row_errors.append(f"Date '{row_date}' does not match timestamp date '{ts.date()}'")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="date",
+                    error_type="DATE_MISMATCH",
+                    message="Date column does not align with timestamp",
+                    value=str(row_date),
+                )
+            )
+
+        if confirmed_date and row_date and row_date != confirmed_date:
+            row_errors.append(f"Row date '{row_date}' does not match confirmed reporting date '{confirmed_date}'")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="date",
+                    error_type="REPORTING_DATE_MISMATCH",
+                    message=f"Row date '{row_date}' differs from reporting date '{confirmed_date}'",
+                    value=str(row_date),
+                )
+            )
+
+        # 3. Plant ID
+        plant_id = str(row.get("plant_id", "")).strip()
+        if plant_id:
+            plants_found.add(plant_id)
+            if master_cache.plants and plant_id not in master_cache.plants:
+                row_errors.append(f"Unknown plant reference: '{plant_id}'")
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column="plant_id",
+                        error_type="INVALID_PLANT",
+                        message=f"Plant '{plant_id}' not found in registered plant master",
+                        value=plant_id,
+                    )
+                )
+
+        # 4. Meter ID & Area
+        meter_id = str(row.get("meter_id", "")).strip()
+        if meter_id:
+            meters_found.add(meter_id)
+            if meter_id not in VALID_METERS:
+                row_errors.append(f"Unapproved meter ID: '{meter_id}'")
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column="meter_id",
+                        error_type="INVALID_METER",
+                        message=f"Meter '{meter_id}' not in approved factory submeters",
+                        value=meter_id,
+                    )
+                )
+
+        area = str(row.get("area", "")).strip().upper()
+        if meter_id in METER_AREA_MAPPING:
+            expected_area = METER_AREA_MAPPING[meter_id]
+            if area != expected_area:
+                row_errors.append(f"Area '{area}' does not match expected area '{expected_area}' for meter '{meter_id}'")
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column="area",
+                        error_type="AREA_MISMATCH",
+                        message=f"Submeter '{meter_id}' is registered to area '{expected_area}', but report provided '{area}'",
+                        value=area,
+                    )
+                )
+
+        energy_source = str(row.get("energy_source", "")).strip().upper()
+        if energy_source and energy_source not in VALID_ENERGY_SOURCES:
+            row_errors.append(f"Unsupported energy source: '{energy_source}'")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="energy_source",
+                    error_type="INVALID_ENERGY_SOURCE",
+                    message=f"Energy source '{energy_source}' unsupported. Expected 'ELECTRICITY'.",
+                    value=energy_source,
+                )
+            )
+
+        # 5. Numerics & Range Checks
+        consumption_kwh = parse_cell_decimal(row.get("consumption_kwh"))
+        if consumption_kwh is None or consumption_kwh < Decimal("0"):
+            row_errors.append("consumption_kwh must be a non-negative decimal")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="consumption_kwh",
+                    error_type="RANGE_VIOLATION",
+                    message="consumption_kwh must be non-negative",
+                    value=str(row.get("consumption_kwh")),
+                )
+            )
+
+        demand_kw = parse_cell_decimal(row.get("demand_kw"))
+        if demand_kw is None or demand_kw < Decimal("0"):
+            row_errors.append("demand_kw must be a non-negative decimal")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="demand_kw",
+                    error_type="RANGE_VIOLATION",
+                    message="demand_kw must be non-negative",
+                    value=str(row.get("demand_kw")),
+                )
+            )
+
+        power_factor = parse_cell_decimal(row.get("power_factor"))
+        if power_factor is None or power_factor < Decimal("0.0") or power_factor > Decimal("1.0"):
+            row_errors.append("power_factor must be between 0.0 and 1.0")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="power_factor",
+                    error_type="RANGE_VIOLATION",
+                    message="power_factor must be in range [0.0, 1.0]",
+                    value=str(row.get("power_factor")),
+                )
+            )
+
+        tariff_inr = parse_cell_decimal(row.get("tariff_inr_per_kwh"))
+        if tariff_inr is None or tariff_inr < Decimal("0"):
+            row_errors.append("tariff_inr_per_kwh must be non-negative")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="tariff_inr_per_kwh",
+                    error_type="RANGE_VIOLATION",
+                    message="tariff_inr_per_kwh must be non-negative",
+                    value=str(row.get("tariff_inr_per_kwh")),
+                )
+            )
+
+        cost_inr = parse_cell_decimal(row.get("cost_inr"))
+        if cost_inr is None or cost_inr < Decimal("0"):
+            row_errors.append("cost_inr must be non-negative")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="cost_inr",
+                    error_type="RANGE_VIOLATION",
+                    message="cost_inr must be non-negative",
+                    value=str(row.get("cost_inr")),
+                )
+            )
+
+        co2e_kg = parse_cell_decimal(row.get("co2e_kg"))
+        if co2e_kg is None or co2e_kg < Decimal("0"):
+            row_errors.append("co2e_kg must be non-negative")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="co2e_kg",
+                    error_type="RANGE_VIOLATION",
+                    message="co2e_kg must be non-negative",
+                    value=str(row.get("co2e_kg")),
+                )
+            )
+
+        reading_quality = str(row.get("reading_quality", "VALID")).strip() or "VALID"
+
+        # 6. Business Key & Duplicate Verification: (timestamp, plant_id, meter_id)
+        b_key = None
+        if ts and plant_id and meter_id:
+            b_key = (ts, plant_id, meter_id)
+            if b_key in seen_file_keys:
+                is_duplicate = True
+                row_errors.append("Duplicate business key in uploaded file")
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column="business_key",
+                        error_type="DUPLICATE_IN_FILE",
+                        message=f"Duplicate entry for plant '{plant_id}', meter '{meter_id}' at timestamp '{ts.isoformat()}'",
+                    )
+                )
+            else:
+                seen_file_keys.add(b_key)
+
+            if b_key in existing_db_keys:
+                if mode == "OVERWRITE_CORRECTION":
+                    duplicate_count += 1
+                else:
+                    is_duplicate = True
+                    row_errors.append("Record already exists in Neon database")
+                    errors.append(
+                        RowValidationError(
+                            row_number=idx,
+                            column="business_key",
+                            error_type="DUPLICATE_IN_DATABASE",
+                            message=f"Existing record in database for plant '{plant_id}', meter '{meter_id}', timestamp '{ts.isoformat()}'",
+                        )
+                    )
+
+        # Status determination
+        if row_errors:
+            if is_duplicate and len(row_errors) == 1:
+                status = "DUPLICATE"
+                duplicate_count += 1
+            else:
+                status = "REJECTED"
+                rejected_count += 1
+        else:
+            status = "VALID"
+            # Format clean record for insertion
+            meter_reading_id = str(row.get("meter_reading_id", "")).strip()
+            if not meter_reading_id:
+                meter_reading_id = f"EN-{uuid.uuid4().hex[:12].upper()}"
+
+            valid_records.append(
+                {
+                    "meter_reading_id": meter_reading_id,
+                    "timestamp": ts,
+                    "date": row_date,
+                    "plant_id": plant_id,
+                    "meter_id": meter_id,
+                    "area": area,
+                    "energy_source": energy_source,
+                    "consumption_kwh": consumption_kwh,
+                    "demand_kw": demand_kw,
+                    "power_factor": power_factor,
+                    "tariff_inr_per_kwh": tariff_inr,
+                    "cost_inr": cost_inr,
+                    "co2e_kg": co2e_kg,
+                    "reading_quality": reading_quality,
+                }
+            )
+
+        # Preview generation (first 15 rows)
+        if len(preview) < 15:
+            preview.append(
+                PreviewRow(
+                    row_number=idx,
+                    status=status,
+                    data={
+                        "timestamp": str(ts) if ts else str(row.get("timestamp")),
+                        "date": str(row_date) if row_date else str(row.get("date")),
+                        "plant_id": plant_id,
+                        "meter_id": meter_id,
+                        "area": area,
+                        "consumption_kwh": str(consumption_kwh) if consumption_kwh is not None else str(row.get("consumption_kwh")),
+                        "demand_kw": str(demand_kw) if demand_kw is not None else str(row.get("demand_kw")),
+                        "power_factor": str(power_factor) if power_factor is not None else str(row.get("power_factor")),
+                        "cost_inr": str(cost_inr) if cost_inr is not None else str(row.get("cost_inr")),
+                    },
+                    errors=row_errors,
+                )
+            )
+
+    total_rows = len(rows)
+    valid_rows = len(valid_records)
+
+    summary = ValidationSummary(
+        report_type="ENERGY",
+        total_rows=total_rows,
+        valid_rows=valid_rows,
+        rejected_rows=rejected_count,
+        duplicate_rows=duplicate_count,
+        detected_date=confirmed_date,
+        confirmed_date=confirmed_date,
+        plants_found=sorted(list(plants_found)),
+        meters_found=sorted(list(meters_found)),
+        is_ready_for_ingest=(valid_rows > 0),
+    )
+
+    return valid_records, errors, preview, summary
+
+
+def validate_production_rows(
+    rows: List[Dict[str, Any]],
+    confirmed_date: Optional[date],
+    master_cache: MasterDataCache,
+    existing_db_keys: Set[Tuple[datetime, str, str]],
+    mode: str = "INCREMENTAL",
+) -> Tuple[List[Dict[str, Any]], List[RowValidationError], List[PreviewRow], ValidationSummary]:
+    """Validate all rows against fact_hourly_production schema and constraints."""
+    valid_records: List[Dict[str, Any]] = []
+    errors: List[RowValidationError] = []
+    preview: List[PreviewRow] = []
+
+    seen_file_keys: Set[Tuple[datetime, str, str]] = set()
+    duplicate_count = 0
+    rejected_count = 0
+
+    plants_found: Set[str] = set()
+    lines_found: Set[str] = set()
+
+    for idx, row in enumerate(rows, start=1):
+        row_errors: List[str] = []
+        is_duplicate = False
+
+        # 1. Required fields presence check
+        for req in PRODUCTION_REQUIRED_COLUMNS:
+            val = row.get(req)
+            if val is None or str(val).strip() == "":
+                row_errors.append(f"Missing required field: '{req}'")
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column=req,
+                        error_type="MISSING_FIELD",
+                        message=f"Missing required value for '{req}'",
+                    )
+                )
+
+        # 2. Timestamp & Date validation
+        event_ts = parse_cell_datetime(row.get("event_ts"))
+        if not event_ts:
+            row_errors.append("Invalid or unparseable event_ts")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="event_ts",
+                    error_type="INVALID_TIMESTAMP",
+                    message=f"Cannot parse event timestamp: '{row.get('event_ts')}'",
+                    value=str(row.get("event_ts")),
+                )
+            )
+
+        event_date = parse_cell_date(row.get("event_date"))
+        if not event_date and event_ts:
+            event_date = event_ts.date()
+
+        if event_date and event_ts and event_date != event_ts.date():
+            row_errors.append(f"event_date '{event_date}' differs from event_ts date '{event_ts.date()}'")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="event_date",
+                    error_type="DATE_MISMATCH",
+                    message="event_date does not align with event_ts",
+                    value=str(event_date),
+                )
+            )
+
+        if confirmed_date and event_date and event_date != confirmed_date:
+            row_errors.append(f"Row date '{event_date}' does not match confirmed reporting date '{confirmed_date}'")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="event_date",
+                    error_type="REPORTING_DATE_MISMATCH",
+                    message=f"Row date '{event_date}' differs from reporting date '{confirmed_date}'",
+                    value=str(event_date),
+                )
+            )
+
+        # 3. Derived or provided date components
+        raw_hour = parse_cell_int(row.get("hour"))
+        if raw_hour is not None and event_ts and raw_hour != event_ts.hour:
+            row_errors.append(f"Hour ({raw_hour}) does not match event_ts hour ({event_ts.hour})")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="hour",
+                    error_type="HOUR_MISMATCH",
+                    message=f"Provided hour ({raw_hour}) contradicts event_ts hour ({event_ts.hour})",
+                    value=str(raw_hour),
+                )
+            )
+
+        hour = raw_hour if raw_hour is not None else (event_ts.hour if event_ts else None)
+        if hour is None or hour < 0 or hour > 23:
+            row_errors.append(f"Hour must be between 0 and 23, got {hour}")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="hour",
+                    error_type="RANGE_VIOLATION",
+                    message="Production hour must be in range [0, 23]",
+                    value=str(row.get("hour")),
+                )
+            )
+
+        year = parse_cell_int(row.get("year")) or (event_ts.year if event_ts else None)
+        month = parse_cell_int(row.get("month")) or (event_ts.month if event_ts else None)
+        week = parse_cell_int(row.get("week")) or (event_ts.isocalendar()[1] if event_ts else None)
+        day = parse_cell_int(row.get("day")) or (event_ts.day if event_ts else None)
+
+        # 4. Plant ID & Line ID Foreign Key validation
+        plant_id = str(row.get("plant_id", "")).strip()
+        line_id = str(row.get("line_id", "")).strip()
+        if plant_id:
+            plants_found.add(plant_id)
+        if line_id:
+            lines_found.add(line_id)
+
+        if plant_id and line_id:
+            if (line_id, plant_id) not in master_cache.lines_by_plant:
+                row_errors.append(f"Foreign key violation: Line '{line_id}' in Plant '{plant_id}' not found in dim_production_line")
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column="line_id",
+                        error_type="FOREIGN_KEY_VIOLATION",
+                        message=f"Line '{line_id}' is not linked to plant '{plant_id}' in dim_production_line master",
+                        value=f"{line_id}@{plant_id}",
+                    )
+                )
+
+        # 5. Product ID Foreign Key validation
+        product_id = str(row.get("product_id", "")).strip()
+        if product_id:
+            if product_id not in master_cache.products:
+                row_errors.append(f"Foreign key violation: Product '{product_id}' not found in dim_product master")
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column="product_id",
+                        error_type="FOREIGN_KEY_VIOLATION",
+                        message=f"Product '{product_id}' does not exist in dim_product catalog",
+                        value=product_id,
+                    )
+                )
+
+        # 6. Quantities and Balance Check: actual_qty = good_qty + reject_qty
+        target_qty = parse_cell_int(row.get("target_qty"))
+        actual_qty = parse_cell_int(row.get("actual_qty"))
+        good_qty = parse_cell_int(row.get("good_qty"))
+        reject_qty = parse_cell_int(row.get("reject_qty"))
+        rework_qty = parse_cell_int(row.get("rework_qty"))
+
+        for q_name, q_val in [
+            ("target_qty", target_qty),
+            ("actual_qty", actual_qty),
+            ("good_qty", good_qty),
+            ("reject_qty", reject_qty),
+            ("rework_qty", rework_qty),
+        ]:
+            if q_val is None or q_val < 0:
+                row_errors.append(f"{q_name} must be a non-negative integer")
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column=q_name,
+                        error_type="RANGE_VIOLATION",
+                        message=f"{q_name} must be non-negative integer",
+                        value=str(row.get(q_name)),
+                    )
+                )
+
+        if actual_qty is not None and good_qty is not None and reject_qty is not None:
+            if actual_qty != (good_qty + reject_qty):
+                msg = f"Quantity balance violation: actual_qty ({actual_qty}) must equal good_qty ({good_qty}) + reject_qty ({reject_qty})"
+                row_errors.append(msg)
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column="actual_qty",
+                        error_type="BALANCE_VIOLATION",
+                        message=msg,
+                        value=str(actual_qty),
+                    )
+                )
+
+        # 7. Downtime validation: 0 <= downtime_min <= 60
+        downtime_min = parse_cell_int(row.get("downtime_min"))
+        if downtime_min is None or downtime_min < 0 or downtime_min > 60:
+            row_errors.append(f"downtime_min must be between 0 and 60, got {downtime_min}")
+            errors.append(
+                RowValidationError(
+                    row_number=idx,
+                    column="downtime_min",
+                    error_type="RANGE_VIOLATION",
+                    message="downtime_min must be in range [0, 60]",
+                    value=str(row.get("downtime_min")),
+                )
+            )
+
+        shift_id = str(row.get("shift_id", "")).strip()
+        production_order_id = str(row.get("production_order_id", "")).strip()
+        downtime_reason = str(row.get("downtime_reason", "NONE")).strip() or "NONE"
+        operator_team = str(row.get("operator_team", "")).strip()
+        source_system = str(row.get("source_system", "MES")).strip() or "MES"
+        data_quality = str(row.get("data_quality", "VALID")).strip() or "VALID"
+
+        # 8. Business Key & Duplicate Verification: (event_ts, plant_id, line_id)
+        b_key = None
+        if event_ts and plant_id and line_id:
+            b_key = (event_ts, plant_id, line_id)
+            if b_key in seen_file_keys:
+                is_duplicate = True
+                row_errors.append("Duplicate production event key in uploaded file")
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column="business_key",
+                        error_type="DUPLICATE_IN_FILE",
+                        message=f"Duplicate entry for plant '{plant_id}', line '{line_id}' at timestamp '{event_ts.isoformat()}'",
+                    )
+                )
+            else:
+                seen_file_keys.add(b_key)
+
+            if b_key in existing_db_keys:
+                if mode == "OVERWRITE_CORRECTION":
+                    duplicate_count += 1
+                else:
+                    is_duplicate = True
+                    row_errors.append("Record already exists in Neon database")
+                    errors.append(
+                        RowValidationError(
+                            row_number=idx,
+                            column="business_key",
+                            error_type="DUPLICATE_IN_DATABASE",
+                            message=f"Existing record in database for plant '{plant_id}', line '{line_id}', timestamp '{event_ts.isoformat()}'",
+                        )
+                    )
+
+        # Status determination
+        if row_errors:
+            if is_duplicate and len(row_errors) == 1:
+                status = "DUPLICATE"
+                duplicate_count += 1
+            else:
+                status = "REJECTED"
+                rejected_count += 1
+        else:
+            status = "VALID"
+            event_id = str(row.get("event_id", "")).strip()
+            if not event_id:
+                event_id = f"PRD-{uuid.uuid4().hex[:12].upper()}"
+
+            valid_records.append(
+                {
+                    "event_id": event_id,
+                    "event_ts": event_ts,
+                    "event_date": event_date,
+                    "year": year,
+                    "month": month,
+                    "week": week,
+                    "day": day,
+                    "hour": hour,
+                    "plant_id": plant_id,
+                    "line_id": line_id,
+                    "shift_id": shift_id,
+                    "product_id": product_id,
+                    "production_order_id": production_order_id,
+                    "target_qty": target_qty,
+                    "actual_qty": actual_qty,
+                    "good_qty": good_qty,
+                    "reject_qty": reject_qty,
+                    "rework_qty": rework_qty,
+                    "downtime_min": downtime_min,
+                    "downtime_reason": downtime_reason,
+                    "operator_team": operator_team,
+                    "source_system": source_system,
+                    "data_quality": data_quality,
+                }
+            )
+
+        # Preview generation (first 15 rows)
+        if len(preview) < 15:
+            preview.append(
+                PreviewRow(
+                    row_number=idx,
+                    status=status,
+                    data={
+                        "event_ts": str(event_ts) if event_ts else str(row.get("event_ts")),
+                        "event_date": str(event_date) if event_date else str(row.get("event_date")),
+                        "plant_id": plant_id,
+                        "line_id": line_id,
+                        "product_id": product_id,
+                        "shift_id": shift_id,
+                        "target_qty": str(target_qty) if target_qty is not None else str(row.get("target_qty")),
+                        "actual_qty": str(actual_qty) if actual_qty is not None else str(row.get("actual_qty")),
+                        "good_qty": str(good_qty) if good_qty is not None else str(row.get("good_qty")),
+                        "downtime_min": str(downtime_min) if downtime_min is not None else str(row.get("downtime_min")),
+                    },
+                    errors=row_errors,
+                )
+            )
+
+    total_rows = len(rows)
+    valid_rows = len(valid_records)
+
+    summary = ValidationSummary(
+        report_type="PRODUCTION",
+        total_rows=total_rows,
+        valid_rows=valid_rows,
+        rejected_rows=rejected_count,
+        duplicate_rows=duplicate_count,
+        detected_date=confirmed_date,
+        confirmed_date=confirmed_date,
+        plants_found=sorted(list(plants_found)),
+        lines_found=sorted(list(lines_found)),
+        is_ready_for_ingest=(valid_rows > 0),
+    )
+
+    return valid_records, errors, preview, summary
+
+
+def get_existing_energy_keys(
+    session: Session, target_date: Optional[date]
+) -> Set[Tuple[datetime, str, str]]:
+    """Query existing business keys for fact_energy_meter_hourly on given date."""
+    if not target_date:
+        return set()
+    query = select(
+        FactEnergyMeterHourly.timestamp,
+        FactEnergyMeterHourly.plant_id,
+        FactEnergyMeterHourly.meter_id,
+    ).where(FactEnergyMeterHourly.date == target_date)
+    res = session.execute(query).all()
+    return set(res)
+
+
+def get_existing_production_keys(
+    session: Session, target_date: Optional[date]
+) -> Set[Tuple[datetime, str, str]]:
+    """Query existing business keys for fact_hourly_production on given date."""
+    if not target_date:
+        return set()
+    query = select(
+        FactHourlyProduction.event_ts,
+        FactHourlyProduction.plant_id,
+        FactHourlyProduction.line_id,
+    ).where(FactHourlyProduction.event_date == target_date)
+    res = session.execute(query).all()
+    return set(res)
+
+
+def validate_report_file(
+    session: Session,
+    filename: str,
+    file_bytes: bytes,
+    report_type: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+    confirmed_date: Optional[date] = None,
+    mode: str = "INCREMENTAL",
+) -> Dict[str, Any]:
+    """Inspect, parse, and validate an energy or production daily report."""
+    inspect_meta = inspect_file(filename, file_bytes)
+    file_format = inspect_meta.file_format
+
+    headers, rows = parse_raw_sheet_rows(file_bytes, file_format, sheet_name=sheet_name)
+    if not rows:
+        raise ValueError("Uploaded file contains no data rows.")
+
+    # Determine report type if not explicitly passed
+    resolved_type = report_type
+    if not resolved_type or resolved_type == "AUTO":
+        resolved_type = classify_columns(headers)
+        if resolved_type == "UNKNOWN":
+            raise ValueError(
+                "Unable to identify report type from column headers. Expected energy or production columns."
+            )
+
+    # Detect dates present in rows
+    detected_dates = detect_reporting_dates_from_rows(rows, resolved_type)
+    effective_date = confirmed_date
+    if not effective_date and detected_dates:
+        # Use first or predominant detected date
+        effective_date = detected_dates[0]
+
+    # Check header schema integrity: missing columns, unknown columns, and measurement units
+    missing_required, unknown_cols, unsupported_units = check_header_schema(headers, resolved_type)
+    header_errors: List[RowValidationError] = []
+    for m in missing_required:
+        header_errors.append(
+            RowValidationError(
+                row_number=0,
+                column=m,
+                error_type="MISSING_REQUIRED_COLUMN",
+                message=f"Approved source schema requires column '{m}', but it is missing from the file.",
+            )
+        )
+    for u in unknown_cols:
+        header_errors.append(
+            RowValidationError(
+                row_number=0,
+                column=u,
+                error_type="UNKNOWN_COLUMN",
+                message=f"Unknown column '{u}' not recognized in approved source schema. Automatic mapping is disabled.",
+            )
+        )
+    for un in unsupported_units:
+        header_errors.append(
+            RowValidationError(
+                row_number=0,
+                column="units",
+                error_type="UNSUPPORTED_UNIT",
+                message=un,
+            )
+        )
+
+    master_cache = MasterDataCache(session)
+
+    if resolved_type == "ENERGY":
+        existing_keys = get_existing_energy_keys(session, effective_date)
+        valid_records, row_errors, preview, summary = validate_energy_rows(
+            rows, effective_date, master_cache, existing_keys, mode=mode
+        )
+    elif resolved_type == "PRODUCTION":
+        existing_keys = get_existing_production_keys(session, effective_date)
+        valid_records, row_errors, preview, summary = validate_production_rows(
+            rows, effective_date, master_cache, existing_keys, mode=mode
+        )
+    else:
+        raise ValueError(f"Report type '{resolved_type}' is not supported for single-sheet validation.")
+
+    all_errors = header_errors + row_errors
+
+    # If critical schema errors (missing required columns or unknown columns), invalidate all records
+    if missing_required or unknown_cols or unsupported_units:
+        valid_records = []
+        summary.valid_rows = 0
+        summary.rejected_rows = len(rows)
+        summary.is_ready_for_ingest = False
+
+    return {
+        "filename": filename,
+        "file_format": file_format,
+        "sheet_name": sheet_name,
+        "sheet_names": inspect_meta.sheet_names,
+        "detected_dates": [d.isoformat() for d in detected_dates],
+        "confirmed_date": effective_date.isoformat() if effective_date else None,
+        "summary": summary,
+        "errors": all_errors[:200],  # Return up to 200 specific validation issues
+        "preview": preview,
+        "valid_records": valid_records,
+    }
+
+
+def ingest_validated_report(
+    session: Session,
+    filename: str,
+    file_bytes: bytes,
+    report_type: str,
+    reporting_date: date,
+    mode: str = "INCREMENTAL",
+    sheet_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Ingest approved daily report into fact tables transactionally and update audit log.
+    Supports INCREMENTAL (skip existing duplicates) and OVERWRITE_CORRECTION (replace existing for date).
+    """
+    if mode not in {"INCREMENTAL", "OVERWRITE_CORRECTION"}:
+        raise ValueError(f"Invalid ingestion mode: '{mode}'. Must be INCREMENTAL or OVERWRITE_CORRECTION.")
+
+    # Re-validate with confirmed date and mode to ensure zero bypass
+    val_result = validate_report_file(
+        session=session,
+        filename=filename,
+        file_bytes=file_bytes,
+        report_type=report_type,
+        sheet_name=sheet_name,
+        confirmed_date=reporting_date,
+        mode=mode,
+    )
+
+    valid_records = val_result["valid_records"]
+    summary: ValidationSummary = val_result["summary"]
+
+    if not valid_records:
+        raise ValueError("Cannot ingest report: 0 valid records found to import.")
+
+    upload_id = f"UPL-{reporting_date.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+    file_format = val_result["file_format"]
+    imported_count = 0
+    overwritten_count = 0
+
+    try:
+        # Atomic database transaction with isolated scope deletion for historical corrections
+        if report_type == "ENERGY":
+            if mode == "OVERWRITE_CORRECTION":
+                affected_plants = {r["plant_id"] for r in valid_records}
+                affected_meters = {r["meter_id"] for r in valid_records}
+                del_stmt = delete(FactEnergyMeterHourly).where(
+                    FactEnergyMeterHourly.date == reporting_date,
+                    FactEnergyMeterHourly.plant_id.in_(affected_plants),
+                    FactEnergyMeterHourly.meter_id.in_(affected_meters),
+                )
+                del_res = session.execute(del_stmt)
+                overwritten_count = del_res.rowcount or 0
+
+            # Bulk insert valid mappings
+            session.bulk_insert_mappings(FactEnergyMeterHourly, valid_records)
+            imported_count = len(valid_records)
+
+        elif report_type == "PRODUCTION":
+            if mode == "OVERWRITE_CORRECTION":
+                affected_plants = {r["plant_id"] for r in valid_records}
+                affected_lines = {r["line_id"] for r in valid_records}
+                del_stmt = delete(FactHourlyProduction).where(
+                    FactHourlyProduction.event_date == reporting_date,
+                    FactHourlyProduction.plant_id.in_(affected_plants),
+                    FactHourlyProduction.line_id.in_(affected_lines),
+                )
+                del_res = session.execute(del_stmt)
+                overwritten_count = del_res.rowcount or 0
+
+            session.bulk_insert_mappings(FactHourlyProduction, valid_records)
+            imported_count = len(valid_records)
+
+        status = "COMPLETED"
+        if summary.rejected_rows > 0:
+            status = "PARTIAL"
+
+        # Audit details
+        audit_details = json.dumps(
+            {
+                "imported_records": imported_count,
+                "overwritten_records": overwritten_count,
+                "plants_affected": summary.plants_found,
+                "meters_affected": summary.meters_found,
+                "lines_affected": summary.lines_found,
+                "rejected_count": summary.rejected_rows,
+                "duplicate_count": summary.duplicate_rows,
+                "mode": mode,
+            }
+        )
+
+        # Record upload history audit entry
+        history_entry = UploadHistory(
+            upload_id=upload_id,
+            uploaded_at=datetime.utcnow(),
+            report_type=report_type,
+            filename=os.path.basename(filename),
+            file_format=file_format,
+            sheet_name=sheet_name,
+            reporting_date=reporting_date,
+            file_size_bytes=len(file_bytes),
+            total_rows=summary.total_rows,
+            valid_rows=imported_count,
+            rejected_rows=summary.rejected_rows,
+            duplicate_rows=summary.duplicate_rows,
+            status=status,
+            mode=mode,
+            audit_details=audit_details,
+        )
+        session.add(history_entry)
+        session.commit()
+
+        message = (
+            f"Successfully ingested {imported_count} records into {report_type.lower()} facts "
+            f"for reporting date {reporting_date.isoformat()} (mode: {mode})."
+        )
+        if overwritten_count > 0:
+            message += f" Historical correction replaced {overwritten_count} previous records for matching plant/meter scopes."
+
+        return {
+            "upload_id": upload_id,
+            "status": status,
+            "report_type": report_type,
+            "reporting_date": reporting_date,
+            "total_rows": summary.total_rows,
+            "imported_rows": imported_count,
+            "duplicate_rows": summary.duplicate_rows,
+            "rejected_rows": summary.rejected_rows,
+            "mode": mode,
+            "message": message,
+        }
+
+    except Exception as exc:
+        session.rollback()
+        # Record failure entry in history if possible
+        try:
+            fail_entry = UploadHistory(
+                upload_id=upload_id,
+                uploaded_at=datetime.utcnow(),
+                report_type=report_type,
+                filename=os.path.basename(filename),
+                file_format=file_format,
+                sheet_name=sheet_name,
+                reporting_date=reporting_date,
+                file_size_bytes=len(file_bytes),
+                total_rows=summary.total_rows if 'summary' in locals() else 0,
+                valid_rows=0,
+                rejected_rows=summary.total_rows if 'summary' in locals() else 0,
+                duplicate_rows=0,
+                status="FAILED",
+                mode=mode,
+                audit_details=json.dumps({"error": str(exc)}),
+            )
+            session.add(fail_entry)
+            session.commit()
+        except Exception:
+            session.rollback()
+
+        raise RuntimeError(f"Database ingestion failed transactionally: {str(exc)}")
+
+
+def generate_template_csv(report_type: str) -> str:
+    """Generate sample CSV template with approved headers and reference rows."""
+    out = io.StringIO()
+    writer = csv.writer(out)
+
+    if report_type.upper() == "ENERGY":
+        headers = [
+            "meter_reading_id",
+            "timestamp",
+            "date",
+            "plant_id",
+            "meter_id",
+            "area",
+            "energy_source",
+            "consumption_kwh",
+            "demand_kw",
+            "power_factor",
+            "tariff_inr_per_kwh",
+            "cost_inr",
+            "co2e_kg",
+            "reading_quality",
+        ]
+        sample = [
+            "EN-20261112-0001",
+            "2026-11-12T00:00:00",
+            "2026-11-12",
+            "IN-TN-01",
+            "MTR-SMT",
+            "SMT",
+            "ELECTRICITY",
+            "120.500",
+            "110.200",
+            "0.965",
+            "8.25",
+            "994.13",
+            "86.278",
+            "VALID",
+        ]
+        writer.writerow(headers)
+        writer.writerow(sample)
+
+    elif report_type.upper() == "PRODUCTION":
+        headers = [
+            "event_id",
+            "event_ts",
+            "event_date",
+            "year",
+            "month",
+            "week",
+            "day",
+            "hour",
+            "plant_id",
+            "line_id",
+            "shift_id",
+            "product_id",
+            "production_order_id",
+            "target_qty",
+            "actual_qty",
+            "good_qty",
+            "reject_qty",
+            "rework_qty",
+            "downtime_min",
+            "downtime_reason",
+            "operator_team",
+            "source_system",
+            "data_quality",
+        ]
+        sample = [
+            "PRD-20261112-0001",
+            "2026-11-12T00:00:00",
+            "2026-11-12",
+            "2026",
+            "11",
+            "46",
+            "12",
+            "0",
+            "IN-TN-01",
+            "SMT-L1",
+            "A",
+            "SPH-A15-128",
+            "PO-000999",
+            "390",
+            "375",
+            "370",
+            "5",
+            "2",
+            "0",
+            "NONE",
+            "TEAM-01",
+            "MES",
+            "VALID",
+        ]
+        writer.writerow(headers)
+        writer.writerow(sample)
+
+    return out.getvalue()

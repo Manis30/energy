@@ -29,7 +29,7 @@ function CustomProductTooltip({ active, payload }) {
           <span className="tooltip-val text-success">{formatNumber(data.good_qty)} units</span>
         </div>
         <div className="tooltip-row">
-          <span className="tooltip-label">Defects / Scrap:</span>
+          <span className="tooltip-label">Rejected Units:</span>
           <span className="tooltip-val text-danger">{formatNumber(data.reject_qty)} ({formatPercent(data.reject_rate)})</span>
         </div>
         <div className="tooltip-row">
@@ -57,7 +57,7 @@ function CustomShiftTooltip({ active, payload }) {
           <span className="tooltip-val text-success">{formatNumber(data.good_qty)} units</span>
         </div>
         <div className="tooltip-row">
-          <span className="tooltip-label">Defects / Scrap:</span>
+          <span className="tooltip-label">Rejected Units:</span>
           <span className="tooltip-val text-danger">{formatNumber(data.reject_qty)} ({formatPercent(data.reject_rate)})</span>
         </div>
         <div className="tooltip-row">
@@ -70,7 +70,12 @@ function CustomShiftTooltip({ active, payload }) {
   return null;
 }
 
-export default function ProductionByProductAndShift({ byProduct = [], byShift = [] }) {
+export default function ProductionByProductAndShift({
+  byProduct = [],
+  byShift = [],
+  productDataAvailable = true,
+  shiftDataAvailable = true,
+}) {
   const productData = (byProduct || []).map((p) => ({
     ...p,
     displayName: p.product_name || p.product_id,
@@ -87,12 +92,16 @@ export default function ProductionByProductAndShift({ byProduct = [], byShift = 
         <div>
           <h3 className="section-title">Production Distribution by Product SKU & Operating Shift</h3>
           <p className="section-desc">
-            Product mix volume analysis across Aster smartphone variants and operating shift performance.
+            Returned actual and good quantities grouped by product and shift; these groupings do not establish comparative quality or efficiency.
           </p>
         </div>
         <div className="section-tag-group">
-          <span className="section-tag info">3 Product SKUs</span>
-          <span className="section-tag process">3 Operating Shifts (A, B, C)</span>
+          <span className="section-tag info">
+            {productDataAvailable ? `${byProduct.length} returned product record(s)` : 'Product data unavailable'}
+          </span>
+          <span className="section-tag process">
+            {shiftDataAvailable ? `${byShift.length} returned shift record(s)` : 'Shift data unavailable'}
+          </span>
         </div>
       </div>
 
@@ -116,8 +125,16 @@ export default function ProductionByProductAndShift({ byProduct = [], byShift = 
             </div>
           </div>
 
-          <div className="chart-wrapper">
-            <ResponsiveContainer width="100%" height={260}>
+          <div
+            className="chart-wrapper"
+            role="group"
+            aria-label="Production bar chart comparing actual and good output by product, in returned product units"
+          >
+            {!productDataAvailable || productData.length === 0 ? (
+              <div className="chart-empty-state">
+                {!productDataAvailable ? 'Production-by-product data is unavailable.' : 'No product records were returned.'}
+              </div>
+            ) : <ResponsiveContainer width="100%" height={260}>
               <BarChart data={productData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
                 <XAxis
@@ -136,20 +153,22 @@ export default function ProductionByProductAndShift({ byProduct = [], byShift = 
                 <Bar dataKey="actual_qty" fill="var(--brand-purple)" radius={[3, 3, 0, 0]} name="Actual" />
                 <Bar dataKey="good_qty" fill="var(--chart-cat-4)" radius={[3, 3, 0, 0]} name="Good" />
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer>}
           </div>
 
           {/* Product Mini List */}
           <div className="sku-summary-list">
-            {productData.map((prod) => (
+            {!productDataAvailable || productData.length === 0
+              ? <div className="chart-empty-state">{productDataAvailable ? 'No product records returned.' : 'Product data unavailable.'}</div>
+              : productData.map((prod) => (
               <div key={prod.product_id} className="sku-summary-item">
                 <div className="sku-item-left">
-                  <span className="sku-name">{prod.product_name}</span>
+                  <span className="sku-name">{prod.displayName}</span>
                   <span className="sku-id">{prod.product_id} • {prod.product_family}</span>
                 </div>
                 <div className="sku-item-right">
                   <span className="sku-actual">{formatNumber(prod.actual_qty)} units</span>
-                  <span className="sku-scrap">Scrap: {formatPercent(prod.reject_rate)}</span>
+                  <span className="sku-scrap">Reject rate: {formatPercent(prod.reject_rate)}</span>
                 </div>
               </div>
             ))}
@@ -175,8 +194,16 @@ export default function ProductionByProductAndShift({ byProduct = [], byShift = 
             </div>
           </div>
 
-          <div className="chart-wrapper">
-            <ResponsiveContainer width="100%" height={260}>
+          <div
+            className="chart-wrapper"
+            role="group"
+            aria-label="Production bar chart comparing actual and good output by shift, in returned production units"
+          >
+            {!shiftDataAvailable || shiftData.length === 0 ? (
+              <div className="chart-empty-state">
+                {!shiftDataAvailable ? 'Production-by-shift data is unavailable.' : 'No shift records were returned.'}
+              </div>
+            ) : <ResponsiveContainer width="100%" height={260}>
               <BarChart data={shiftData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
                 <XAxis
@@ -195,12 +222,14 @@ export default function ProductionByProductAndShift({ byProduct = [], byShift = 
                 <Bar dataKey="actual_qty" fill="var(--brand-blue)" radius={[3, 3, 0, 0]} name="Actual" />
                 <Bar dataKey="good_qty" fill="var(--chart-cat-4)" radius={[3, 3, 0, 0]} name="Good" />
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer>}
           </div>
 
           {/* Shift Mini List */}
           <div className="sku-summary-list">
-            {shiftData.map((shift) => (
+            {!shiftDataAvailable || shiftData.length === 0
+              ? <div className="chart-empty-state">{shiftDataAvailable ? 'No shift records returned.' : 'Shift data unavailable.'}</div>
+              : shiftData.map((shift) => (
               <div key={shift.shift_id} className="sku-summary-item">
                 <div className="sku-item-left">
                   <span className="sku-name">{shift.displayShift}</span>

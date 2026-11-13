@@ -23,6 +23,7 @@ export default function ProductionAnalytics() {
   const [byProduct, setByProduct] = useState([]);
   const [byShift, setByShift] = useState([]);
   const [downtimeByReason, setDowntimeByReason] = useState([]);
+  const [unavailableFeeds, setUnavailableFeeds] = useState([]);
 
   const loadProductionData = useCallback(async (isRefresh = false) => {
     if (isRefresh) {
@@ -45,13 +46,22 @@ export default function ProductionAnalytics() {
       ]);
 
       const [summaryRes, trendRes, lineRes, productRes, shiftRes, downtimeRes] = results;
+      const feedNames = [
+        'Production summary',
+        'Daily production trend',
+        'Production by line',
+        'Production by product',
+        'Production by shift',
+        'Downtime by reason',
+      ];
+      setUnavailableFeeds(feedNames.filter((_, index) => results[index].status === 'rejected'));
 
-      if (summaryRes.status === 'fulfilled') setProductionSummary(summaryRes.value);
-      if (trendRes.status === 'fulfilled') setDailyTrend(trendRes.value);
-      if (lineRes.status === 'fulfilled') setByLine(lineRes.value);
-      if (productRes.status === 'fulfilled') setByProduct(productRes.value);
-      if (shiftRes.status === 'fulfilled') setByShift(shiftRes.value);
-      if (downtimeRes.status === 'fulfilled') setDowntimeByReason(downtimeRes.value);
+      setProductionSummary(summaryRes.status === 'fulfilled' ? summaryRes.value : null);
+      setDailyTrend(trendRes.status === 'fulfilled' ? trendRes.value || [] : []);
+      setByLine(lineRes.status === 'fulfilled' ? lineRes.value || [] : []);
+      setByProduct(productRes.status === 'fulfilled' ? productRes.value || [] : []);
+      setByShift(shiftRes.status === 'fulfilled' ? shiftRes.value || [] : []);
+      setDowntimeByReason(downtimeRes.status === 'fulfilled' ? downtimeRes.value || [] : []);
 
       // If summary failed, flag error
       if (summaryRes.status === 'rejected') {
@@ -76,10 +86,14 @@ export default function ProductionAnalytics() {
     loadProductionData(true);
   };
 
-  // Derive source date range
-  const dateRange = dailyTrend.length > 0 ? {
-    start_date: dailyTrend[0].date,
-    end_date: dailyTrend[dailyTrend.length - 1].date,
+  // Derive the range from dates actually returned, independent of response ordering.
+  const trendDates = dailyTrend
+    .map((item) => item?.date)
+    .filter((date) => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date))
+    .sort();
+  const dateRange = trendDates.length > 0 ? {
+    start_date: trendDates[0],
+    end_date: trendDates[trendDates.length - 1],
   } : null;
 
   return (
@@ -94,13 +108,13 @@ export default function ProductionAnalytics() {
       />
 
       {loading ? (
-        <div className="dashboard-loading-state">
+        <div className="dashboard-loading-state" role="status" aria-live="polite" aria-busy="true">
           <div className="loading-spinner"></div>
           <div className="loading-title">Retrieving Production Telemetry & Quality Records...</div>
-          <div className="loading-subtitle">Querying verified records from Neon PostgreSQL database</div>
+          <div className="loading-subtitle">Loading production summary, trend, line, product, shift, and downtime data</div>
         </div>
       ) : error ? (
-        <div className="dashboard-error-state">
+        <div className="dashboard-error-state" role="alert">
           <div className="error-icon">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10"/>
@@ -116,6 +130,17 @@ export default function ProductionAnalytics() {
         </div>
       ) : (
         <div className="dashboard-content-flow">
+          {unavailableFeeds.length > 0 && (
+            <div className="data-integrity-notice-box" role="status">
+              <div className="integrity-content">
+                <div className="integrity-title">Some production data is unavailable</div>
+                <p className="integrity-text">
+                  Requests not returned: {unavailableFeeds.join(', ')}. These sections cannot be interpreted as zero production or zero downtime.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Section 1: 6 Supported KPI Cards */}
           <ProductionKpis
             summary={productionSummary}
@@ -124,6 +149,7 @@ export default function ProductionAnalytics() {
           {/* Section 2: Daily Production & Defect Trend */}
           <ProductionTrendChart
             dailyTrend={dailyTrend}
+            dataAvailable={!unavailableFeeds.includes('Daily production trend')}
           />
 
           {/* Section 3: Production Quality & Mathematical Quantity Balance */}
@@ -134,18 +160,22 @@ export default function ProductionAnalytics() {
           {/* Section 4: Production Output by Manufacturing Line */}
           <ProductionByLine
             byLine={byLine}
+            dataAvailable={!unavailableFeeds.includes('Production by line')}
           />
 
           {/* Section 5: Output by Product SKU & Operating Shift */}
           <ProductionByProductAndShift
             byProduct={byProduct}
             byShift={byShift}
+            productDataAvailable={!unavailableFeeds.includes('Production by product')}
+            shiftDataAvailable={!unavailableFeeds.includes('Production by shift')}
           />
 
           {/* Section 6: Downtime & Stoppage Analysis */}
           <ProductionDowntimeSection
             downtimeData={downtimeByReason}
-            totalDowntimeMin={productionSummary?.downtime_min || 60290}
+            totalDowntimeMin={productionSummary?.downtime_min ?? null}
+            dataAvailable={!unavailableFeeds.includes('Downtime by reason')}
           />
         </div>
       )}

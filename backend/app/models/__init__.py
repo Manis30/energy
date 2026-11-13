@@ -6,10 +6,12 @@ from app.models.source_data import (
     FactEnergyMeterHourly,
     FactHourlyProduction,
 )
+from app.models.upload_history import UploadHistory
 
 __all__ = [
     "DimProduct",
     "DimProductionLine",
     "FactEnergyMeterHourly",
     "FactHourlyProduction",
+    "UploadHistory",
 ]

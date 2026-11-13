@@ -34,6 +34,7 @@ export default function Dashboard() {
   const [factoryEnergy, setFactoryEnergy] = useState(null);
 
   const [anomaliesData, setAnomaliesData] = useState(null);
+  const [unavailableFeeds, setUnavailableFeeds] = useState([]);
 
   const loadDashboardData = useCallback(async (isRefresh = false) => {
     if (isRefresh) {
@@ -71,21 +72,30 @@ export default function Dashboard() {
         secFactoryRes,
         anomRes,
       ] = results;
+      const feedNames = [
+        'Energy summary',
+        'Energy trend',
+        'Energy by meter',
+        'Energy by area',
+        'Production summary',
+        'Production trend',
+        'Production by line',
+        'Process energy intensity',
+        'Factory energy intensity',
+        'Anomaly analysis',
+      ];
+      setUnavailableFeeds(feedNames.filter((_, index) => results[index].status === 'rejected'));
 
-      // Extract results safely
-      if (eSummaryRes.status === 'fulfilled') setEnergySummary(eSummaryRes.value);
-      if (eTrendRes.status === 'fulfilled') setEnergyDailyTrend(eTrendRes.value);
-      if (eMeterRes.status === 'fulfilled') setEnergyByMeter(eMeterRes.value);
-      if (eAreaRes.status === 'fulfilled') setEnergyByArea(eAreaRes.value);
-
-      if (pSummaryRes.status === 'fulfilled') setProductionSummary(pSummaryRes.value);
-      if (pTrendRes.status === 'fulfilled') setProductionDailyTrend(pTrendRes.value);
-      if (pLineRes.status === 'fulfilled') setProductionByLine(pLineRes.value);
-
-      if (secProcessRes.status === 'fulfilled') setProcessEnergy(secProcessRes.value);
-      if (secFactoryRes.status === 'fulfilled') setFactoryEnergy(secFactoryRes.value);
-
-      if (anomRes.status === 'fulfilled') setAnomaliesData(anomRes.value);
+      setEnergySummary(eSummaryRes.status === 'fulfilled' ? eSummaryRes.value : null);
+      setEnergyDailyTrend(eTrendRes.status === 'fulfilled' ? eTrendRes.value || [] : []);
+      setEnergyByMeter(eMeterRes.status === 'fulfilled' ? eMeterRes.value || [] : []);
+      setEnergyByArea(eAreaRes.status === 'fulfilled' ? eAreaRes.value || [] : []);
+      setProductionSummary(pSummaryRes.status === 'fulfilled' ? pSummaryRes.value : null);
+      setProductionDailyTrend(pTrendRes.status === 'fulfilled' ? pTrendRes.value || [] : []);
+      setProductionByLine(pLineRes.status === 'fulfilled' ? pLineRes.value || [] : []);
+      setProcessEnergy(secProcessRes.status === 'fulfilled' ? secProcessRes.value : null);
+      setFactoryEnergy(secFactoryRes.status === 'fulfilled' ? secFactoryRes.value : null);
+      setAnomaliesData(anomRes.status === 'fulfilled' ? anomRes.value : null);
 
       // Check if primary endpoints failed completely
       const primaryFailed = eSummaryRes.status === 'rejected' && pSummaryRes.status === 'rejected';
@@ -111,10 +121,17 @@ export default function Dashboard() {
     loadDashboardData(true);
   };
 
-  // Derive source date range from energy or production trend
-  const dateRange = energyDailyTrend.length > 0 ? {
-    start_date: energyDailyTrend[0].date,
-    end_date: energyDailyTrend[energyDailyTrend.length - 1].date,
+  // Derive the date range from dates actually returned, independent of response ordering.
+  const validDates = (trend) => (trend || [])
+    .map((item) => item?.date)
+    .filter((date) => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date))
+    .sort();
+  const energyDates = validDates(energyDailyTrend);
+  const productionDates = validDates(productionDailyTrend);
+  const dateCoverage = energyDates.length > 0 ? energyDates : productionDates;
+  const dateRange = dateCoverage.length > 0 ? {
+    start_date: dateCoverage[0],
+    end_date: dateCoverage[dateCoverage.length - 1],
   } : null;
 
   return (
@@ -129,13 +146,13 @@ export default function Dashboard() {
       />
 
       {loading ? (
-        <div className="dashboard-loading-state">
+        <div className="dashboard-loading-state" role="status" aria-live="polite" aria-busy="true">
           <div className="loading-spinner"></div>
           <div className="loading-title">Retrieving Factory Telemetry & Analytics...</div>
-          <div className="loading-subtitle">Querying verified records from Neon PostgreSQL database</div>
+          <div className="loading-subtitle">Loading energy, production, intensity, and anomaly analytics</div>
         </div>
       ) : error ? (
-        <div className="dashboard-error-state">
+        <div className="dashboard-error-state" role="alert">
           <div className="error-icon">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10"/>
@@ -151,16 +168,31 @@ export default function Dashboard() {
         </div>
       ) : (
         <div className="dashboard-content-flow">
+          {unavailableFeeds.length > 0 && (
+            <div className="data-integrity-notice-box" role="status">
+              <div className="integrity-content">
+                <div className="integrity-title">Some Dashboard data is unavailable</div>
+                <p className="integrity-text">
+                  Requests not returned: {unavailableFeeds.join(', ')}. These sections are unavailable, not zero; returned values may cover only part of the Dashboard.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Section 1: KPI Overview */}
           <KpiOverview
             energySummary={energySummary}
             productionSummary={productionSummary}
+            energyAvailable={!unavailableFeeds.includes('Energy summary')}
+            productionAvailable={!unavailableFeeds.includes('Production summary')}
           />
 
           {/* Section 2: Specific Energy Consumption & Intensity */}
           <EnergyEfficiencySection
             processEnergy={processEnergy}
             factoryEnergy={factoryEnergy}
+            processAvailable={!unavailableFeeds.includes('Process energy intensity')}
+            factoryAvailable={!unavailableFeeds.includes('Factory energy intensity')}
           />
 
           {/* Section 3: Energy Consumption Analytics */}
@@ -168,6 +200,9 @@ export default function Dashboard() {
             dailyTrend={energyDailyTrend}
             byMeter={energyByMeter}
             byArea={energyByArea}
+            trendAvailable={!unavailableFeeds.includes('Energy trend')}
+            meterAvailable={!unavailableFeeds.includes('Energy by meter')}
+            areaAvailable={!unavailableFeeds.includes('Energy by area')}
           />
 
           {/* Section 4: Production Analytics */}
@@ -175,11 +210,15 @@ export default function Dashboard() {
             dailyTrend={productionDailyTrend}
             byLine={productionByLine}
             productionSummary={productionSummary}
+            trendAvailable={!unavailableFeeds.includes('Production trend')}
+            lineAvailable={!unavailableFeeds.includes('Production by line')}
+            summaryAvailable={!unavailableFeeds.includes('Production summary')}
           />
 
           {/* Section 5: Automated Anomaly Detection */}
           <AnomalySection
             anomaliesData={anomaliesData}
+            dataAvailable={!unavailableFeeds.includes('Anomaly analysis')}
           />
         </div>
       )}

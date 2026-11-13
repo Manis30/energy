@@ -2,12 +2,14 @@
 
 from app.api.anomalies import router as anomalies_router
 from app.api.assistant import router as assistant_router
+from app.api.daily_reports import router as daily_reports_router
 from app.api.energy import router as energy_router
 from app.api.energy_intensity import router as energy_intensity_router
 from app.api.production import router as production_router
 
 __all__ = [
     "assistant_router",
+    "daily_reports_router",
     "energy_router",
     "production_router",
     "energy_intensity_router",

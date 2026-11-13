@@ -182,6 +182,42 @@ class TestSQLSecurity(unittest.TestCase):
         with self.assertRaises(SQLValidationError):
             validate_sql("SELECT set_config('test', 'val', false)")
 
+    def test_reject_information_disclosure_functions(self):
+        """Reject PostgreSQL environment and information disclosure functions."""
+        disclosure_queries = [
+            "SELECT version() FROM fact_energy_meter_hourly",
+            "SELECT current_user FROM fact_energy_meter_hourly",
+            "SELECT current_database() FROM fact_energy_meter_hourly",
+            "SELECT inet_server_addr() FROM fact_energy_meter_hourly",
+            "SELECT txid_current() FROM fact_energy_meter_hourly",
+            "SELECT pg_backend_pid() FROM fact_energy_meter_hourly",
+            "SELECT session_user FROM fact_energy_meter_hourly",
+            "SELECT user FROM fact_energy_meter_hourly",
+            "SELECT current_setting('server_version') FROM fact_energy_meter_hourly",
+        ]
+        for query in disclosure_queries:
+            with self.subTest(query=query):
+                with self.assertRaises(SQLValidationError) as ctx:
+                    validate_sql(query)
+                err_msg = str(ctx.exception).lower()
+                self.assertTrue(
+                    "prohibited" in err_msg or "not in the approved" in err_msg,
+                    f"Expected security rejection for '{query}', got: {ctx.exception}",
+                )
+
+    def test_reject_unapproved_functions(self):
+        """Reject arbitrary functions outside the analytical allowlist."""
+        unapproved = [
+            "SELECT md5('secret') FROM fact_energy_meter_hourly",
+            "SELECT chr(65) FROM fact_energy_meter_hourly",
+            "SELECT encode('foo', 'hex') FROM fact_energy_meter_hourly",
+        ]
+        for query in unapproved:
+            with self.subTest(query=query):
+                with self.assertRaises(SQLValidationError) as ctx:
+                    validate_sql(query)
+                self.assertIn("not in the approved", str(ctx.exception).lower())
+
     # -----------------------------------------------------------------------
     # 3. SQL Validation — Approved Analytical Constructs
     # -----------------------------------------------------------------------

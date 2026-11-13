@@ -11,10 +11,32 @@ Manages multi-turn conversation context within a user interaction:
 - Excludes internal tool reasoning steps from external conversational history.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+
+
+def _sanitize_turn_content(content: str) -> str:
+    """Sanitize conversation text to prevent history-based prompt or tool injection."""
+    if not content:
+        return ""
+    sanitized = content
+    # Strip attempts to inject simulated tool output blocks or system notices
+    sanitized = re.sub(
+        r'\[TOOL_OUTPUT\].*?(\[\/TOOL_OUTPUT\]|$)',
+        '[prior tool output reference omitted]',
+        sanitized,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    sanitized = re.sub(
+        r'(SYSTEM CORRECTION NOTICE|EXECUTION LIMIT NOTICE|CRITICAL ERROR)',
+        '[system message reference omitted]',
+        sanitized,
+        flags=re.IGNORECASE,
+    )
+    return sanitized.strip()
 
 
 @dataclass
@@ -65,14 +87,17 @@ class ConversationContext:
         turns: List[ConversationTurn] = []
         for item in history:
             if isinstance(item, ConversationTurn):
-                turns.append(item)
+                clean_content = _sanitize_turn_content(item.content)
+                turns.append(ConversationTurn(role=item.role, content=clean_content))
             elif isinstance(item, BaseMessage):
-                turns.append(ConversationTurn.from_langchain_message(item))
+                turn = ConversationTurn.from_langchain_message(item)
+                turn.content = _sanitize_turn_content(turn.content)
+                turns.append(turn)
             elif isinstance(item, dict):
                 role = item.get("role", "user")
                 if role not in ("user", "assistant"):
                     role = "user"
-                content = str(item.get("content", ""))
+                content = _sanitize_turn_content(str(item.get("content", "")))
                 turns.append(ConversationTurn(role=role, content=content))
 
         # Enforce history limit by keeping the most recent turns
@@ -92,7 +117,7 @@ class ConversationContext:
 
         lines = []
         for turn in clean_turns:
-            speaker = "User" if turn.role == "user" else "Assistant"
+            speaker = "User" if turn.role == "user" else "Assistant (Historical dialogue context only)"
             lines.append(f"{speaker}: {turn.content.strip()}")
 
         return "\n".join(lines)

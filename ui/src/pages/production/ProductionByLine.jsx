@@ -29,7 +29,7 @@ function CustomLineTooltip({ active, payload }) {
           <span className="tooltip-val text-success">{formatNumber(data.good_qty)} units</span>
         </div>
         <div className="tooltip-row">
-          <span className="tooltip-label">Scrap Units:</span>
+          <span className="tooltip-label">Rejected Units:</span>
           <span className="tooltip-val text-danger">{formatNumber(data.reject_qty)} ({formatPercent(data.reject_rate)})</span>
         </div>
         <div className="tooltip-row">
@@ -46,7 +46,7 @@ function CustomLineTooltip({ active, payload }) {
   return null;
 }
 
-export default function ProductionByLine({ byLine = [] }) {
+export default function ProductionByLine({ byLine = [], dataAvailable = true }) {
   const chartData = (byLine || []).map((l) => ({
     ...l,
     actual_num: l.actual_qty,
@@ -60,12 +60,13 @@ export default function ProductionByLine({ byLine = [] }) {
         <div>
           <h3 className="section-title">Production Output by Manufacturing Line</h3>
           <p className="section-desc">
-            Direct output volume, quality yield, and downtime comparison across SMT and Final Assembly lines.
+            Returned line-level actual and good output, yield, and reported downtime. Compare like line types; units may represent different production stages.
           </p>
         </div>
         <div className="section-tag-group">
-          <span className="section-tag process">2 SMT Lines (PCB Assembly)</span>
-          <span className="section-tag info">2 FAL Lines (Final Phone Assembly)</span>
+          <span className="section-tag info">
+            {dataAvailable ? `${byLine.length} returned line record(s)` : 'Line data unavailable'}
+          </span>
         </div>
       </div>
 
@@ -89,8 +90,16 @@ export default function ProductionByLine({ byLine = [] }) {
             </div>
           </div>
 
-          <div className="chart-wrapper">
-            <ResponsiveContainer width="100%" height={280}>
+          <div
+            className="chart-wrapper"
+            role="group"
+            aria-label="Production bar chart comparing actual and good output in returned line units; the table below contains per-line values"
+          >
+            {!dataAvailable || chartData.length === 0 ? (
+              <div className="chart-empty-state">
+                {!dataAvailable ? 'Production-by-line data is unavailable.' : 'No production-by-line records were returned.'}
+              </div>
+            ) : <ResponsiveContainer width="100%" height={280}>
               <BarChart
                 data={chartData}
                 layout="vertical"
@@ -116,7 +125,7 @@ export default function ProductionByLine({ byLine = [] }) {
                 <Bar dataKey="actual_num" fill="var(--brand-navy)" radius={[0, 4, 4, 0]} name="Actual Units" />
                 <Bar dataKey="good_num" fill="var(--chart-cat-4)" radius={[0, 4, 4, 0]} name="Good Units" />
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer>}
           </div>
         </div>
 
@@ -124,7 +133,7 @@ export default function ProductionByLine({ byLine = [] }) {
         <div className="chart-card line-table-card">
           <div className="chart-card-header">
             <div>
-              <h4 className="chart-card-title">Production Line Performance Audit</h4>
+              <h4 className="chart-card-title">Production Line Details</h4>
               <span className="chart-card-subtitle">Line type, location, yield rate, and stoppage metrics</span>
             </div>
           </div>
@@ -143,7 +152,13 @@ export default function ProductionByLine({ byLine = [] }) {
                 </tr>
               </thead>
               <tbody>
-                {(byLine || []).map((line) => {
+                {!dataAvailable || byLine.length === 0 ? (
+                  <tr>
+                    <td colSpan="7">
+                      {!dataAvailable ? 'Production-by-line data unavailable' : 'No line records returned'}
+                    </td>
+                  </tr>
+                ) : (byLine || []).map((line) => {
                   const isSMT = line.line_type?.toUpperCase().includes('SMT');
                   return (
                     <tr key={line.line_id}>

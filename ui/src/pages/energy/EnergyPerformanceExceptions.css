@@ -1,0 +1,246 @@
+.energy-performance-exceptions {
+  min-width: 0;
+}
+
+.energy-exceptions-scope {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.energy-exceptions-state,
+.energy-exceptions-period,
+.energy-exceptions-disclaimer {
+  margin: 0.55rem 0;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.energy-exceptions-period strong {
+  color: var(--text-primary);
+}
+
+.energy-exceptions-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.55rem;
+  margin: 0.75rem 0;
+}
+
+.energy-exceptions-summary > div {
+  min-width: 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-subtle);
+}
+
+.energy-exceptions-summary span,
+.energy-exceptions-summary strong {
+  display: block;
+}
+
+.energy-exceptions-summary span {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.energy-exceptions-summary strong {
+  margin-top: 0.2rem;
+  color: var(--text-primary);
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.energy-exceptions-method,
+.energy-exceptions-exclusions {
+  margin: 0.65rem 0;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.73rem;
+  line-height: 1.5;
+}
+
+.energy-exceptions-method summary,
+.energy-exceptions-exclusions summary {
+  color: var(--text-primary);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.energy-exceptions-method summary:focus-visible,
+.energy-exceptions-exclusions summary:focus-visible,
+.energy-exception-category > summary:focus-visible,
+.energy-exception-item summary:focus-visible {
+  outline: 2px solid var(--brand-purple);
+  outline-offset: 3px;
+}
+
+.energy-exceptions-method div {
+  margin-top: 0.55rem;
+}
+
+.energy-exceptions-method p {
+  margin: 0.35rem 0;
+}
+
+.energy-exceptions-categories {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.energy-exception-category {
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+
+.energy-exception-category > summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+  padding: 0.75rem 0.85rem;
+  color: var(--text-primary);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.energy-exception-category > summary::-webkit-details-marker,
+.energy-exception-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.energy-exception-category > summary strong {
+  flex: 0 0 auto;
+  color: var(--brand-purple);
+  font-size: 0.72rem;
+  text-align: right;
+}
+
+.energy-exception-category-content {
+  padding: 0 0.85rem 0.75rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.energy-exception-category-content > .energy-exceptions-state {
+  margin-bottom: 0;
+}
+
+.energy-exception-list,
+.energy-exception-gap-lists ul,
+.energy-exceptions-exclusions ul {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.55rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.energy-exception-item {
+  min-width: 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-subtle);
+}
+
+.energy-exception-item summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  color: var(--text-primary);
+  font-size: 0.72rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.energy-exception-item summary strong {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+}
+
+.energy-exception-evidence {
+  display: grid;
+  gap: 0.2rem;
+  margin-top: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.energy-exception-gap-lists {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 0.65rem;
+}
+
+.energy-exception-gap-lists h5 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.72rem;
+}
+
+.energy-exception-gap-lists ul {
+  font-size: 0.7rem;
+}
+
+.energy-exception-gap-lists li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.energy-exception-gap-lists li strong {
+  color: var(--text-primary);
+}
+
+.energy-exception-gap-lists li span {
+  text-align: right;
+}
+
+.energy-exceptions-exclusions {
+  margin-top: 0.75rem;
+}
+
+.energy-exceptions-exclusions ul {
+  padding-left: 1.1rem;
+  list-style: disc;
+}
+
+.energy-exceptions-disclaimer {
+  margin-bottom: 0;
+}
+
+@media (max-width: 600px) {
+  .energy-exceptions-categories {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .energy-exceptions-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .energy-exception-gap-lists li {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .energy-exception-gap-lists li span {
+    text-align: left;
+  }
+}

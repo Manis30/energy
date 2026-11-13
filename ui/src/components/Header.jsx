@@ -12,6 +12,12 @@ const PATH_TITLES = {
 
 export default function Header({ theme, onToggleTheme, backendStatus }) {
   const location = useLocation();
+
+  // Hide the global top header on the AI Assistant chat page to maximize usable conversation height
+  if (location.pathname === '/ai-assistant') {
+    return null;
+  }
+
   const currentTitle = PATH_TITLES[location.pathname] || 'Industrial Energy Intelligence';
 
   const renderBadge = () => {

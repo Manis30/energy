@@ -1,22 +1,40 @@
 import React from 'react';
 
 export default function PowerFactorAnomalySection({ lpfData }) {
-  const threshold = lpfData?.threshold || 0.90;
-  const violationCount = lpfData?.total_anomalies_detected || 0;
-  const isCompliant = violationCount === 0;
+  const threshold = lpfData?.threshold ? Number(lpfData.threshold) : 0.90;
+  const violationCount = lpfData?.total_anomalies_detected ?? null;
+  const isWithinThreshold = violationCount === 0;
+
+  if (!lpfData) {
+    return (
+      <div className="dashboard-section">
+        <div className="section-header">
+          <div>
+            <h3 className="section-title">Power Factor Anomaly Audit</h3>
+            <p className="section-desc">
+              Surveillance of power quality against the application-configured detection threshold of {threshold.toFixed(2)}.
+            </p>
+          </div>
+        </div>
+        <div className="chart-empty-state">Power factor anomaly telemetry is currently unavailable.</div>
+      </div>
+    );
+  }
 
   return (
     <div className="dashboard-section">
       <div className="section-header">
         <div>
-          <h3 className="section-title">Power Factor Compliance & Anomaly Audit</h3>
+          <h3 className="section-title">Power Factor Anomaly Audit</h3>
           <p className="section-desc">
-            Continuous surveillance of power quality against the regulatory compliance threshold of {threshold.toFixed(2)}.
+            Continuous surveillance of power quality against the application-configured monitoring threshold of {threshold.toFixed(2)}.
           </p>
         </div>
         <div className="section-tag-group">
-          <span className="section-tag quality">
-            Zero readings below 0.90 threshold
+          <span className={`section-tag ${isWithinThreshold ? 'quality' : 'scrap'}`}>
+            {isWithinThreshold
+              ? `Zero readings below ${threshold.toFixed(2)} threshold`
+              : `${violationCount} readings below ${threshold.toFixed(2)} threshold`}
           </span>
         </div>
       </div>
@@ -28,29 +46,39 @@ export default function PowerFactorAnomalySection({ lpfData }) {
               <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
               <polyline points="22 4 12 14.01 9 11.01"/>
             </svg>
-            <span>Zero readings below the configured 0.90 detection threshold</span>
+            <span>
+              {isWithinThreshold
+                ? `Zero readings below the configured ${threshold.toFixed(2)} detection threshold`
+                : `${violationCount} readings below the configured ${threshold.toFixed(2)} detection threshold`}
+            </span>
           </div>
 
           <div className="pf-stat-summary-row">
             <div className="pf-stat-item">
-              <span className="pf-stat-label">Detection Threshold</span>
-              <span className="pf-stat-value">PF &ge; {threshold.toFixed(2)}</span>
-              <span className="pf-stat-sub">Configured baseline cutoff</span>
+              <span className="pf-stat-label">Detection Cutoff</span>
+              <span className="pf-stat-value">PF &lt; {threshold.toFixed(2)}</span>
+              <span className="pf-stat-sub">Application monitoring threshold</span>
             </div>
             <div className="pf-stat-item">
-              <span className="pf-stat-label">Minimum Recorded Reading</span>
-              <span className="pf-stat-value">0.9100</span>
-              <span className="pf-stat-sub">+0.0100 margin above cutoff</span>
+              <span className="pf-stat-label">Monitored Scope</span>
+              <span className="pf-stat-value">All Meters</span>
+              <span className="pf-stat-sub">Process & utility submeters</span>
             </div>
             <div className="pf-stat-item">
-              <span className="pf-stat-label">Plant Average PF</span>
-              <span className="pf-stat-value">0.9497</span>
-              <span className="pf-stat-sub">High electrical power quality</span>
+              <span className="pf-stat-label">Flagged Exceptions</span>
+              <span className={`pf-stat-value ${isWithinThreshold ? 'text-success' : 'text-danger'}`}>
+                {violationCount !== null ? violationCount : '—'}
+              </span>
+              <span className="pf-stat-sub">
+                {isWithinThreshold ? 'Zero events detected' : 'Under-threshold readings'}
+              </span>
             </div>
             <div className="pf-stat-item success">
-              <span className="pf-stat-label">Readings Below Threshold</span>
-              <span className="pf-stat-value text-success">{violationCount}</span>
-              <span className="pf-stat-sub">0 readings below threshold</span>
+              <span className="pf-stat-label">Threshold Status</span>
+              <span className="pf-stat-value text-success">
+                {isWithinThreshold ? 'Nominal' : 'Action Required'}
+              </span>
+              <span className="pf-stat-sub">Relative to configured threshold</span>
             </div>
           </div>
 
@@ -61,7 +89,7 @@ export default function PowerFactorAnomalySection({ lpfData }) {
               </svg>
             </div>
             <div className="notice-text">
-              <strong>Telemetry Verification:</strong> Across all 22,080 hourly readings recorded at plants IN-TN-01 and IN-KA-01, zero power factor measurements fell below the configured 0.90 detection threshold. Billing penalties and regulatory compliance have not been assessed without specific utility tariff contracts.
+              <strong>Telemetry Verification:</strong> Across queried telemetry records, {isWithinThreshold ? 'zero power factor measurements' : `${violationCount} power factor measurements`} fell below the configured {threshold.toFixed(2)} application detection threshold. Billing surcharges and regulatory compliance cannot be assessed without site-specific utility tariff contracts.
             </div>
           </div>
         </div>
@@ -69,4 +97,3 @@ export default function PowerFactorAnomalySection({ lpfData }) {
     </div>
   );
 }
-

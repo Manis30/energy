@@ -1,17 +1,18 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import AssistantHeader from './assistant/AssistantHeader';
 import ConversationView from './assistant/ConversationView';
-import SuggestedQuestions from './assistant/SuggestedQuestions';
 import MessageComposer from './assistant/MessageComposer';
 import { sendAssistantMessage } from '../services/assistantApi';
+import './assistant/assistant.css';
 
-export default function AIAssistant() {
+export default function AIAssistant({ theme, onToggleTheme }) {
   const [messages, setMessages] = useState([]);
   const [conversationId, setConversationId] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [lastFailedMessage, setLastFailedMessage] = useState(null);
   const [input, setInput] = useState('');
+  const conversationRef = useRef(null);
 
   const formatTimestamp = () => {
     return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -34,6 +35,7 @@ export default function AIAssistant() {
     setIsLoading(true);
     setError(null);
     setLastFailedMessage(null);
+    window.requestAnimationFrame(() => conversationRef.current?.focus());
 
     // 2. Extract bounded conversation history (max 10 previous turns, excluding current query)
     const validHistory = messages
@@ -113,57 +115,52 @@ export default function AIAssistant() {
       <AssistantHeader
         onNewConversation={handleNewConversation}
         messageCount={messages.length}
+        theme={theme}
+        onToggleTheme={onToggleTheme}
       />
 
-      <div className="assistant-workspace-card">
-        <ConversationView
-          messages={messages}
-          isLoading={isLoading}
-          onSelectSuggestion={handleSendMessage}
-        />
+      <ConversationView
+        conversationRef={conversationRef}
+        messages={messages}
+        isLoading={isLoading}
+      />
 
-        {lastFailedMessage && !isLoading && (
-          <div className="assistant-retry-banner">
-            <div className="retry-banner-text">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="8" x2="12" y2="12"/>
-                <line x1="12" y1="16" x2="12.01" y2="16"/>
-              </svg>
-              <span>Last query encountered an error.</span>
-            </div>
-            <div className="retry-banner-actions">
-              <button
-                type="button"
-                className="assistant-retry-btn"
-                onClick={handleRetry}
-              >
-                Retry Query
-              </button>
-              <button
-                type="button"
-                className="assistant-dismiss-btn"
-                onClick={() => setLastFailedMessage(null)}
-              >
-                Dismiss
-              </button>
-            </div>
+      {lastFailedMessage && !isLoading && (
+        <div className="assistant-retry-banner" role="alert">
+          <div className="retry-banner-text">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span>Last query encountered an error.</span>
           </div>
-        )}
-
-        <div className="assistant-bottom-dock">
-          <SuggestedQuestions
-            onSelectQuestion={handleSendMessage}
-            disabled={isLoading}
-          />
-          <MessageComposer
-            input={input}
-            setInput={setInput}
-            onSendMessage={handleSendMessage}
-            disabled={isLoading}
-          />
+          <div className="retry-banner-actions">
+            <button
+              type="button"
+              className="assistant-retry-btn"
+              onClick={handleRetry}
+            >
+              Retry Query
+            </button>
+            <button
+              type="button"
+              className="assistant-dismiss-btn"
+              onClick={() => setLastFailedMessage(null)}
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
-      </div>
+      )}
+
+      <MessageComposer
+        input={input}
+        setInput={setInput}
+        onSendMessage={handleSendMessage}
+        onSelectSuggestion={handleSendMessage}
+        disabled={isLoading}
+      />
     </div>
   );
 }

@@ -21,7 +21,8 @@ class EnergySummaryResponse(BaseModel):
     total_consumption_kwh: Decimal = Field(..., description="Total energy consumption across filtered scope (kWh)")
     total_cost_inr: Decimal = Field(..., description="Total energy spend in INR")
     total_co2e_kg: Decimal = Field(..., description="Total CO2e greenhouse gas emissions (kg)")
-    avg_power_factor: Optional[Decimal] = Field(None, description="Average power factor across readings")
+    avg_power_factor: Optional[Decimal] = Field(None, description="Energy-weighted average power factor across readings")
+    arithmetic_avg_power_factor: Optional[Decimal] = Field(None, description="Simple arithmetic mean power factor")
     total_readings: int = Field(..., description="Number of hourly meter readings included")
     distinct_hours: int = Field(..., description="Number of distinct operating hours")
     avg_hourly_consumption_kwh: Decimal = Field(..., description="Average consumption per active meter-hour")
@@ -35,7 +36,8 @@ class MeterEnergyItem(BaseModel):
     consumption_kwh: Decimal
     cost_inr: Decimal
     co2e_kg: Decimal
-    avg_power_factor: Optional[Decimal] = None
+    avg_power_factor: Optional[Decimal] = Field(None, description="Energy-weighted average power factor")
+    arithmetic_avg_power_factor: Optional[Decimal] = Field(None, description="Arithmetic mean power factor")
     peak_kwh: Decimal
     reading_count: int
     percentage_of_total: Decimal = Field(..., description="Share of total analyzed consumption (%)")
@@ -47,7 +49,8 @@ class AreaEnergyItem(BaseModel):
     consumption_kwh: Decimal
     cost_inr: Decimal
     co2e_kg: Decimal
-    avg_power_factor: Optional[Decimal] = None
+    avg_power_factor: Optional[Decimal] = Field(None, description="Energy-weighted average power factor")
+    arithmetic_avg_power_factor: Optional[Decimal] = Field(None, description="Arithmetic mean power factor")
     percentage_of_total: Decimal
 
 
@@ -57,18 +60,23 @@ class DailyEnergyItem(BaseModel):
     consumption_kwh: Decimal
     cost_inr: Decimal
     co2e_kg: Decimal
-    avg_power_factor: Optional[Decimal] = None
+    avg_power_factor: Optional[Decimal] = Field(None, description="Energy-weighted average power factor")
+    arithmetic_avg_power_factor: Optional[Decimal] = Field(None, description="Arithmetic mean power factor")
     peak_hourly_kwh: Decimal
     reading_count: int
 
 
 class PowerFactorSummaryResponse(BaseModel):
-    """Power factor distribution and compliance summary."""
+    """Power factor distribution and application monitoring summary."""
     threshold: Decimal
-    avg_power_factor: Decimal
-    min_power_factor: Decimal
-    max_power_factor: Decimal
+    avg_power_factor: Optional[Decimal] = Field(
+        None,
+        description="Energy-weighted average when energy is positive, arithmetic fallback for zero-energy readings, unavailable when no readings exist",
+    )
+    arithmetic_avg_power_factor: Optional[Decimal] = Field(None, description="Arithmetic mean power factor")
+    min_power_factor: Optional[Decimal] = None
+    max_power_factor: Optional[Decimal] = None
     total_readings: int
     low_pf_events_count: int
-    low_pf_percentage: Decimal
+    low_pf_percentage: Optional[Decimal] = None
     low_pf_by_meter: List[Dict[str, Any]]

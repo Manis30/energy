@@ -1,0 +1,300 @@
+.energy-performance-comparison {
+  min-width: 0;
+}
+
+.energy-comparison-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-subtle);
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+}
+
+.energy-comparison-scope strong {
+  color: var(--text-primary);
+}
+
+.energy-comparison-explanation,
+.energy-comparison-breakdowns {
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.energy-comparison-explanation summary,
+.energy-comparison-breakdowns > summary,
+.energy-comparison-inline-details summary {
+  color: var(--text-primary);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.energy-comparison-explanation summary:focus-visible,
+.energy-comparison-breakdowns > summary:focus-visible,
+.energy-comparison-inline-details summary:focus-visible {
+  outline: 2px solid var(--brand-purple);
+  outline-offset: 3px;
+}
+
+.energy-comparison-explanation ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.7rem 0 0;
+  padding-left: 1.2rem;
+  line-height: 1.5;
+}
+
+.energy-comparison-panel {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.energy-comparison-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.7rem;
+}
+
+.energy-comparison-panel-heading h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.88rem;
+}
+
+.energy-comparison-panel-heading p {
+  margin: 0.2rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.energy-comparison-badge {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.energy-comparison-state,
+.energy-comparison-breakdown-note {
+  margin: 0.55rem 0;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.energy-comparison-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.energy-comparison-table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
+
+.energy-comparison-table th,
+.energy-comparison-table td {
+  padding: 0.6rem 0.65rem;
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+}
+
+.energy-comparison-table thead th {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.energy-comparison-table tbody th {
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.energy-comparison-table tbody tr.selected {
+  background: var(--bg-surface-subtle);
+}
+
+.energy-comparison-meter-select {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--brand-purple);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.energy-comparison-meter-select:hover {
+  text-decoration: underline;
+}
+
+.energy-comparison-meter-select:focus-visible,
+.energy-meter-investigation-clear:focus-visible {
+  outline: 2px solid var(--brand-purple);
+  outline-offset: 3px;
+}
+
+.energy-meter-investigation {
+  margin-top: 0.9rem;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--brand-purple);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-subtle);
+}
+
+.energy-meter-investigation-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.energy-meter-investigation-header h5,
+.energy-meter-investigation-trend h6 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.84rem;
+}
+
+.energy-meter-investigation-header p {
+  margin: 0.2rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.energy-meter-investigation-clear {
+  flex: 0 0 auto;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.energy-meter-investigation-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 0.55rem;
+}
+
+.energy-meter-investigation-metrics > div {
+  min-width: 0;
+  padding: 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.energy-meter-investigation-metrics span,
+.energy-meter-investigation-metrics strong,
+.energy-meter-investigation-metrics small {
+  display: block;
+}
+
+.energy-meter-investigation-metrics span {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.energy-meter-investigation-metrics strong {
+  margin-top: 0.25rem;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.energy-meter-investigation-metrics small {
+  margin-top: 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  line-height: 1.4;
+}
+
+.energy-meter-investigation-trend {
+  margin-top: 0.7rem;
+  padding: 0.7rem;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.energy-meter-investigation-trend p,
+.energy-meter-investigation-note {
+  margin: 0.3rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.energy-meter-investigation-note {
+  color: var(--text-muted);
+}
+
+.energy-comparison-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.energy-comparison-inline-details > div {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 180px;
+  padding-top: 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.energy-comparison-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.8rem;
+}
+
+.energy-comparison-breakdown-note {
+  margin: 0.55rem 0 0;
+}
+
+@media (max-width: 900px) {
+  .energy-comparison-breakdown-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .energy-comparison-scope {
+    flex-direction: column;
+  }
+
+  .energy-meter-investigation-header {
+    flex-direction: column;
+  }
+
+  .energy-comparison-panel,
+  .energy-comparison-explanation,
+  .energy-comparison-breakdowns {
+    padding: 0.75rem;
+  }
+}

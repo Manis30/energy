@@ -15,6 +15,11 @@ import {
 } from 'recharts';
 import { formatNumber, formatPercent } from '../../utils/formatters';
 
+const hasNumber = (value) => value !== null
+  && value !== undefined
+  && value !== ''
+  && Number.isFinite(Number(value));
+
 const METER_COLORS = {
   'MTR-SMT': 'var(--brand-purple)',
   'MTR-FAL': 'var(--brand-blue)',
@@ -37,15 +42,21 @@ function CustomAreaTooltip({ active, payload, label }) {
         <div className="tooltip-title">{label}</div>
         <div className="tooltip-row">
           <span className="tooltip-label">Consumption:</span>
-          <span className="tooltip-val">{formatNumber(data.consumption_kwh, 2)} kWh</span>
+          <span className="tooltip-val">
+            {hasNumber(data.consumption_kwh) ? `${formatNumber(data.consumption_kwh, 2)} kWh` : 'Unavailable'}
+          </span>
         </div>
         <div className="tooltip-row">
           <span className="tooltip-label">Peak Hour:</span>
-          <span className="tooltip-val">{formatNumber(data.peak_hourly_kwh, 2)} kWh</span>
+          <span className="tooltip-val">
+            {hasNumber(data.peak_hourly_kwh) ? `${formatNumber(data.peak_hourly_kwh, 2)} kWh` : 'Unavailable'}
+          </span>
         </div>
         <div className="tooltip-row">
-          <span className="tooltip-label">Spend:</span>
-          <span className="tooltip-val">₹{formatNumber(data.cost_inr, 2)}</span>
+          <span className="tooltip-label">Dataset-calculated cost:</span>
+          <span className="tooltip-val">
+            {hasNumber(data.cost_inr) ? `₹${formatNumber(data.cost_inr, 2)}` : 'Unavailable'}
+          </span>
         </div>
       </div>
     );
@@ -69,7 +80,7 @@ function CustomBarTooltip({ active, payload }) {
         </div>
         <div className="tooltip-row">
           <span className="tooltip-label">Avg Power Factor:</span>
-          <span className="tooltip-val">{data.avg_power_factor ? Number(data.avg_power_factor).toFixed(4) : '—'}</span>
+          <span className="tooltip-val">{hasNumber(data.avg_power_factor) ? Number(data.avg_power_factor).toFixed(4) : 'Unavailable'}</span>
         </div>
       </div>
     );
@@ -77,19 +88,32 @@ function CustomBarTooltip({ active, payload }) {
   return null;
 }
 
-export default function EnergySection({ dailyTrend, byMeter, byArea }) {
+export default function EnergySection({
+  dailyTrend = [],
+  byMeter = [],
+  byArea = [],
+  trendAvailable = true,
+  meterAvailable = true,
+  areaAvailable = true,
+}) {
   // Format daily trend data for recharts
   const trendData = (dailyTrend || []).map((item) => ({
     ...item,
-    consumption_kwh_num: Number(item.consumption_kwh),
+    consumption_kwh_num: hasNumber(item.consumption_kwh) ? Number(item.consumption_kwh) : null,
     displayDate: item.date ? item.date.slice(5) : '', // '08-01'
   }));
+  const trendDates = trendData
+    .map((item) => item.date)
+    .filter((date) => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date))
+    .sort();
+  const hasTrendValues = trendData.some((item) => hasNumber(item.consumption_kwh_num));
 
   // Format meters data
   const meterData = (byMeter || []).map((m) => ({
     ...m,
-    consumption_kwh_num: Number(m.consumption_kwh),
+    consumption_kwh_num: hasNumber(m.consumption_kwh) ? Number(m.consumption_kwh) : null,
   }));
+  const hasMeterValues = meterData.some((item) => hasNumber(item.consumption_kwh_num));
 
   // Format area data
   const areaData = (byArea || []).map((a) => {
@@ -101,8 +125,8 @@ export default function EnergySection({ dailyTrend, byMeter, byArea }) {
     return {
       name: cleanArea,
       rawArea: a.area,
-      value: Number(a.consumption_kwh),
-      share: Number(a.percentage_of_total),
+      value: hasNumber(a.consumption_kwh) ? Number(a.consumption_kwh) : null,
+      share: hasNumber(a.percentage_of_total) ? Number(a.percentage_of_total) : null,
     };
   });
 
@@ -112,12 +136,8 @@ export default function EnergySection({ dailyTrend, byMeter, byArea }) {
         <div>
           <h3 className="section-title">Energy Consumption Analytics</h3>
           <p className="section-desc">
-            Continuous interval energy monitoring across manufacturing processes and non-process facility utility systems.
+            Returned daily and meter-level kWh context. Totals are not normalized by production and do not establish savings or efficiency changes.
           </p>
-        </div>
-        <div className="section-tag-group">
-          <span className="section-tag process">Process Lines (44.4%)</span>
-          <span className="section-tag utilities">Facility Utilities (55.6%)</span>
         </div>
       </div>
 
@@ -127,11 +147,27 @@ export default function EnergySection({ dailyTrend, byMeter, byArea }) {
           <div className="chart-card-header">
             <div>
               <h4 className="chart-card-title">Daily Energy Consumption Trend</h4>
-              <span className="chart-card-subtitle">Aggregate plant load across 92 operating days (kWh)</span>
+              <span className="chart-card-subtitle">
+                {!trendAvailable
+                  ? 'Trend request unavailable'
+                  : `${trendData.length} returned daily record(s)${trendDates.length > 0 ? ` · ${trendDates[0]} to ${trendDates[trendDates.length - 1]}` : ''} · kWh`}
+              </span>
             </div>
           </div>
-          <div className="chart-wrapper">
-            <ResponsiveContainer width="100%" height={280}>
+          <div
+            className="chart-wrapper"
+            role="group"
+            aria-label="Daily energy consumption area chart, in kilowatt-hours, by returned date"
+          >
+            {!trendAvailable || trendData.length === 0 || !hasTrendValues ? (
+              <div className="chart-empty-state">
+                {!trendAvailable
+                  ? 'Energy trend data is unavailable.'
+                  : trendData.length === 0
+                    ? 'No energy trend records were returned.'
+                    : 'Trend records were returned without usable consumption values.'}
+              </div>
+            ) : <ResponsiveContainer width="100%" height={280}>
               <AreaChart data={trendData} margin={{ top: 10, right: 15, left: -10, bottom: 0 }}>
                 <defs>
                   <linearGradient id="energyGrad" x1="0" y1="0" x2="0" y2="1">
@@ -164,7 +200,7 @@ export default function EnergySection({ dailyTrend, byMeter, byArea }) {
                   name="Energy (kWh)"
                 />
               </AreaChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer>}
           </div>
         </div>
 
@@ -176,8 +212,20 @@ export default function EnergySection({ dailyTrend, byMeter, byArea }) {
               <span className="chart-card-subtitle">Ranked submeter draw (kWh)</span>
             </div>
           </div>
-          <div className="chart-wrapper">
-            <ResponsiveContainer width="100%" height={280}>
+          <div
+            className="chart-wrapper"
+            role="group"
+            aria-label="Submeter energy consumption bar chart, in kilowatt-hours, by meter"
+          >
+            {!meterAvailable || meterData.length === 0 || !hasMeterValues ? (
+              <div className="chart-empty-state">
+                {!meterAvailable
+                  ? 'Meter breakdown is unavailable.'
+                  : meterData.length === 0
+                    ? 'No meter records were returned.'
+                    : 'Meter records were returned without usable consumption values.'}
+              </div>
+            ) : <ResponsiveContainer width="100%" height={280}>
               <BarChart data={meterData} layout="vertical" margin={{ top: 5, right: 25, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" horizontal={false} />
                 <XAxis
@@ -201,7 +249,7 @@ export default function EnergySection({ dailyTrend, byMeter, byArea }) {
                   ))}
                 </Bar>
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer>}
           </div>
         </div>
       </div>
@@ -210,10 +258,14 @@ export default function EnergySection({ dailyTrend, byMeter, byArea }) {
       <div className="area-summary-container">
         <div className="area-summary-header">
           <h4 className="chart-card-title">Energy Distribution by Factory Area</h4>
-          <span className="chart-card-subtitle">Clear boundary segregation between machine lines and facility utilities</span>
+          <span className="chart-card-subtitle">Returned area aggregates; facility utility energy remains plant-wide and is not allocated to production lines</span>
         </div>
         <div className="area-cards-row">
-          {areaData.map((area) => (
+          {!areaAvailable || areaData.length === 0 ? (
+            <div className="chart-empty-state">
+              {!areaAvailable ? 'Energy-by-area data is unavailable.' : 'No area records were returned.'}
+            </div>
+          ) : areaData.map((area) => (
             <div key={area.name} className="area-card">
               <div className="area-card-top">
                 <span className="area-name">{area.name}</span>
@@ -222,14 +274,14 @@ export default function EnergySection({ dailyTrend, byMeter, byArea }) {
                 </span>
               </div>
               <div className="area-value-row">
-                <span className="area-kwh">{formatNumber(area.value, 2)} kWh</span>
-                <span className="area-share">{formatPercent(area.share)}</span>
+                <span className="area-kwh">{hasNumber(area.value) ? `${formatNumber(area.value, 2)} kWh` : 'Unavailable'}</span>
+                <span className="area-share">{hasNumber(area.share) ? formatPercent(area.share) : 'Unavailable'}</span>
               </div>
               <div className="area-progress-track">
                 <div
                   className="area-progress-bar"
                   style={{
-                    width: `${Math.min(100, Math.max(5, area.share))}%`,
+                    width: `${hasNumber(area.share) ? Math.min(100, Math.max(0, area.share)) : 0}%`,
                     backgroundColor: AREA_COLORS[area.rawArea] || 'var(--brand-blue)',
                   }}
                 />

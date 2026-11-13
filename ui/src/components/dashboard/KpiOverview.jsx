@@ -1,15 +1,38 @@
 import React from 'react';
 import { formatCurrency, formatNumber, formatPercent } from '../../utils/formatters';
 
-export default function KpiOverview({ energySummary, productionSummary }) {
-  const energyKwh = energySummary ? formatNumber(energySummary.total_consumption_kwh, 2) : '—';
-  const energyCost = energySummary ? formatCurrency(energySummary.total_cost_inr) : '—';
-  const co2e = energySummary ? formatNumber(energySummary.total_co2e_kg, 2) : '—';
+const hasNumber = (value) => value !== null
+  && value !== undefined
+  && value !== ''
+  && Number.isFinite(Number(value));
 
-  const actualUnits = productionSummary ? formatNumber(productionSummary.actual_qty) : '—';
-  const goodUnits = productionSummary ? formatNumber(productionSummary.good_qty) : '—';
-  const rejectRate = productionSummary ? formatPercent(productionSummary.reject_rate) : '—';
-  const rejectUnits = productionSummary ? formatNumber(productionSummary.reject_qty) : '0';
+export default function KpiOverview({
+  energySummary,
+  productionSummary,
+  energyAvailable = true,
+  productionAvailable = true,
+}) {
+  const energyKwh = energyAvailable && hasNumber(energySummary?.total_consumption_kwh)
+    ? formatNumber(energySummary.total_consumption_kwh, 2)
+    : 'Unavailable';
+  const energyCost = energyAvailable && hasNumber(energySummary?.total_cost_inr)
+    ? formatCurrency(energySummary.total_cost_inr)
+    : 'Unavailable';
+  const co2e = energyAvailable && hasNumber(energySummary?.total_co2e_kg)
+    ? formatNumber(energySummary.total_co2e_kg, 2)
+    : 'Unavailable';
+  const actualUnits = productionAvailable && hasNumber(productionSummary?.actual_qty)
+    ? formatNumber(productionSummary.actual_qty)
+    : 'Unavailable';
+  const goodUnits = productionAvailable && hasNumber(productionSummary?.good_qty)
+    ? formatNumber(productionSummary.good_qty)
+    : 'Unavailable';
+  const rejectRate = productionAvailable && hasNumber(productionSummary?.reject_rate)
+    ? formatPercent(productionSummary.reject_rate)
+    : 'Unavailable';
+  const rejectUnits = productionAvailable && hasNumber(productionSummary?.reject_qty)
+    ? formatNumber(productionSummary.reject_qty)
+    : 'Unavailable';
 
   const cards = [
     {
@@ -17,7 +40,11 @@ export default function KpiOverview({ energySummary, productionSummary }) {
       title: 'Total Energy Consumption',
       value: energyKwh,
       unit: 'kWh',
-      sublabel: energySummary ? `${formatNumber(energySummary.total_readings)} meter-hours monitored` : null,
+      sublabel: !energyAvailable
+        ? 'Energy summary request failed'
+        : hasNumber(energySummary?.total_readings)
+          ? `${formatNumber(energySummary.total_readings)} returned energy-meter readings`
+          : 'Energy reading count unavailable',
       accent: 'purple',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -27,10 +54,12 @@ export default function KpiOverview({ energySummary, productionSummary }) {
     },
     {
       id: 'kpi-cost',
-      title: 'Total Energy Spend',
+      title: 'Calculated Energy Cost',
       value: energyCost,
       unit: 'INR',
-      sublabel: 'Calculated using time-of-day tariff rates',
+      sublabel: energyCost === 'Unavailable'
+        ? 'Cost total unavailable'
+        : 'Dataset-calculated; not a verified utility bill',
       accent: 'blue',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -46,7 +75,9 @@ export default function KpiOverview({ energySummary, productionSummary }) {
       title: 'Total Carbon Emissions',
       value: co2e,
       unit: 'kg CO₂e',
-      sublabel: 'Based on 0.716 kg CO₂e/kWh grid factor',
+      sublabel: co2e === 'Unavailable'
+        ? 'Emissions estimate unavailable'
+        : 'Calculated CO₂e estimate; not a direct emissions measurement',
       accent: 'cyan',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -57,10 +88,14 @@ export default function KpiOverview({ energySummary, productionSummary }) {
     },
     {
       id: 'kpi-actual',
-      title: 'Actual Production Volume',
+      title: 'Recorded Production Quantity',
       value: actualUnits,
-      unit: 'Units',
-      sublabel: productionSummary ? `Across SMT & Final Assembly lines` : null,
+      unit: 'units',
+      sublabel: !productionAvailable
+        ? 'Production summary request failed'
+        : actualUnits === 'Unavailable'
+          ? 'Actual quantity unavailable'
+          : 'Summed across returned lines; SMT boards and final-assembly phones are different scopes',
       accent: 'navy',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -70,10 +105,14 @@ export default function KpiOverview({ energySummary, productionSummary }) {
     },
     {
       id: 'kpi-good',
-      title: 'Good Production Volume',
+      title: 'Recorded Good Quantity',
       value: goodUnits,
-      unit: 'Units',
-      sublabel: productionSummary ? `${formatPercent(productionSummary.good_rate)} yield rate` : null,
+      unit: 'units',
+      sublabel: !productionAvailable
+        ? 'Production summary request failed'
+        : !hasNumber(productionSummary?.good_rate)
+          ? 'First-pass yield unavailable'
+          : `${formatPercent(productionSummary.good_rate)} API-reported aggregate yield; production scopes differ`,
       accent: 'green',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -84,10 +123,12 @@ export default function KpiOverview({ energySummary, productionSummary }) {
     },
     {
       id: 'kpi-reject',
-      title: 'Overall Scrap / Reject Rate',
+      title: 'Aggregate Rejected Output Rate',
       value: rejectRate,
-      unit: '% of Actual',
-      sublabel: `${rejectUnits} defective units isolated`,
+      unit: 'of actual output',
+      sublabel: rejectUnits === 'Unavailable'
+        ? 'Rejected quantity unavailable'
+        : `${rejectUnits} rejected units across returned production scopes`,
       accent: 'orange',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

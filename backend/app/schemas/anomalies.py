@@ -13,7 +13,10 @@ class AnomalyRecord(BaseModel):
     line_id: Optional[str] = None
     timestamp: str = Field(..., description="ISO 8601 timestamp of occurrence")
     actual_value: Decimal = Field(..., description="Observed measurement (kWh, power factor, etc.)")
-    baseline_value: Decimal = Field(..., description="Baseline reference value or regulatory threshold")
+    baseline_value: Optional[Decimal] = Field(
+        None,
+        description="Energy baseline reference or monitoring threshold; null when no comparable energy baseline exists",
+    )
     deviation_score: float = Field(..., description="Z-score deviation or deficit magnitude")
     severity: str = Field(..., description="'CRITICAL', 'HIGH', 'MEDIUM', 'LOW', or 'INFORMATIONAL'")
     explanation: str = Field(..., description="Deterministic human-readable explanation")
@@ -44,7 +47,7 @@ class RollingAnomaliesResponse(BaseModel):
 
 
 class LowPowerFactorResponse(BaseModel):
-    """Low power factor compliance response."""
+    """Low power factor application-monitoring response."""
     analysis_type: str
     threshold: float
     total_anomalies_detected: int
@@ -68,7 +71,10 @@ class UnifiedAnomaliesResponse(BaseModel):
     """Unified response containing results from all anomaly detectors."""
     plant_id: Optional[str] = None
     analysis_period: Dict[str, Optional[str]]
-    total_anomalies_detected: int
+    total_anomalies_detected: int = Field(
+        ...,
+        description="Sum of detector findings; overlapping findings are not deduplicated into unique observations",
+    )
     statistical_zscore: StatisticalAnomaliesResponse
     rolling_baseline: RollingAnomaliesResponse
     low_power_factor: LowPowerFactorResponse

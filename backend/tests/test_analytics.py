@@ -156,10 +156,14 @@ class TestAnalyticsServices(unittest.TestCase):
         expected_process_kwh = Decimal("507553.4990") + Decimal("362678.4210")
         self.assertEqual(total_product_process_kwh, expected_process_kwh)
 
-        # Aster Pro 256GB has highest intensity
+        # Stage-specific SEC is valid: Aster Pro 256GB has higher SMT board SEC
         pro = [p for p in product_energy if p["product_id"] == "SPH-PRO-256"][0]
         a15_256 = [p for p in product_energy if p["product_id"] == "SPH-A15-256"][0]
-        self.assertGreater(pro["finished_phone_process_sec_kwh_per_unit"], a15_256["finished_phone_process_sec_kwh_per_unit"])
+        self.assertGreater(pro["smt_process_sec_kwh_per_board"], a15_256["smt_process_sec_kwh_per_board"])
+        self.assertIsNotNone(pro["fal_process_sec_kwh_per_phone"])
+        # Cross-stage finished-phone combined SEC is unavailable without WIP tracking
+        self.assertIsNone(pro["finished_phone_process_sec_kwh_per_unit"])
+        self.assertIn("UNAVAILABLE", pro["finished_phone_sec_status"])
 
     def test_zero_production_period_energy(self):
         """Verify 155 zero-production hours are isolated with their actual standby draw."""

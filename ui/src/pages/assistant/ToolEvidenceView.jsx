@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 
 export default function ToolEvidenceView({
+  evidenceId = 'assistant-evidence-details',
   toolReferences = [],
   toolEvidence = [],
   toolCount = 0,
@@ -18,7 +19,7 @@ export default function ToolEvidenceView({
           <line x1="12" y1="16" x2="12" y2="12"/>
           <line x1="12" y1="8" x2="12.01" y2="8"/>
         </svg>
-        <span>Direct domain synthesis &bull; No database analytics tools required</span>
+        <span>Direct domain synthesis &bull; No database analytics tools executed for this response</span>
       </div>
     );
   }
@@ -30,13 +31,14 @@ export default function ToolEvidenceView({
         className="assistant-evidence-header"
         onClick={() => setIsOpen((prev) => !prev)}
         aria-expanded={isOpen}
+        aria-controls={evidenceId}
       >
         <div className="evidence-header-left">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="16 18 22 12 16 6"/>
             <polyline points="8 6 2 12 8 18"/>
           </svg>
-          <span className="evidence-title">Execution Evidence</span>
+          <span className="evidence-title">Analytics evidence</span>
           <span className="evidence-count-badge">
             {toolCount} {toolCount === 1 ? 'tool executed' : 'tools executed'}
           </span>
@@ -65,9 +67,13 @@ export default function ToolEvidenceView({
         </div>
       </button>
 
-      {isOpen && (
-        <div className="assistant-evidence-body">
+      <div id={evidenceId} className="assistant-evidence-body" hidden={!isOpen}>
           <div className="evidence-steps-list">
+            {toolEvidence.length === 0 && (
+              <p className="evidence-unavailable">
+                Execution details are unavailable for this response.
+              </p>
+            )}
             {toolEvidence.map((ev, idx) => (
               <div key={idx} className={`evidence-step-item ${ev.success ? 'success' : 'failed'}`}>
                 <div className="evidence-step-header">
@@ -98,6 +104,11 @@ export default function ToolEvidenceView({
                     {ev.summary}
                   </div>
                 )}
+                {!ev.success && !ev.summary && (
+                  <div className="evidence-summary-text">
+                    The tool did not return a result.
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -119,7 +130,6 @@ export default function ToolEvidenceView({
             )}
           </div>
         </div>
-      )}
     </div>
   );
 }

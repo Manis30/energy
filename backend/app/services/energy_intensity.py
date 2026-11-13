@@ -17,6 +17,33 @@ from app.models.source_data import (
 FACILITY_UTILITY_METERS = ["MTR-HVAC", "MTR-COMPRESSOR", "MTR-CHILLER"]
 
 
+def validate_line_meter_topology(session: Session, plant_id: Optional[str] = None) -> None:
+    """
+    Verify the 1:1 line-to-process-meter topology assumption.
+    The current factory schema provides one MTR-SMT and one MTR-FAL meter per plant.
+    If multiple lines of the same type exist in a single plant without dedicated sub-metering,
+    fail safely rather than producing multiplied/duplicated energy totals.
+    """
+    q = select(
+        DimProductionLine.plant_id,
+        DimProductionLine.line_type,
+        func.count(DimProductionLine.line_id).label("line_count"),
+    ).group_by(
+        DimProductionLine.plant_id,
+        DimProductionLine.line_type,
+    )
+    if plant_id:
+        q = q.where(DimProductionLine.plant_id == plant_id)
+    rows = session.execute(q).fetchall()
+    for pid, ltype, count in rows:
+        if count > 1:
+            raise ValueError(
+                f"Multi-line topology limitation: Plant '{pid}' has {count} lines configured for '{ltype}', "
+                f"but the telemetry schema only provides a single plant-level process meter. "
+                f"Line-level energy cannot be allocated safely without dedicated sub-metering."
+            )
+
+
 def _process_meter_condition():
     """Deterministic join condition connecting production line to its dedicated process meter."""
     return or_(
@@ -36,6 +63,7 @@ def get_process_energy_analytics(
     SEC is calculated strictly as process meter kWh divided by actual line output.
     Returns None for SEC when production output is zero (safe zero-division guard).
     """
+    validate_line_meter_topology(session, plant_id)
     conditions = [
         FactHourlyProduction.event_ts == FactEnergyMeterHourly.timestamp,
         FactHourlyProduction.plant_id == FactEnergyMeterHourly.plant_id,
@@ -333,10 +361,12 @@ def get_product_process_energy(
         smt_qty = data["smt_actual_qty"]
         tot_kwh = data["total_direct_process_kwh"]
 
-        # SEC by stage and overall finished unit process SEC
+        # SEC by stage: explicit stage-specific attribution
         smt_sec = round(data["smt_process_kwh"] / smt_qty, 4) if smt_qty > 0 else None
         fal_sec = round(data["fal_process_kwh"] / fal_qty, 4) if fal_qty > 0 else None
-        combined_process_sec = round(tot_kwh / fal_qty, 4) if fal_qty > 0 else None
+        # Finished-phone combined SEC across decoupled stages is unavailable without WIP tracking:
+        # SMT produces boards, FAL produces phones, and lines process different products asynchronously.
+        combined_process_sec = None
 
         results.append({
             "product_id": pid,
@@ -351,7 +381,14 @@ def get_product_process_energy(
             "smt_process_sec_kwh_per_board": smt_sec,
             "fal_process_sec_kwh_per_phone": fal_sec,
             "finished_phone_process_sec_kwh_per_unit": combined_process_sec,
-            "scope_note": "Direct manufacturing process energy only. Facility utilities (HVAC, Chiller, Compressor) excluded.",
+            "finished_phone_sec_status": (
+                "UNAVAILABLE: SMT and FAL lines operate asynchronously with intermediate inventory buffering; "
+                "finished-unit SEC across decoupled process stages cannot be mathematically verified without WIP lot-tracking telemetry."
+            ),
+            "scope_note": (
+                "Direct manufacturing process energy only. Stage-specific SEC is calculated separately for SMT (kWh/board) "
+                "and FAL (kWh/phone). Combined finished-phone SEC is unavailable across decoupled stages without WIP lot-tracking telemetry."
+            ),
         })
 
     return results
@@ -368,6 +405,7 @@ def get_zero_production_period_energy(
     Reported strictly as zero-production-period energy (standby/idle energy),
     without automatically labeling it avoidable waste.
     """
+    validate_line_meter_topology(session, plant_id)
     conditions = [
         FactHourlyProduction.event_ts == FactEnergyMeterHourly.timestamp,
         FactHourlyProduction.plant_id == FactEnergyMeterHourly.plant_id,

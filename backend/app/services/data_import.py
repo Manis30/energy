@@ -46,8 +46,8 @@ def run_pre_import_checks(engine) -> Dict[str, Any]:
 
         # Check Alembic revision
         rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        if rev != "be415c420bad":
-            raise RuntimeError(f"Alembic revision is '{rev}', expected 'be415c420bad'. Aborting import.")
+        if rev not in ("be415c420bad", "c7a19e28f01b"):
+            raise RuntimeError(f"Alembic revision is '{rev}', expected 'be415c420bad' or 'c7a19e28f01b'. Aborting import.")
         results["alembic_revision"] = rev
 
         # Check tables existence and row counts

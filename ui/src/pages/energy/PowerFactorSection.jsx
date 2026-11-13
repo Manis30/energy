@@ -1,51 +1,98 @@
 import React from 'react';
 import { formatNumber, formatPercent } from '../../utils/formatters';
 
-export default function PowerFactorSection({ powerFactorData, byMeter = [] }) {
-  const avgPf = powerFactorData?.avg_power_factor ? Number(powerFactorData.avg_power_factor) : 0.9497;
-  const minPf = powerFactorData?.min_power_factor ? Number(powerFactorData.min_power_factor) : 0.9100;
-  const maxPf = powerFactorData?.max_power_factor ? Number(powerFactorData.max_power_factor) : 0.9900;
-  const threshold = powerFactorData?.threshold ? Number(powerFactorData.threshold) : 0.90;
-  const totalReadings = powerFactorData?.total_readings || 22080;
-  const lowPfEvents = powerFactorData?.low_pf_events_count || 0;
-  const lowPfPct = powerFactorData?.low_pf_percentage ? Number(powerFactorData.low_pf_percentage) : 0;
+const hasNumber = (value) => value !== null
+  && value !== undefined
+  && value !== ''
+  && Number.isFinite(Number(value));
 
-  const isCompliant = lowPfEvents === 0;
+export default function PowerFactorSection({
+  powerFactorData,
+  byMeter = [],
+  dataAvailable = true,
+  meterDataAvailable = true,
+}) {
+  const avgPf = hasNumber(powerFactorData?.avg_power_factor) ? Number(powerFactorData.avg_power_factor) : null;
+  const minPf = hasNumber(powerFactorData?.min_power_factor) ? Number(powerFactorData.min_power_factor) : null;
+  const maxPf = hasNumber(powerFactorData?.max_power_factor) ? Number(powerFactorData.max_power_factor) : null;
+  const threshold = hasNumber(powerFactorData?.threshold) ? Number(powerFactorData.threshold) : null;
+  const totalReadings = hasNumber(powerFactorData?.total_readings) ? Number(powerFactorData.total_readings) : null;
+  const lowPfEvents = hasNumber(powerFactorData?.low_pf_events_count)
+    ? Number(powerFactorData.low_pf_events_count)
+    : null;
+  const lowPfPct = hasNumber(powerFactorData?.low_pf_percentage)
+    ? Number(powerFactorData.low_pf_percentage)
+    : null;
+
+  const hasReadings = totalReadings !== null && totalReadings > 0;
+  const isWithinThreshold = hasReadings && lowPfEvents === 0 && threshold !== null;
+  const thresholdLabel = threshold === null ? 'unavailable' : threshold.toFixed(2);
+  const statusLabel = !dataAvailable
+    ? 'Power factor summary request failed.'
+    : !powerFactorData
+      ? 'No power factor summary was returned.'
+      : totalReadings === 0
+        ? 'No power factor readings were returned for this period.'
+        : totalReadings === null
+          ? 'Reading count is unavailable.'
+        : lowPfEvents === null || threshold === null
+          ? 'Below-threshold evidence or threshold is unavailable.'
+          : isWithinThreshold
+            ? 'No readings below the returned threshold.'
+            : `${formatNumber(lowPfEvents)} readings below the returned threshold.`;
 
   return (
     <div className="dashboard-section">
       <div className="section-header">
         <div>
-          <h3 className="section-title">Power Factor Monitoring & Quality Audit</h3>
+          <h3 className="section-title">Power Factor Monitoring</h3>
           <p className="section-desc">
-            Continuous surveillance of plant electrical efficiency against the standard 0.90 utility compliance threshold.
+            Returned power factor readings and the application threshold, when provided. This is not a utility-billing assessment.
           </p>
         </div>
         <div className="section-tag-group">
-          <span className={`section-tag ${isCompliant ? 'quality' : 'scrap'}`}>
-            {isCompliant ? '100% Regulatory Compliant' : `${lowPfEvents} Readings Below Limit`}
+          <span className={`section-tag ${isWithinThreshold ? 'quality' : 'info'}`}>
+            {statusLabel}
           </span>
         </div>
       </div>
+
+      {(!dataAvailable || !powerFactorData || totalReadings === 0) && (
+        <div className="chart-empty-state">{statusLabel}</div>
+      )}
 
       <div className="pf-overview-grid">
         {/* 4 Summary Metric Cards */}
         <div className="pf-metric-card">
           <div className="pf-metric-top">
             <span className="pf-metric-title">Average Power Factor</span>
-            <span className="pf-metric-badge success">Optimal</span>
+            <span className="pf-metric-badge info">
+              {avgPf === null || threshold === null
+                ? 'Unavailable'
+                : avgPf >= threshold ? 'At or Above Threshold' : 'Below Threshold'}
+            </span>
           </div>
-          <div className="pf-metric-value">{avgPf.toFixed(4)}</div>
-          <div className="pf-metric-sub">Across {formatNumber(totalReadings)} hourly readings</div>
+          <div className="pf-metric-value">{avgPf !== null ? avgPf.toFixed(4) : 'Unavailable'}</div>
+          <div className="pf-metric-sub">
+            {totalReadings !== null ? `Across ${formatNumber(totalReadings)} returned readings` : 'Reading count unavailable'}
+          </div>
         </div>
 
         <div className="pf-metric-card">
           <div className="pf-metric-top">
             <span className="pf-metric-title">Minimum Observed</span>
-            <span className="pf-metric-badge info">Above Limit</span>
+            <span className="pf-metric-badge info">
+              {minPf === null || threshold === null
+                ? 'Unavailable'
+                : minPf >= threshold ? 'At or Above Threshold' : 'Below Threshold'}
+            </span>
           </div>
-          <div className="pf-metric-value">{minPf.toFixed(4)}</div>
-          <div className="pf-metric-sub">Exceeds {threshold.toFixed(2)} threshold by +{(minPf - threshold).toFixed(4)}</div>
+          <div className="pf-metric-value">{minPf !== null ? minPf.toFixed(4) : 'Unavailable'}</div>
+          <div className="pf-metric-sub">
+            {minPf !== null && threshold !== null
+              ? `Difference from ${threshold.toFixed(2)} threshold: ${(minPf - threshold).toFixed(4)}`
+              : `Configured threshold: ${thresholdLabel}`}
+          </div>
         </div>
 
         <div className="pf-metric-card">
@@ -53,39 +100,50 @@ export default function PowerFactorSection({ powerFactorData, byMeter = [] }) {
             <span className="pf-metric-title">Maximum Observed</span>
             <span className="pf-metric-badge purple">Peak</span>
           </div>
-          <div className="pf-metric-value">{maxPf.toFixed(4)}</div>
-          <div className="pf-metric-sub">High efficiency operating condition</div>
+          <div className="pf-metric-value">{maxPf !== null ? maxPf.toFixed(4) : 'Unavailable'}</div>
+          <div className="pf-metric-sub">Highest returned reading</div>
         </div>
 
         <div className="pf-metric-card">
           <div className="pf-metric-top">
-            <span className="pf-metric-title">Non-Compliant Readings</span>
-            <span className={`pf-metric-badge ${lowPfEvents === 0 ? 'success' : 'danger'}`}>
-              {lowPfEvents === 0 ? 'Zero Violations' : `${lowPfEvents} Events`}
+            <span className="pf-metric-title">Readings Below Threshold</span>
+            <span className={`pf-metric-badge ${isWithinThreshold ? 'success' : 'info'}`}>
+              {lowPfEvents === null ? 'Unavailable' : `${formatNumber(lowPfEvents)} readings`}
             </span>
           </div>
-          <div className={`pf-metric-value ${lowPfEvents === 0 ? 'text-success' : 'text-danger'}`}>
-            {lowPfEvents}
+          <div className={`pf-metric-value ${isWithinThreshold ? 'text-success' : ''}`}>
+            {lowPfEvents !== null ? formatNumber(lowPfEvents) : 'Unavailable'}
           </div>
-          <div className="pf-metric-sub">Threshold: PF &lt; {threshold.toFixed(2)} ({formatPercent(lowPfPct)} of data)</div>
+          <div className="pf-metric-sub">
+            {threshold !== null ? `Threshold: PF < ${threshold.toFixed(2)}` : 'Threshold unavailable'}
+            {lowPfPct !== null ? ` (${formatPercent(lowPfPct)} of readings)` : ' (percentage unavailable)'}
+          </div>
         </div>
       </div>
 
-      {/* Meter-level PF Comparison and Regulatory Context */}
+      {/* Meter-level PF Comparison and Threshold Context */}
       <div className="pf-details-grid">
         {/* Left: Submeter PF Ranking */}
         <div className="chart-card">
           <div className="chart-card-header">
             <div>
               <h4 className="chart-card-title">Average Power Factor by Submeter</h4>
-              <span className="chart-card-subtitle">All submeters comfortably surpass the 0.90 threshold</span>
+              <span className="chart-card-subtitle">
+                {threshold !== null ? `Returned averages relative to ${threshold.toFixed(2)} threshold` : 'Returned averages; threshold unavailable'}
+              </span>
             </div>
           </div>
 
           <div className="pf-meter-list">
-            {(byMeter || []).map((m) => {
-              const pfVal = m.avg_power_factor ? Number(m.avg_power_factor) : 0;
-              const fillPct = Math.min(100, Math.max(0, ((pfVal - 0.85) / (1.0 - 0.85)) * 100));
+            {!meterDataAvailable || !byMeter.length ? (
+              <div className="chart-empty-state">
+                {!meterDataAvailable ? 'Meter-level power factor data is unavailable.' : 'No meter records were returned.'}
+              </div>
+            ) : byMeter.map((m) => {
+              const pfVal = hasNumber(m.avg_power_factor) ? Number(m.avg_power_factor) : null;
+              const fillPct = pfVal === null
+                ? 0
+                : Math.min(100, Math.max(0, ((pfVal - 0.85) / (1.0 - 0.85)) * 100));
               return (
                 <div key={m.meter_id} className="pf-meter-row">
                   <div className="pf-meter-meta">
@@ -94,12 +152,13 @@ export default function PowerFactorSection({ powerFactorData, byMeter = [] }) {
                   </div>
                   <div className="pf-meter-bar-wrap">
                     <div className="pf-meter-bar-track">
-                      {/* Threshold marker at 0.90 */}
-                      <div
-                        className="pf-threshold-line"
-                        style={{ left: `${((0.90 - 0.85) / 0.15) * 100}%` }}
-                        title="Regulatory Threshold: 0.90"
-                      ></div>
+                      {threshold !== null && (
+                        <div
+                          className="pf-threshold-line"
+                          style={{ left: `${Math.min(100, Math.max(0, ((threshold - 0.85) / 0.15) * 100))}%` }}
+                          title={`Application threshold: ${threshold.toFixed(2)}`}
+                        ></div>
+                      )}
                       <div
                         className="pf-meter-bar-fill"
                         style={{ width: `${fillPct}%` }}
@@ -107,7 +166,7 @@ export default function PowerFactorSection({ powerFactorData, byMeter = [] }) {
                     </div>
                   </div>
                   <div className="pf-meter-val font-mono font-semibold">
-                    {pfVal.toFixed(4)}
+                    {pfVal !== null ? pfVal.toFixed(4) : 'Unavailable'}
                   </div>
                 </div>
               );
@@ -115,33 +174,34 @@ export default function PowerFactorSection({ powerFactorData, byMeter = [] }) {
           </div>
         </div>
 
-        {/* Right: Regulatory Compliance Summary Callout */}
+        {/* Right: Monitoring Threshold Context */}
         <div className="chart-card pf-compliance-card">
           <div className="chart-card-header">
             <div>
-              <h4 className="chart-card-title">Grid Regulatory Interpretation</h4>
-              <span className="chart-card-subtitle">Deterministic evaluation based on verified telemetry</span>
+              <h4 className="chart-card-title">Power Factor Threshold Context</h4>
+              <span className="chart-card-subtitle">Evaluation against application-configured threshold</span>
             </div>
           </div>
 
           <div className="pf-compliance-content">
             <div className="pf-compliance-badge-large">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                <polyline points="22 4 12 14.01 9 11.01"/>
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
               </svg>
-              <span>100% Compliant with Grid Code</span>
+              <span>{statusLabel}</span>
             </div>
 
             <ul className="pf-compliance-points">
               <li>
-                <strong>Zero Regulatory Penalties:</strong> Measured telemetry across all 22,080 meter-hours remains strictly above the 0.90 statutory threshold (minimum recorded value: {minPf.toFixed(4)}).
+                <strong>Threshold Tracking:</strong> {totalReadings !== null ? `${formatNumber(totalReadings)} readings were returned` : 'Reading count is unavailable'}; {lowPfEvents !== null && threshold !== null ? `${formatNumber(lowPfEvents)} were below the ${threshold.toFixed(2)} application threshold` : 'below-threshold evidence is unavailable'}{minPf !== null ? ` (minimum returned value: ${minPf.toFixed(4)})` : ''}.
               </li>
               <li>
-                <strong>No Billing Surcharges:</strong> Without tariff-specific penalty coefficients, the platform does not assume hypothetical financial penalties.
+                <strong>Billing Tariff Boundary:</strong> Commercial penalty calculations and utility billing surcharges require site-specific utility tariff schedules, which are not configured in this dataset.
               </li>
               <li>
-                <strong>Reactive Power Performance:</strong> Stable power factor across SMT ({Number(byMeter.find(m => m.meter_id === 'MTR-SMT')?.avg_power_factor || 0.9498).toFixed(4)}) and Utilities confirms adequate capacitor bank sizing.
+                <strong>Submeter Observations:</strong> Meter averages are shown as returned; capacitor-bank sizing or physical equipment conditions cannot be validated from these values alone.
               </li>
             </ul>
           </div>
@@ -150,4 +210,3 @@ export default function PowerFactorSection({ powerFactorData, byMeter = [] }) {
     </div>
   );
 }
-

@@ -1,0 +1,201 @@
+"""API endpoints for daily report upload, validation, database ingestion, and audit history."""
+
+import os
+from datetime import date
+from typing import List, Optional
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_db_session
+from app.config import MAX_UPLOAD_SIZE_MB
+from app.models.upload_history import UploadHistory
+from app.schemas.daily_reports import (
+    IngestReportResponse,
+    InspectResponse,
+    UploadHistoryItem,
+    ValidateReportResponse,
+)
+from app.services.daily_report_service import (
+    generate_template_csv,
+    ingest_validated_report,
+    inspect_file,
+    validate_report_file,
+)
+
+router = APIRouter()
+
+MAX_FILE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+
+async def read_uploaded_file_safely(file: UploadFile, max_bytes: int = MAX_FILE_BYTES) -> bytes:
+    """Read uploaded file in chunks, enforcing strict size limits to prevent memory exhaustion."""
+    chunks = []
+    total_size = 0
+    chunk_size = 64 * 1024  # 64 KB
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total_size += len(chunk)
+        if total_size > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Uploaded file exceeds maximum permitted size of {MAX_UPLOAD_SIZE_MB} MB.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.post(
+    "/inspect",
+    response_model=InspectResponse,
+    summary="Inspect file metadata and worksheets",
+    description="Validates file size, format (.csv, .xlsx, .xls), lists sheets if Excel, and identifies likely report type.",
+)
+async def inspect_uploaded_file(
+    file: UploadFile = File(..., description="Daily report file in CSV, XLSX, or XLS format")
+) -> InspectResponse:
+    try:
+        content = await read_uploaded_file_safely(file)
+        safe_filename = os.path.basename(file.filename or "upload")
+        return inspect_file(filename=safe_filename, file_bytes=content)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to inspect file due to an unexpected parsing error.",
+        )
+
+
+@router.post(
+    "/validate",
+    response_model=ValidateReportResponse,
+    summary="Validate daily report rows, schema, and reference keys",
+    description="Performs pre-ingestion validation: required columns, types, range checks, foreign keys, duplicate detection, and date consistency.",
+)
+async def validate_report(
+    file: UploadFile = File(..., description="Report file to validate"),
+    report_type: Optional[str] = Form(None, description="'ENERGY' or 'PRODUCTION' or None for auto-detect"),
+    sheet_name: Optional[str] = Form(None, description="Worksheet name if multi-sheet Excel"),
+    confirmed_date: Optional[date] = Form(None, description="Confirmed reporting date filter (YYYY-MM-DD)"),
+    mode: Optional[str] = Form("INCREMENTAL", description="'INCREMENTAL' or 'OVERWRITE_CORRECTION'"),
+    db: Session = Depends(get_db_session),
+) -> ValidateReportResponse:
+    try:
+        content = await read_uploaded_file_safely(file)
+        safe_filename = os.path.basename(file.filename or "upload")
+        norm_mode = mode.upper() if mode else "INCREMENTAL"
+        result = validate_report_file(
+            session=db,
+            filename=safe_filename,
+            file_bytes=content,
+            report_type=report_type,
+            sheet_name=sheet_name,
+            confirmed_date=confirmed_date,
+            mode=norm_mode,
+        )
+        return ValidateReportResponse(**result)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Report validation failed: {str(e)}",
+        )
+
+
+@router.post(
+    "/ingest",
+    response_model=IngestReportResponse,
+    summary="Confirm and ingest valid records into Neon PostgreSQL",
+    description="Transactionally ingests validated records into fact tables. Supports INCREMENTAL (skip duplicates) and OVERWRITE_CORRECTION (replace existing date records).",
+)
+async def ingest_report(
+    file: UploadFile = File(..., description="Validated report file to ingest"),
+    report_type: str = Form(..., description="'ENERGY' or 'PRODUCTION'"),
+    reporting_date: date = Form(..., description="Confirmed reporting date (YYYY-MM-DD)"),
+    mode: str = Form("INCREMENTAL", description="'INCREMENTAL' or 'OVERWRITE_CORRECTION'"),
+    sheet_name: Optional[str] = Form(None, description="Worksheet name if multi-sheet Excel"),
+    db: Session = Depends(get_db_session),
+) -> IngestReportResponse:
+    try:
+        content = await read_uploaded_file_safely(file)
+        safe_filename = os.path.basename(file.filename or "upload")
+        result = ingest_validated_report(
+            session=db,
+            filename=safe_filename,
+            file_bytes=content,
+            report_type=report_type.upper(),
+            reporting_date=reporting_date,
+            mode=mode.upper(),
+            sheet_name=sheet_name,
+        )
+        return IngestReportResponse(**result)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database ingestion failed: {str(e)}",
+        )
+
+
+@router.get(
+    "/history",
+    response_model=List[UploadHistoryItem],
+    summary="List past daily report uploads and audit history",
+    description="Returns chronological upload audit log with row metrics, ingestion mode, and status.",
+)
+def get_upload_history(
+    limit: int = Query(50, ge=1, le=200, description="Max history records to return"),
+    report_type: Optional[str] = Query(None, description="Filter by 'ENERGY' or 'PRODUCTION'"),
+    reporting_date: Optional[date] = Query(None, description="Filter by reporting date"),
+    db: Session = Depends(get_db_session),
+) -> List[UploadHistoryItem]:
+    stmt = select(UploadHistory)
+    if report_type:
+        stmt = stmt.where(UploadHistory.report_type == report_type.upper())
+    if reporting_date:
+        stmt = stmt.where(UploadHistory.reporting_date == reporting_date)
+
+    stmt = stmt.order_by(UploadHistory.uploaded_at.desc()).limit(limit)
+    records = db.execute(stmt).scalars().all()
+    return [UploadHistoryItem.model_validate(r) for r in records]
+
+
+@router.get(
+    "/template/{report_type}",
+    summary="Download sample CSV template for daily report",
+    description="Provides an approved CSV template for operators to fill out daily energy or production records.",
+)
+def download_template(
+    report_type: str,
+) -> Response:
+    norm_type = report_type.upper()
+    if norm_type not in {"ENERGY", "PRODUCTION"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Template report_type must be 'energy' or 'production'.",
+        )
+
+    csv_data = generate_template_csv(norm_type)
+    filename = f"{norm_type.lower()}_daily_report_template.csv"
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-cache",
+        },
+    )
+

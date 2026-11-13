@@ -1,23 +1,63 @@
 import React from 'react';
-import { formatCurrency, formatNumber, formatPercent } from '../../utils/formatters';
+import { formatCurrency, formatDate, formatNumber } from '../../utils/formatters';
 
-export default function EnergyKpis({ energySummary, dailyTrendCount = 92 }) {
-  const totalKwh = energySummary ? Number(energySummary.total_consumption_kwh) : null;
-  const totalCost = energySummary ? Number(energySummary.total_cost_inr) : null;
-  const totalCo2e = energySummary ? Number(energySummary.total_co2e_kg) : null;
-  const totalReadings = energySummary ? energySummary.total_readings : null;
-  const avgPf = energySummary?.avg_power_factor ? Number(energySummary.avg_power_factor) : null;
+const hasNumber = (value) => value !== null
+  && value !== undefined
+  && value !== ''
+  && Number.isFinite(Number(value));
 
-  // Calculate daily average consumption
-  const dailyAvgKwh = totalKwh && dailyTrendCount > 0 ? totalKwh / dailyTrendCount : null;
+export default function EnergyKpis({
+  energySummary,
+  dailyTrend = [],
+  dailyTrendAvailable = false,
+  dateRange,
+  summaryAvailable = true,
+}) {
+  const totalKwh = hasNumber(energySummary?.total_consumption_kwh)
+    ? Number(energySummary.total_consumption_kwh)
+    : null;
+  const totalCost = hasNumber(energySummary?.total_cost_inr)
+    ? Number(energySummary.total_cost_inr)
+    : null;
+  const totalCo2e = hasNumber(energySummary?.total_co2e_kg)
+    ? Number(energySummary.total_co2e_kg)
+    : null;
+  const totalReadings = hasNumber(energySummary?.total_readings)
+    ? Number(energySummary.total_readings)
+    : null;
+  const readingCountDescription = totalReadings === null
+    ? 'Reading count unavailable'
+    : `${formatNumber(totalReadings)} returned meter readings`;
+  const avgPf = hasNumber(energySummary?.avg_power_factor)
+    ? Number(energySummary.avg_power_factor)
+    : null;
+
+  const validDailyRecords = (dailyTrend || []).filter((item) => hasNumber(item?.consumption_kwh));
+  const dailyTrendCount = validDailyRecords.length;
+  const dailyAvgKwh = dailyTrendAvailable && dailyTrendCount > 0
+    ? validDailyRecords.reduce((sum, item) => sum + Number(item.consumption_kwh), 0) / dailyTrendCount
+    : null;
+  const dailyAverageDescription = !dailyTrendAvailable
+    ? 'Unavailable: historical trend data could not be retrieved'
+    : dailyTrendCount === 0
+      ? 'Unavailable: no daily energy totals were returned'
+      : `Historical reference for ${dateRange
+        ? `${formatDate(dateRange.start_date)} – ${formatDate(dateRange.end_date)}`
+        : 'the returned trend period'}; arithmetic average of ${dailyTrendCount} returned daily totals. Not an expected-energy baseline or normalized for production or operating conditions.`;
 
   const kpis = [
     {
       id: 'kpi-consumption',
       title: 'Total Energy Consumption',
-      value: formatNumber(totalKwh, 2),
+      value: summaryAvailable && totalKwh !== null ? formatNumber(totalKwh, 2) : 'Unavailable',
       unit: 'kWh',
-      sublabel: energySummary ? `${formatNumber(energySummary.distinct_hours)} operating hours logged` : null,
+      sublabel: !summaryAvailable
+        ? 'Energy summary request failed'
+        : totalKwh === null
+          ? 'Energy total unavailable'
+          : hasNumber(energySummary?.distinct_hours)
+          ? `${readingCountDescription} across ${formatNumber(energySummary.distinct_hours)} distinct hourly timestamps; readings are interval consumption, not cumulative`
+          : `${readingCountDescription}; distinct timestamp count unavailable`,
       accent: 'purple',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -27,10 +67,14 @@ export default function EnergyKpis({ energySummary, dailyTrendCount = 92 }) {
     },
     {
       id: 'kpi-cost',
-      title: 'Total Energy Cost',
-      value: formatCurrency(totalCost),
+      title: 'Dataset-Calculated Energy Cost',
+      value: summaryAvailable && totalCost !== null ? formatCurrency(totalCost) : 'Unavailable',
       unit: 'INR',
-      sublabel: 'Fixed tariff of ₹8.25 / kWh from contract',
+      sublabel: !summaryAvailable
+        ? 'Energy summary request failed'
+        : totalCost === null
+          ? 'Cost total unavailable'
+        : 'Calculated from the dataset; not verified against a current utility bill or contract',
       accent: 'blue',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -43,10 +87,14 @@ export default function EnergyKpis({ energySummary, dailyTrendCount = 92 }) {
     },
     {
       id: 'kpi-co2e',
-      title: 'Total Carbon Emissions',
-      value: formatNumber(totalCo2e, 2),
+      title: 'Estimated Carbon Emissions',
+      value: summaryAvailable && totalCo2e !== null ? formatNumber(totalCo2e, 2) : 'Unavailable',
       unit: 'kg CO₂e',
-      sublabel: 'Grid factor: 0.716 kg CO₂e / kWh',
+      sublabel: !summaryAvailable
+        ? 'Energy summary request failed'
+        : totalCo2e === null
+          ? 'CO₂e estimate unavailable'
+        : 'Calculated using a dataset emission factor; not a direct or verified emissions measurement',
       accent: 'cyan',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -59,10 +107,10 @@ export default function EnergyKpis({ energySummary, dailyTrendCount = 92 }) {
     },
     {
       id: 'kpi-readings',
-      title: 'Total Meter Readings',
-      value: formatNumber(totalReadings),
+      title: 'Returned Meter Readings',
+      value: summaryAvailable && totalReadings !== null ? formatNumber(totalReadings) : 'Unavailable',
       unit: 'readings',
-      sublabel: '5 submeters monitored continuously',
+      sublabel: summaryAvailable ? 'Count returned by the energy summary API' : 'Energy summary request failed',
       accent: 'navy',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -76,9 +124,13 @@ export default function EnergyKpis({ energySummary, dailyTrendCount = 92 }) {
     {
       id: 'kpi-pf',
       title: 'Average Power Factor',
-      value: avgPf ? avgPf.toFixed(4) : '—',
+      value: summaryAvailable && avgPf !== null ? avgPf.toFixed(4) : 'Unavailable',
       unit: 'PF',
-      sublabel: 'Regulatory limit ≥ 0.90 (100% compliant)',
+      sublabel: !summaryAvailable
+        ? 'Energy summary request failed'
+        : avgPf === null
+          ? 'Power factor average unavailable'
+          : 'See power-factor monitoring section for returned threshold details',
       accent: 'orange',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -88,10 +140,10 @@ export default function EnergyKpis({ energySummary, dailyTrendCount = 92 }) {
     },
     {
       id: 'kpi-daily-avg',
-      title: 'Daily Average Consumption',
-      value: formatNumber(dailyAvgKwh, 2),
+      title: 'Average Returned Daily Consumption',
+      value: dailyAvgKwh !== null ? formatNumber(dailyAvgKwh, 2) : 'Unavailable',
       unit: 'kWh / day',
-      sublabel: `Averaged across ${dailyTrendCount} monitored days`,
+      sublabel: dailyAverageDescription,
       accent: 'teal',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

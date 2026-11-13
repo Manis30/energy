@@ -86,11 +86,11 @@ export default function AnomalyKpis({ data }) {
     },
     {
       id: 'kpi-lpf',
-      title: 'Power Factor Violations',
+      title: 'Power Factor Exceptions',
       value: formatNumber(lowPfCount),
-      unit: 'violations',
-      sublabel: '100% compliant with 0.90 grid threshold',
-      accent: 'teal',
+      unit: 'readings',
+      sublabel: lowPfCount === 0 ? 'Zero readings below 0.90 cutoff' : `${formatNumber(lowPfCount)} readings below 0.90 cutoff`,
+      accent: lowPfCount === 0 ? 'teal' : 'danger',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>

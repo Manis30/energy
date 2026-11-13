@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.config import DEFAULT_POWER_FACTOR_THRESHOLD
+
 
 def _format_decimal(val: Any, decimals: int = 4) -> Optional[Decimal]:
     """Helper to convert float or string to rounded Decimal."""
@@ -54,6 +56,7 @@ def detect_energy_statistical_anomalies(
     end_time: Optional[datetime] = None,
     threshold_z: float = 3.0,
     min_observations: int = 10,
+    limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Detect hourly energy consumption anomalies using sample Z-score per (plant_id, meter_id).
@@ -62,6 +65,10 @@ def detect_energy_statistical_anomalies(
     Handles zero variance and insufficient observations safely.
     Does not compare unrelated meters or plants.
     """
+    if threshold_z <= 0:
+        raise ValueError("threshold_z must be positive")
+    if min_observations < 2:
+        raise ValueError("min_observations must be at least 2")
     params: Dict[str, Any] = {
         "threshold_z": float(threshold_z),
         "min_obs": int(min_observations),
@@ -176,7 +183,7 @@ def detect_energy_statistical_anomalies(
 
         explanation = (
             f"Measured hourly consumption of {val:.4f} kWh is {abs_z:.2f} standard deviations "
-            f"{direction} the historical mean ({mean_v:.4f} kWh, std dev: {std_v:.4f} kWh) "
+            f"{direction} the observed-period mean ({mean_v:.4f} kWh, std dev: {std_v:.4f} kWh) "
             f"for meter {mid} at plant {pid}."
         )
 
@@ -208,7 +215,7 @@ def detect_energy_statistical_anomalies(
         "zero_variance_groups": zero_variance_groups,
         "insufficient_observations_groups": insufficient_obs_groups,
         "meter_baselines": meter_baselines,
-        "anomalies": anomalies,
+        "anomalies": anomalies[:limit] if limit is not None and limit >= 0 else anomalies,
     }
 
 
@@ -221,28 +228,35 @@ def detect_rolling_baseline_anomalies(
     window_size: int = 24,
     min_observations: int = 12,
     threshold_z: float = 3.0,
+    limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Calculate rolling historical baselines and detect dynamic anomalies.
 
     Strict rules enforced:
-    - Strictly historical observations: ROWS BETWEEN window_size PRECEDING AND 1 PRECEDING.
+    - Uses observations within the preceding timestamp duration, excluding the current hour.
     - The current observation is NEVER included in its own baseline.
     - Explicit window_size (default 24 hours) and min_observations (default 12).
     - Partitioned strictly by (plant_id, meter_id) to avoid comparing unrelated meters or plants.
     - Zero variance and window start-up periods safely guarded.
     """
+    if threshold_z <= 0:
+        raise ValueError("threshold_z must be positive")
+    if min_observations < 2:
+        raise ValueError("min_observations must be at least 2")
+
     params: Dict[str, Any] = {
         "threshold_z": float(threshold_z),
         "min_obs": int(min_observations),
     }
 
     # CTE base query partitions by plant_id, meter_id
-    # Note: Window definition in PostgreSQL: ROWS BETWEEN N PRECEDING AND 1 PRECEDING
-    # The integer constant can be embedded directly into SQL after strict int validation
+    # Embed only the validated hour count in the interval literal.
     w_size = int(window_size)
     if w_size < 2:
         raise ValueError("window_size must be at least 2")
+    if min_observations > w_size:
+        raise ValueError("min_observations cannot exceed window_size")
 
     outer_filters: List[str] = []
     if plant_id:
@@ -274,7 +288,8 @@ def detect_rolling_baseline_anomalies(
             WINDOW w AS (
                 PARTITION BY plant_id, meter_id
                 ORDER BY timestamp
-                ROWS BETWEEN {w_size} PRECEDING AND 1 PRECEDING
+                RANGE BETWEEN INTERVAL '{w_size} hours' PRECEDING
+                          AND INTERVAL '1 microsecond' PRECEDING
             )
         )
         SELECT
@@ -306,8 +321,8 @@ def detect_rolling_baseline_anomalies(
 
         explanation = (
             f"Observation of {val:.4f} kWh at {ts} is {abs_z:.2f} standard deviations {direction} "
-            f"the preceding {obs_count}-hour rolling historical baseline "
-            f"(mean: {r_mean:.4f} kWh, std dev: {r_std:.4f} kWh) for meter {mid} at {pid}."
+            f"the preceding {w_size}-hour window using {obs_count} available observations "
+            f"(mean: {r_mean:.4f} kWh, std dev: {r_std:.4f} kWh) for meter {mid} at plant {pid}."
         )
 
         anomalies.append({
@@ -336,7 +351,7 @@ def detect_rolling_baseline_anomalies(
         "min_observations": min_observations,
         "threshold_z": threshold_z,
         "total_anomalies_detected": len(anomalies),
-        "anomalies": anomalies,
+        "anomalies": anomalies[:limit] if limit is not None and limit >= 0 else anomalies,
     }
 
 
@@ -346,15 +361,19 @@ def detect_low_power_factor_anomalies(
     meter_id: Optional[str] = None,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
-    threshold: Decimal = Decimal("0.90"),
+    threshold: Decimal = DEFAULT_POWER_FACTOR_THRESHOLD,
+    limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    Detect meter readings where power factor falls below the regulatory/compliance threshold.
+    Detect meter readings where power factor falls below the application monitoring threshold.
 
-    - Default threshold: 0.90 (standard industrial utility billing threshold).
+    - Default threshold: 0.90 (application-level engineering monitoring benchmark).
     - Reports occurrence count, timestamps, plant, meter, and measured power factor.
     - Does NOT claim financial penalties or savings without verified utility tariff rate structures.
     """
+    if threshold <= Decimal("0") or threshold > Decimal("1.0"):
+        raise ValueError("threshold must be between 0 and 1")
+
     params: Dict[str, Any] = {
         "threshold": float(threshold),
     }
@@ -396,7 +415,7 @@ def detect_low_power_factor_anomalies(
         sev = _classify_pf_severity(pf_dec, thresh_dec)
 
         explanation = (
-            f"Measured power factor of {pf_dec:.4f} at {ts} is below the compliance threshold "
+            f"Measured power factor of {pf_dec:.4f} at {ts} is below the application monitoring threshold "
             f"of {thresh_dec:.4f} (deficit: {deficit:.4f}) on meter {mid} at plant {pid}. "
             f"Active energy during hour: {kwh:.4f} kWh."
         )
@@ -425,7 +444,7 @@ def detect_low_power_factor_anomalies(
         "analysis_type": "low_power_factor",
         "threshold": float(threshold),
         "total_anomalies_detected": len(anomalies),
-        "anomalies": anomalies,
+        "anomalies": anomalies[:limit] if limit is not None and limit >= 0 else anomalies,
     }
 
 
@@ -435,18 +454,37 @@ def detect_zero_production_standby_anomalies(
     line_id: Optional[str] = None,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
+    limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Identify process-meter energy consumed during zero-output production hours.
 
     Key Engineering Protections:
+    - Verifies 1:1 line-to-process meter topology to prevent duplicate energy assignment.
     - Joins deterministic line-to-process meter mapping:
         SMT lines -> MTR-SMT
         FAL lines -> MTR-FAL
     - Keeps facility utility meters (HVAC, Compressor, Chiller) strictly separate.
+    - Filters facility utilities by plant, date range, and the exact zero-production timestamps.
     - Reports observed energy and stoppage duration.
     - Does NOT label energy as avoidable waste or claim savings without an engineering baseline.
     """
+    # 1. Topology check: verify single line per process area per plant to prevent silent energy duplication
+    topo_sql = """
+        SELECT plant_id, line_type, COUNT(*) as cnt
+        FROM dim_production_line
+        GROUP BY plant_id, line_type
+        HAVING COUNT(*) > 1
+    """
+    multi_line_violation = session.execute(text(topo_sql)).fetchall()
+    if multi_line_violation:
+        pid, ltype, cnt = multi_line_violation[0]
+        raise ValueError(
+            f"Multi-line topology limitation: Plant '{pid}' has {cnt} lines for '{ltype}', "
+            f"sharing a single process meter. Telemetry schema cannot allocate process standby energy "
+            f"without line-level sub-metering."
+        )
+
     params: Dict[str, Any] = {}
     where_parts = ["p.actual_qty = 0"]
 
@@ -483,6 +521,7 @@ def detect_zero_production_standby_anomalies(
         FROM fact_hourly_production p
         JOIN dim_production_line l ON p.line_id = l.line_id AND p.plant_id = l.plant_id
         JOIN fact_energy_meter_hourly e ON p.event_ts = e.timestamp AND p.plant_id = e.plant_id
+          AND e.consumption_kwh > 0
           AND (
             (p.line_id IN ('SMT-L1', 'SMT-L2') AND e.meter_id = 'MTR-SMT') OR
             (p.line_id IN ('FAL-L1', 'FAL-L2') AND e.meter_id = 'MTR-FAL')
@@ -528,8 +567,8 @@ def detect_zero_production_standby_anomalies(
         reason_counts[dt_reason] = reason_counts.get(dt_reason, 0) + 1
 
         explanation = (
-            f"Line {lid} ({area}) produced 0 units during hour {event_ts} with {dt_min} min "
-            f"stoppage ({dt_reason}). Process meter {mid} registered {kwh_dec:.4f} kWh of standby/idle energy."
+            f"Line {lid} ({area}) recorded 0 units during hour {event_ts} with reported downtime of "
+            f"{dt_min} min ({dt_reason}). Process meter {mid} registered {kwh_dec:.4f} kWh during that interval."
         )
 
         anomalies.append({
@@ -539,7 +578,7 @@ def detect_zero_production_standby_anomalies(
             "line_id": lid,
             "timestamp": event_ts.isoformat() if hasattr(event_ts, "isoformat") else str(event_ts),
             "actual_value": _format_decimal(kwh_dec, 4),
-            "baseline_value": Decimal("0.0000"),  # Baseline output was 0 units
+            "baseline_value": None,
             "deviation_score": float(round(kwh_dec, 4)),
             "severity": "MEDIUM",
             "explanation": explanation,
@@ -552,29 +591,43 @@ def detect_zero_production_standby_anomalies(
                 "product_id": prod_id,
                 "category": "STANDBY_POWER",
                 "avoidable_waste_claimed": False,
-                "note": "Standby draw during idle/downtime; not classified as avoidable waste without engineering baseline.",
+                "note": "Energy during a zero-output interval; no expected-energy baseline is available, and it is not classified as avoidable waste.",
             },
         })
 
-    # Query facility utility totals during these zero-production timestamps for complete segregation
-    utility_sql = """
-        SELECT
-            meter_id,
-            COUNT(*) as readings_count,
-            SUM(consumption_kwh) as utility_kwh
-        FROM fact_energy_meter_hourly
-        WHERE meter_id IN ('MTR-HVAC', 'MTR-COMPRESSOR', 'MTR-CHILLER')
-        GROUP BY meter_id
-        ORDER BY meter_id
-    """
-    util_rows = session.execute(text(utility_sql)).fetchall()
+    # Query facility utility totals strictly during these intended zero-production timestamps for complete segregation.
+    # Respects plant_id and date/time filters. If no zero-production events exist, utility totals are safely 0.
     utility_breakdown = {
-        r[0]: {
-            "readings": r[1],
-            "consumption_kwh": _format_decimal(r[2], 4),
+        m: {
+            "readings": 0,
+            "consumption_kwh": Decimal("0.0000"),
         }
-        for r in util_rows
+        for m in ("MTR-HVAC", "MTR-COMPRESSOR", "MTR-CHILLER")
     }
+
+    utility_sql = f"""
+        WITH zero_ts AS (
+            SELECT DISTINCT p.plant_id, p.event_ts AS timestamp
+            FROM fact_hourly_production p
+            {where_clause}
+        )
+        SELECT
+            e.meter_id,
+            COUNT(*) as readings_count,
+            SUM(e.consumption_kwh) as utility_kwh
+        FROM fact_energy_meter_hourly e
+        JOIN zero_ts z ON e.plant_id = z.plant_id AND e.timestamp = z.timestamp
+        WHERE e.meter_id IN ('MTR-HVAC', 'MTR-COMPRESSOR', 'MTR-CHILLER')
+        GROUP BY e.meter_id
+        ORDER BY e.meter_id
+    """
+    util_rows = session.execute(text(utility_sql), params).fetchall()
+    for r in util_rows:
+        if r[0] in utility_breakdown:
+            utility_breakdown[r[0]] = {
+                "readings": int(r[1]),
+                "consumption_kwh": _format_decimal(r[2], 4),
+            }
 
     return {
         "analysis_type": "zero_production_standby",
@@ -589,7 +642,7 @@ def detect_zero_production_standby_anomalies(
             "note": "Facility utilities (HVAC, Compressor, Chiller) provide baseline plant infrastructure and are excluded from process standby.",
             "overall_utility_totals": utility_breakdown,
         },
-        "anomalies": anomalies,
+        "anomalies": anomalies[:limit] if limit is not None and limit >= 0 else anomalies,
     }
 
 
@@ -600,7 +653,8 @@ def detect_all_anomalies(
     end_time: Optional[datetime] = None,
     z_threshold: float = 3.0,
     rolling_window_hours: int = 24,
-    pf_threshold: Decimal = Decimal("0.90"),
+    pf_threshold: Decimal = DEFAULT_POWER_FACTOR_THRESHOLD,
+    limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Run the unified deterministic anomaly suite across energy and production data.
@@ -611,6 +665,7 @@ def detect_all_anomalies(
         start_time=start_time,
         end_time=end_time,
         threshold_z=z_threshold,
+        limit=limit,
     )
     rolling_anomalies = detect_rolling_baseline_anomalies(
         session=session,
@@ -619,6 +674,7 @@ def detect_all_anomalies(
         end_time=end_time,
         window_size=rolling_window_hours,
         threshold_z=z_threshold,
+        limit=limit,
     )
     pf_anomalies = detect_low_power_factor_anomalies(
         session=session,
@@ -626,12 +682,14 @@ def detect_all_anomalies(
         start_time=start_time,
         end_time=end_time,
         threshold=pf_threshold,
+        limit=limit,
     )
     standby_anomalies = detect_zero_production_standby_anomalies(
         session=session,
         plant_id=plant_id,
         start_time=start_time,
         end_time=end_time,
+        limit=limit,
     )
 
     total_count = (

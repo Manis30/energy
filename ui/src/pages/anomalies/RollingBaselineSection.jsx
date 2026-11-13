@@ -141,7 +141,7 @@ export default function RollingBaselineSection({ rollingData }) {
                                 </div>
                               </div>
                               <div className="detail-panel-note">
-                                <strong>Operational Notice:</strong> This deviation reflects an abrupt change in electrical demand relative to the meter's recent 24-hour moving baseline. It does not constitute proof of machine failure or mechanical breakdown, but flags an operational transition (such as product changeover or thermal ramp-up) for verification.
+                                <strong>Operational Notice:</strong> This deviation reflects an abrupt change in hourly energy consumption relative to the meter's recent 24-hour moving baseline. It does not constitute proof of machine failure or mechanical breakdown, but flags an operational transition (such as product changeover or thermal ramp-up) for verification.
                               </div>
                             </div>
                           </td>

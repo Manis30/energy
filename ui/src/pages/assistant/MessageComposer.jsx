@@ -1,16 +1,23 @@
 import React, { useRef, useEffect } from 'react';
+import SuggestedQuestions from './SuggestedQuestions';
 
 const MAX_CHARS = 2000;
 
-export default function MessageComposer({ input, setInput, onSendMessage, disabled = false }) {
+export default function MessageComposer({
+  input,
+  setInput,
+  onSendMessage,
+  onSelectSuggestion,
+  disabled = false,
+}) {
   const textareaRef = useRef(null);
 
-  // Auto-resize textarea to content height (up to max 160px)
+  // Auto-resize textarea to content height (up to max 120px)
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
       const scrollHeight = textareaRef.current.scrollHeight;
-      textareaRef.current.style.height = `${Math.min(scrollHeight, 160)}px`;
+      textareaRef.current.style.height = `${Math.min(scrollHeight, 120)}px`;
     }
   }, [input]);
 
@@ -41,6 +48,7 @@ export default function MessageComposer({ input, setInput, onSendMessage, disabl
         <textarea
           ref={textareaRef}
           className="assistant-textarea"
+          aria-label="Message to AI Assistant"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -48,6 +56,7 @@ export default function MessageComposer({ input, setInput, onSendMessage, disabl
           rows={1}
           maxLength={MAX_CHARS}
           disabled={disabled}
+          aria-describedby="assistant-composer-hints"
         />
         <button
           type="button"
@@ -58,25 +67,40 @@ export default function MessageComposer({ input, setInput, onSendMessage, disabl
           title={isSendDisabled ? 'Type a question to send' : 'Send message (Enter)'}
         >
           {disabled ? (
-            <svg className="composer-spinner" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg className="composer-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
             </svg>
           ) : (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="22" y1="2" x2="11" y2="13"/>
               <polygon points="22 2 15 22 11 13 2 9 22 2"/>
             </svg>
           )}
         </button>
       </div>
-      <div className="assistant-composer-hints">
-        <span>Enter to send &bull; Shift + Enter for new line</span>
-        {showCharWarning && (
-          <span className={`char-counter ${trimmedLength >= MAX_CHARS ? 'limit' : ''}`}>
-            {trimmedLength} / {MAX_CHARS}
-          </span>
-        )}
-        <span className="assistant-safe-notice">Read-only SQL telemetry access &bull; Non-destructive</span>
+
+      <div className="assistant-composer-meta-row">
+        <div className="composer-meta-left">
+          <SuggestedQuestions
+            onSelectQuestion={onSelectSuggestion || onSendMessage}
+            disabled={disabled}
+          />
+        </div>
+        <div className="composer-meta-hints" id="assistant-composer-hints">
+          <span>Enter to send</span>
+          <span className="meta-dot">&bull;</span>
+          <span>Shift+Enter for newline</span>
+          <span className="meta-dot">&bull;</span>
+          <span className="assistant-safe-notice">Read-only SQL telemetry</span>
+          {showCharWarning && (
+            <>
+              <span className="meta-dot">&bull;</span>
+              <span className={`char-counter ${trimmedLength >= MAX_CHARS ? 'limit' : ''}`}>
+                {trimmedLength} / {MAX_CHARS}
+              </span>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

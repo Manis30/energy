@@ -2,13 +2,15 @@ import React from 'react';
 import { formatNumber, formatPercent } from '../../utils/formatters';
 
 export default function ProductionKpis({ summary }) {
-  const actualQty = summary ? summary.actual_qty : null;
-  const goodQty = summary ? summary.good_qty : null;
-  const rejectQty = summary ? summary.reject_qty : null;
-  const rejectRate = summary ? summary.reject_rate : null;
-  const reworkQty = summary ? summary.rework_qty : null;
-  const downtimeMin = summary ? summary.downtime_min : null;
-  const downtimeHours = downtimeMin !== null ? (downtimeMin / 60).toFixed(1) : null;
+  const actualQty = summary?.actual_qty ?? null;
+  const goodQty = summary?.good_qty ?? null;
+  const rejectQty = summary?.reject_qty ?? null;
+  const rejectRate = summary?.reject_rate ?? null;
+  const reworkQty = summary?.rework_qty ?? null;
+  const downtimeMin = summary?.downtime_min ?? null;
+  const downtimeHours = downtimeMin !== null && Number.isFinite(Number(downtimeMin))
+    ? (Number(downtimeMin) / 60).toFixed(1)
+    : null;
 
   const kpis = [
     {
@@ -16,7 +18,11 @@ export default function ProductionKpis({ summary }) {
       title: 'Actual Production Output',
       value: formatNumber(actualQty),
       unit: 'units',
-      sublabel: summary ? `Across ${formatNumber(summary.event_count)} hourly line logs` : null,
+      sublabel: actualQty == null
+        ? 'Actual output unavailable'
+        : summary?.event_count == null
+          ? 'Production event count unavailable'
+          : `Across ${formatNumber(summary.event_count)} hourly line logs`,
       accent: 'navy',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -31,7 +37,11 @@ export default function ProductionKpis({ summary }) {
       title: 'First-Pass Good Output',
       value: formatNumber(goodQty),
       unit: 'units',
-      sublabel: summary ? `${formatPercent(summary.good_rate)} first-pass quality yield` : null,
+      sublabel: goodQty == null
+        ? 'Good output unavailable'
+        : summary?.good_rate == null
+          ? 'First-pass yield unavailable'
+          : `${formatPercent(summary.good_rate)} reported first-pass yield`,
       accent: 'teal',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -42,10 +52,10 @@ export default function ProductionKpis({ summary }) {
     },
     {
       id: 'kpi-reject',
-      title: 'Defective / Scrap Output',
+      title: 'Rejected Production',
       value: formatNumber(rejectQty),
       unit: 'units',
-      sublabel: 'Parts failing in-line quality gates',
+      sublabel: rejectQty == null ? 'Rejected output unavailable' : 'Rejected production quantity',
       accent: 'orange',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -57,10 +67,10 @@ export default function ProductionKpis({ summary }) {
     },
     {
       id: 'kpi-reject-rate',
-      title: 'Defect / Scrap Rate',
-      value: formatPercent(rejectRate),
+      title: 'Rejected Output Rate',
+      value: rejectRate == null ? '—' : formatPercent(rejectRate),
       unit: 'of output',
-      sublabel: 'Calculated as reject / actual units',
+      sublabel: rejectRate == null ? 'Reject rate unavailable' : 'API-reported rate of actual output',
       accent: 'purple',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -75,7 +85,7 @@ export default function ProductionKpis({ summary }) {
       title: 'Rework Quantity',
       value: formatNumber(reworkQty),
       unit: 'units',
-      sublabel: 'Excluded from finished good counts',
+      sublabel: reworkQty == null ? 'Rework quantity unavailable' : 'Separate quantity; not added to actual or rejected output',
       accent: 'blue',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -91,7 +101,11 @@ export default function ProductionKpis({ summary }) {
       title: 'Line Stoppage Downtime',
       value: formatNumber(downtimeMin),
       unit: 'minutes',
-      sublabel: downtimeHours ? `Equivalent to ${formatNumber(downtimeHours, 1)} operating hours` : null,
+      sublabel: downtimeMin == null
+        ? 'Reported downtime unavailable'
+        : downtimeHours === null
+          ? 'Downtime duration unavailable'
+          : `${formatNumber(downtimeHours, 1)} hours (minutes ÷ 60)`,
       accent: 'cyan',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -103,23 +117,30 @@ export default function ProductionKpis({ summary }) {
   ];
 
   return (
-    <div className="kpi-grid">
-      {kpis.map((card) => (
-        <div key={card.id} className={`kpi-card accent-${card.accent}`}>
-          <div className="kpi-card-inner">
-            <div className="kpi-header">
-              <span className="kpi-title">{card.title}</span>
-              <div className="kpi-icon-wrap">{card.icon}</div>
-            </div>
-            <div className="kpi-body">
-              <span className="kpi-value">{card.value}</span>
-              {card.unit && <span className="kpi-unit">{card.unit}</span>}
-            </div>
-            {card.sublabel && <div className="kpi-sublabel">{card.sublabel}</div>}
-          </div>
+    <>
+      {!summary && (
+        <div className="chart-empty-state">
+          Production summary returned no metric values; this is unavailable data, not a zero-output result.
         </div>
-      ))}
-    </div>
+      )}
+      <div className="kpi-grid">
+        {kpis.map((card) => (
+          <div key={card.id} className={`kpi-card accent-${card.accent}`}>
+            <div className="kpi-card-inner">
+              <div className="kpi-header">
+                <span className="kpi-title">{card.title}</span>
+                <div className="kpi-icon-wrap">{card.icon}</div>
+              </div>
+              <div className="kpi-body">
+                <span className="kpi-value">{card.value}</span>
+                {card.unit && <span className="kpi-unit">{card.unit}</span>}
+              </div>
+              {card.sublabel && <div className="kpi-sublabel">{card.sublabel}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 

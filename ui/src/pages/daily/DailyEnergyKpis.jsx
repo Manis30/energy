@@ -2,17 +2,27 @@ import React from 'react';
 import { formatCurrency, formatDateTime, formatNumber } from '../../utils/formatters';
 
 export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
-  const totalKwh = energySummary ? Number(energySummary.total_consumption_kwh) : null;
-  const totalCost = energySummary ? Number(energySummary.total_cost_inr) : null;
-  const totalCo2e = energySummary ? Number(energySummary.total_co2e_kg) : null;
-  const avgPf = energySummary?.avg_power_factor ? Number(energySummary.avg_power_factor) : null;
-  const distinctHours = energySummary?.distinct_hours || 0;
-  const totalReadings = energySummary?.total_readings || 0;
+  const totalReadings = energySummary?.total_readings ?? null;
+  const hasEnergyReadingsCount = totalReadings !== null && Number.isFinite(Number(totalReadings));
+  const hasEnergyReadings = hasEnergyReadingsCount && Number(totalReadings) > 0;
+  const noEnergyReadings = hasEnergyReadingsCount && Number(totalReadings) === 0;
+  const totalKwh = hasEnergyReadings ? Number(energySummary.total_consumption_kwh) : null;
+  const totalCost = hasEnergyReadings ? Number(energySummary.total_cost_inr) : null;
+  const totalCo2e = hasEnergyReadings ? Number(energySummary.total_co2e_kg) : null;
+  const avgPf = hasEnergyReadings && energySummary?.avg_power_factor != null
+    ? Number(energySummary.avg_power_factor)
+    : null;
+  const distinctHours = energySummary?.distinct_hours ?? null;
   const peak = energySummary?.peak_reading;
 
-  const lowPfEvents = powerFactorData?.low_pf_events_count ?? 0;
-  const minPf = powerFactorData?.min_power_factor ? Number(powerFactorData.min_power_factor).toFixed(4) : null;
-  const maxPf = powerFactorData?.max_power_factor ? Number(powerFactorData.max_power_factor).toFixed(4) : null;
+  const pfReadingsCount = powerFactorData?.total_readings;
+  const hasPfReadings = pfReadingsCount != null && Number.isFinite(Number(pfReadingsCount))
+    && Number(pfReadingsCount) > 0;
+  const lowPfEvents = hasPfReadings && powerFactorData?.low_pf_events_count != null
+    ? powerFactorData.low_pf_events_count
+    : null;
+  const minPf = powerFactorData?.min_power_factor != null ? Number(powerFactorData.min_power_factor).toFixed(4) : null;
+  const maxPf = powerFactorData?.max_power_factor != null ? Number(powerFactorData.max_power_factor).toFixed(4) : null;
 
   const kpis = [
     {
@@ -20,7 +30,12 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
       title: 'Total Energy Consumption',
       value: formatNumber(totalKwh, 2),
       unit: 'kWh',
-      sublabel: `${distinctHours} operating hours • ${totalReadings} telemetry readings`,
+      sublabel: noEnergyReadings
+        ? 'No energy meter readings returned'
+        : hasEnergyReadingsCount
+          ? `${formatNumber(distinctHours)} distinct timestamps • ${formatNumber(totalReadings)} meter readings`
+          : 'Energy reading count unavailable',
+      kind: hasEnergyReadings ? 'Calculated' : 'Unavailable',
       accent: 'purple',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -33,7 +48,8 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
       title: 'Daily Energy Spend',
       value: formatCurrency(totalCost),
       unit: 'INR',
-      sublabel: 'Contract tariff ₹8.25 / kWh applied deterministically',
+      sublabel: hasEnergyReadings ? 'Dataset tariff ₹8.25 / kWh applied deterministically' : 'No cost total available without energy readings',
+      kind: hasEnergyReadings ? 'Calculated' : 'Unavailable',
       accent: 'blue',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -49,7 +65,10 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
       title: 'Carbon Emissions',
       value: formatNumber(totalCo2e, 2),
       unit: 'kg CO₂e',
-      sublabel: `${(Number(totalCo2e || 0) / 1000).toFixed(2)} MT CO₂e • Dataset emissions factor ~0.716 kg CO₂e/kWh`,
+      sublabel: hasEnergyReadings
+        ? `${(Number(totalCo2e || 0) / 1000).toFixed(2)} MT CO₂e • Dataset emissions factor ~0.716 kg CO₂e/kWh`
+        : 'No emissions total available without energy readings',
+      kind: hasEnergyReadings ? 'Calculated' : 'Unavailable',
       accent: 'cyan',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -63,11 +82,16 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
     {
       id: 'daily-kpi-pf',
       title: 'Average Power Factor',
-      value: avgPf ? avgPf.toFixed(4) : '—',
+      value: avgPf !== null ? avgPf.toFixed(4) : '—',
       unit: 'PF',
-      sublabel: minPf && maxPf ? `Min: ${minPf} • Max: ${maxPf} (Configured threshold ≥ 0.90)` : 'Configured threshold ≥ 0.90',
-      accent: lowPfEvents > 0 ? 'danger' : 'orange',
-      badge: lowPfEvents === 0 ? 'Within configured threshold' : `${lowPfEvents} Under-threshold Events`,
+      sublabel: minPf !== null && maxPf !== null ? `Min: ${minPf} • Max: ${maxPf} (Configured threshold ≥ 0.90)` : 'Configured threshold ≥ 0.90',
+      accent: lowPfEvents === null ? 'orange' : lowPfEvents > 0 ? 'danger' : 'orange',
+      badge: lowPfEvents === null
+        ? 'Unavailable'
+        : lowPfEvents === 0
+          ? 'No readings below threshold'
+          : `${lowPfEvents} Under-threshold Events`,
+      kind: avgPf !== null ? 'Calculated' : 'Unavailable',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
@@ -83,7 +107,10 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
           <div key={card.id} className={`kpi-card accent-${card.accent}`}>
             <div className="kpi-card-inner">
               <div className="kpi-header">
-                <span className="kpi-title">{card.title}</span>
+                <span className="kpi-title">
+                  {card.title}
+                  <span className={`daily-value-kind ${card.kind === 'Unavailable' ? 'unavailable' : ''}`}>{card.kind}</span>
+                </span>
                 <div className="kpi-icon-wrap">{card.icon}</div>
               </div>
               <div className="kpi-body">
@@ -93,7 +120,7 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
               <div className="kpi-footer-row">
                 {card.sublabel && <span className="kpi-sublabel">{card.sublabel}</span>}
                 {card.badge && (
-                  <span className={`kpi-mini-badge ${lowPfEvents === 0 ? 'status-ok' : 'status-alert'}`}>
+                  <span className={`kpi-mini-badge ${lowPfEvents === null ? '' : lowPfEvents === 0 ? 'status-ok' : 'status-alert'}`}>
                     {card.badge}
                   </span>
                 )}
@@ -106,7 +133,7 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
       {peak && (
         <div className="daily-peak-strip">
           <div className="peak-strip-left">
-            <span className="peak-tag">Peak Hourly Energy Consumption</span>
+            <span className="peak-tag">Peak Hourly Energy Consumption <span className="daily-value-kind">Measured reading</span></span>
             <span className="peak-info">
               <strong>{formatNumber(peak.consumption_kwh, 2)} kWh</strong> recorded by meter <strong>{peak.meter_id}</strong> ({peak.plant_id}) at <strong>{formatDateTime(peak.timestamp)}</strong>
             </span>

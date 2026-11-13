@@ -7,10 +7,13 @@ from fastapi.responses import JSONResponse
 
 from app.api.anomalies import router as anomalies_router
 from app.api.assistant import router as assistant_router
+from app.api.daily_reports import router as daily_reports_router
 from app.api.energy import router as energy_router
 from app.api.energy_intensity import router as energy_intensity_router
 from app.api.production import router as production_router
 from app.config import get_settings
+from app.db import get_engine
+from app.models.upload_history import UploadHistory
 from app.services.agent.domo_client import close_domo_client
 
 settings = get_settings()
@@ -19,6 +22,14 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan context manager handling resource initialization and cleanup."""
+    # Ensure upload history audit table exists
+    engine = get_engine()
+    if engine is not None:
+        try:
+            UploadHistory.__table__.create(engine, checkfirst=True)
+        except Exception:
+            pass
+
     yield
     # Clean up global asynchronous clients on shutdown
     await close_domo_client()
@@ -66,7 +77,8 @@ async def health_check() -> dict:
     }
 
 
-# Include analytical, anomaly, and assistant routers
+# Include analytical, anomaly, assistant, and daily report ingestion routers
+app.include_router(daily_reports_router, prefix="/api/daily-reports", tags=["Daily Reports Ingestion"])
 app.include_router(assistant_router, prefix="/api/assistant", tags=["AI Assistant"])
 app.include_router(energy_router, prefix="/api/energy", tags=["Energy Analytics"])
 app.include_router(production_router, prefix="/api/production", tags=["Production Analytics"])

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db_session
+from app.config import DEFAULT_POWER_FACTOR_THRESHOLD
 from app.schemas.common import validate_date_range
 from app.schemas.energy import (
     AreaEnergyItem,
@@ -141,14 +142,14 @@ def read_energy_daily_trend(
 @router.get(
     "/power-factor",
     response_model=PowerFactorSummaryResponse,
-    summary="Get power factor summary and compliance monitoring",
-    description="Evaluates power factor distribution, mean, min, max, and occurrences below compliance threshold.",
+    summary="Get power factor summary and application monitoring",
+    description="Evaluates power factor distribution, energy-weighted mean, min, max, and occurrences below monitoring threshold.",
 )
 def read_power_factor_summary(
     plant_id: Optional[str] = Query(None, description="Plant ID filter"),
     start_date: Optional[date] = Query(None, description="Start date filter"),
     end_date: Optional[date] = Query(None, description="End date filter"),
-    threshold: Decimal = Query(Decimal("0.90"), description="Regulatory power factor compliance threshold"),
+    threshold: Decimal = Query(DEFAULT_POWER_FACTOR_THRESHOLD, ge=Decimal("0.1"), le=Decimal("1.0"), description="Application power factor monitoring threshold (default 0.90)"),
     db: Session = Depends(get_db_session),
 ) -> PowerFactorSummaryResponse:
     validate_date_range(start_date, end_date)
