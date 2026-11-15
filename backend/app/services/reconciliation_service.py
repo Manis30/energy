@@ -336,6 +336,7 @@ def _check_timestamp_alignment(
     # Query distinct active production timestamps (actual_qty > 0)
     plant_clause_energy = "AND plant_id = :plant_id" if plant_id else ""
     plant_clause_prod = "AND plant_id = :plant_id" if plant_id else ""
+    plant_clause_unaligned = "AND p.plant_id = :plant_id" if plant_id else ""
     params = {"start_date": start_date, "end_date": end_date}
     if plant_id:
         params["plant_id"] = plant_id
@@ -352,7 +353,7 @@ def _check_timestamp_alignment(
         WHERE p.event_date >= :start_date
           AND p.event_date <= :end_date
           AND p.actual_qty > 0
-          {plant_clause_prod}
+          {plant_clause_unaligned}
           AND e.timestamp IS NULL
         GROUP BY p.plant_id, p.event_ts
         ORDER BY p.plant_id, p.event_ts
