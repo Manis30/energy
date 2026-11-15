@@ -4,6 +4,8 @@
 
 import { apiRequest } from './apiClient';
 
+const pendingCoverageRequests = new Map();
+
 export const dailyReportsApi = {
   /**
    * Inspect an uploaded file (metadata, sheet names, detected format).
@@ -88,6 +90,29 @@ export const dailyReportsApi = {
     if (reportingDate) params.reporting_date = reportingDate;
 
     return apiRequest('/daily-reports/history', { params });
+  },
+
+  /**
+   * Get persisted energy and production coverage for an inclusive date range.
+   * @param {object} params
+   * @param {string} params.start_date - YYYY-MM-DD
+   * @param {string} params.end_date - YYYY-MM-DD
+   * @returns {Promise<any>}
+   */
+  async getCoverage(params) {
+    const requestKey = `${params?.start_date || ''}|${params?.end_date || ''}`;
+    const pendingRequest = pendingCoverageRequests.get(requestKey);
+    if (pendingRequest) return pendingRequest;
+
+    const request = apiRequest('/daily-reports/coverage', { params });
+    pendingCoverageRequests.set(requestKey, request);
+    try {
+      return await request;
+    } finally {
+      if (pendingCoverageRequests.get(requestKey) === request) {
+        pendingCoverageRequests.delete(requestKey);
+      }
+    }
   },
 
   /**

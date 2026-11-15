@@ -76,7 +76,7 @@ export default function IngestionActionSection({
               <span className="mode-badge-warn">Audit Tracked</span>
             </div>
             <div className="mode-desc">
-              Explicit correction process. Atomically replaces existing records for reporting date {confirmedDate || 'target date'} scoped strictly to the plants, meters, or lines present in this report.
+              Explicit correction process. Replaces ONLY existing records matching the incoming {summary.report_type === 'ENERGY' ? '(timestamp, plant, meter)' : '(event_ts, plant, line)'} keys. Hours and entities not present in this upload remain safely preserved.
             </div>
           </div>
         </div>
@@ -147,10 +147,15 @@ export default function IngestionActionSection({
                   <span>Incremental Import — Existing records will be preserved; duplicates skipped.</span>
                 ) : (
                   <span style={{ color: 'var(--status-warning)' }}>
-                    Historical Correction — Existing records for this date matching the uploaded plants, meters, or lines will be replaced!
+                    Historical Correction — Only existing records matching the specific incoming business keys ({summary.report_type === 'ENERGY' ? 'timestamp, plant, meter' : 'event timestamp, plant, line'}) will be replaced! Other hours and entities on this date are preserved.
                   </span>
                 )}
               </div>
+              {summary.coverage_status === 'PARTIAL' && (
+                <div style={{ marginTop: '0.75rem', padding: '0.6rem 0.8rem', backgroundColor: 'rgba(245, 158, 11, 0.1)', border: '1px solid var(--status-warning)', borderRadius: '6px', fontSize: '0.82rem', color: 'var(--status-warning)' }}>
+                  <strong>Partial Day Coverage Warning:</strong> This report covers {summary.completeness?.hours_reported || 0} of 24 hours ({summary.missing_hours?.length || 0} hours missing). Resulting analytics will represent partial-day telemetry.
+                </div>
+              )}
               <p style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
                 This operation is atomic and logged in the platform audit trail.
               </p>
@@ -193,10 +198,18 @@ export default function IngestionActionSection({
               <span>Upload ID: <code>{ingestResult.upload_id}</code></span>
               <span>Reporting Date: <strong>{formatDate(ingestResult.reporting_date)}</strong></span>
               <span>Imported: <strong>{ingestResult.imported_rows} rows</strong></span>
+              {ingestResult.replaced_rows > 0 && (
+                <span>Replaced: <strong>{ingestResult.replaced_rows} records</strong></span>
+              )}
               {ingestResult.duplicate_rows > 0 && (
                 <span>Duplicates: <strong>{ingestResult.duplicate_rows} rows</strong></span>
               )}
             </div>
+            {ingestResult.affected_scope && (
+              <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                Scoped to {ingestResult.affected_scope.plants?.length || 0} plant(s), {ingestResult.affected_scope.meters?.length || ingestResult.affected_scope.lines?.length || 0} {ingestResult.report_type === 'ENERGY' ? 'meters' : 'lines'}, and {ingestResult.affected_scope.hours_covered?.length || 0} operating hours.
+              </div>
+            )}
             <div className="success-action-row">
               <button
                 type="button"

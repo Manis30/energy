@@ -1,0 +1,167 @@
+.daily-analysis-page .daily-coverage-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin-bottom: 0.85rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.daily-analysis-page .daily-coverage-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.8rem;
+}
+
+.daily-analysis-page .daily-coverage-heading h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.86rem;
+}
+
+.daily-analysis-page .daily-coverage-heading p,
+.daily-analysis-page .daily-coverage-empty,
+.daily-analysis-page .daily-coverage-note {
+  margin: 0.2rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.daily-analysis-page .daily-coverage-state,
+.daily-analysis-page .daily-coverage-status {
+  display: inline-flex;
+  width: fit-content;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 0.63rem;
+  font-weight: 600;
+}
+
+.daily-analysis-page .daily-coverage-status.partial_observed {
+  color: var(--status-warning);
+}
+
+.daily-analysis-page .daily-coverage-status.all_registered_observed {
+  color: var(--status-success, #10b981);
+}
+
+.daily-analysis-page .daily-coverage-status.no_records,
+.daily-analysis-page .daily-coverage-status.undetermined {
+  color: var(--text-muted);
+}
+
+.daily-analysis-page .daily-coverage-meter-catalog {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-subtle);
+  color: var(--text-secondary);
+  font-size: 0.67rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.daily-analysis-page .daily-coverage-meter-catalog strong {
+  color: var(--text-primary);
+}
+
+.daily-analysis-page .daily-coverage-meter-catalog span {
+  color: var(--text-muted);
+}
+
+.daily-analysis-page .daily-coverage-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.daily-analysis-page .daily-coverage-stream h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.76rem;
+}
+
+.daily-analysis-page .daily-coverage-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.daily-analysis-page .daily-coverage-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+}
+
+.daily-analysis-page .daily-coverage-table th,
+.daily-analysis-page .daily-coverage-table td {
+  min-width: 105px;
+  padding: 0.45rem 0.55rem;
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+}
+
+.daily-analysis-page .daily-coverage-table th {
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.daily-analysis-page .daily-coverage-table td strong {
+  color: var(--text-primary);
+}
+
+.daily-analysis-page .daily-coverage-subvalue {
+  display: block;
+  margin-top: 0.18rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.daily-analysis-page .daily-coverage-note {
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-muted);
+}
+
+.daily-analysis-page .daily-coverage-error {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--status-danger);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
+.daily-analysis-page .daily-coverage-error button {
+  flex-shrink: 0;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-subtle);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+}
+
+@media (max-width: 700px) {
+  .daily-analysis-page .daily-coverage-heading,
+  .daily-analysis-page .daily-coverage-error {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

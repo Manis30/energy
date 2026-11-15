@@ -132,6 +132,54 @@ export default function ValidationReviewSection({
         )}
       </div>
 
+      {/* Reporting Coverage & Completeness Card */}
+      <div className={`reports-coverage-box ${summary.coverage_status === 'PARTIAL' ? 'coverage-partial' : 'coverage-complete'}`}>
+        <div className="coverage-header">
+          <div className="coverage-title-row">
+            <span className={`coverage-badge ${summary.coverage_status === 'PARTIAL' ? 'badge-warning' : 'badge-success'}`}>
+              {summary.coverage_status === 'PARTIAL' ? 'Partial Reporting Coverage' : 'Complete 24-Hour Coverage'}
+            </span>
+            <span className="coverage-subtitle">
+              {summary.coverage_status === 'PARTIAL'
+                ? `Operational Telemetry: ${summary.completeness?.hours_reported || 0} of 24 hourly intervals reported (${summary.missing_hours?.length || 0} hours unrecorded)`
+                : 'All 24 hourly operating intervals and registered master entities are represented'}
+            </span>
+          </div>
+        </div>
+
+        {summary.coverage_status === 'PARTIAL' && (
+          <div className="coverage-details">
+            {summary.missing_hours?.length > 0 && (
+              <div className="coverage-item">
+                <strong>Missing Hourly Intervals:</strong>{' '}
+                <span>
+                  {summary.missing_hours.map((h) => `${String(h).padStart(2, '0')}:00`).join(', ')}
+                </span>
+              </div>
+            )}
+            {summary.missing_entities?.length > 0 && (
+              <div className="coverage-item">
+                <strong>Missing Expected {summary.report_type === 'ENERGY' ? 'Submeters' : 'Production Lines'}:</strong>{' '}
+                <span>{summary.missing_entities.join(', ')}</span>
+              </div>
+            )}
+            {summary.limitations?.length > 0 && (
+              <div className="coverage-limitations">
+                <strong>Analytics Impact &amp; Limitations:</strong>
+                <ul>
+                  {summary.limitations.map((lim, idx) => (
+                    <li key={idx}>{lim}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="coverage-note">
+              <em>Coverage Distinction:</em> Incomplete reporting coverage represents unrecorded operating intervals, distinct from rejected rows ({summary.rejected_rows}) which failed schema/range checks.
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Sub-Tabs: Validation Errors vs Data Preview */}
       <div className="reports-subtab-bar">
         <button
