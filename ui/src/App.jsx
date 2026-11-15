@@ -12,9 +12,11 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const EnergyAnalytics = lazy(() => import('./pages/EnergyAnalytics'));
 const ProductionAnalytics = lazy(() => import('./pages/ProductionAnalytics'));
 const AnomalyMonitoring = lazy(() => import('./pages/AnomalyMonitoring'));
+const FindingsCentre = lazy(() => import('./pages/FindingsCentre'));
 const RecommendationsActions = lazy(() => import('./pages/RecommendationsActions'));
 const DailyAnalysis = lazy(() => import('./pages/DailyAnalysis'));
 const DailyReports = lazy(() => import('./pages/DailyReports'));
+const DataConnectors = lazy(() => import('./pages/DataConnectors'));
 const AIAssistant = lazy(() => import('./pages/AIAssistant'));
 
 export default function App() {
@@ -86,9 +88,12 @@ export default function App() {
               <Route path="/energy-analytics" element={<EnergyAnalytics />} />
               <Route path="/production-analytics" element={<ProductionAnalytics />} />
               <Route path="/anomalies" element={<AnomalyMonitoring />} />
+              <Route path="/findings" element={<FindingsCentre />} />
               <Route path="/recommendations-actions" element={<RecommendationsActions />} />
               <Route path="/daily-analysis" element={<DailyAnalysis />} />
               <Route path="/daily-reports" element={<DailyReports />} />
+              <Route path="/data-connectors" element={<DataConnectors />} />
+              <Route path="/connectors" element={<Navigate to="/data-connectors" replace />} />
               <Route
                 path="/ai-assistant"
                 element={<AIAssistant theme={theme} onToggleTheme={toggleTheme} />}

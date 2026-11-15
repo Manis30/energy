@@ -10,9 +10,17 @@ from app.api.assistant import router as assistant_router
 from app.api.daily_reports import router as daily_reports_router
 from app.api.energy import router as energy_router
 from app.api.energy_intensity import router as energy_intensity_router
+from app.api.findings import router as findings_router
 from app.api.production import router as production_router
+from app.api.reconciliation import router as reconciliation_router
+from app.api.connectors import router as connectors_router
+from app.api.recommendations import (
+    actions_router,
+    recommendations_router,
+)
 from app.config import get_settings
 from app.db import get_engine
+from app.models.findings import FindingAuditLog, FindingOccurrence, OperationalFinding
 from app.models.upload_history import UploadHistory
 from app.services.agent.domo_client import close_domo_client
 
@@ -21,12 +29,22 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan context manager handling resource initialization and cleanup."""
-    # Ensure upload history audit table exists
+    """
+    Application lifespan context manager handling resource initialization and cleanup.
+    
+    Schema Management Policy:
+    - Alembic migrations ('alembic upgrade head') are the authoritative schema deployment path.
+    - Startup table creation below acts as a development fallback only (using checkfirst=True)
+      and never replaces or bypasses formal Alembic migrations in deployed environments.
+    """
     engine = get_engine()
     if engine is not None:
         try:
-            UploadHistory.__table__.create(engine, checkfirst=True)
+            if settings.APP_ENV == "development":
+                UploadHistory.__table__.create(engine, checkfirst=True)
+                OperationalFinding.__table__.create(engine, checkfirst=True)
+                FindingOccurrence.__table__.create(engine, checkfirst=True)
+                FindingAuditLog.__table__.create(engine, checkfirst=True)
         except Exception:
             pass
 
@@ -65,7 +83,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
     )
 
 
-# Health check
+# Health check endpoint
 @app.get("/api/health", tags=["System"])
 async def health_check() -> dict:
     """Health check endpoint confirming backend status."""
@@ -77,10 +95,18 @@ async def health_check() -> dict:
     }
 
 
-# Include analytical, anomaly, assistant, and daily report ingestion routers
+# Include analytical, anomaly, assistant, daily report ingestion, and findings routers
 app.include_router(daily_reports_router, prefix="/api/daily-reports", tags=["Daily Reports Ingestion"])
 app.include_router(assistant_router, prefix="/api/assistant", tags=["AI Assistant"])
 app.include_router(energy_router, prefix="/api/energy", tags=["Energy Analytics"])
 app.include_router(production_router, prefix="/api/production", tags=["Production Analytics"])
 app.include_router(energy_intensity_router, prefix="/api/energy-intensity", tags=["Energy Intensity & SEC"])
 app.include_router(anomalies_router, prefix="/api/anomalies", tags=["Deterministic Anomaly Detection"])
+app.include_router(findings_router, prefix="/api/findings", tags=["Operational Findings Lifecycle"])
+app.include_router(findings_router, prefix="/api/v1/findings", tags=["Operational Findings Lifecycle"])
+app.include_router(recommendations_router, prefix="/api/recommendations", tags=["Operational Recommendations"])
+app.include_router(recommendations_router, prefix="/api/v1/recommendations", tags=["Operational Recommendations"])
+app.include_router(actions_router, prefix="/api/actions", tags=["Corrective Actions"])
+app.include_router(actions_router, prefix="/api/v1/actions", tags=["Corrective Actions"])
+app.include_router(reconciliation_router, prefix="/api/reconciliation", tags=["Cross-Source Data Reconciliation"])
+app.include_router(connectors_router, prefix="/api/connectors", tags=["Data Connectors"])

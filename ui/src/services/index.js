@@ -9,5 +9,8 @@ export * from './energyIntensityApi';
 export * from './anomalyApi';
 export * from './assistantApi';
 export * from './dailyReportsApi';
+export * from './findingsApi';
+export * from './recommendationsApi';
+export * from './connectorsApi';
 export { checkBackendHealth, default } from './api';
 
