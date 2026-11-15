@@ -32,8 +32,8 @@ router = APIRouter()
     response_model=StatisticalAnomaliesResponse,
     summary="Detect energy statistical anomalies via Z-score",
     description=(
-        "Identifies extreme hourly energy consumption readings using sample Z-score per (plant_id, meter_id). "
-        "Safely handles zero variance and small samples."
+        "Identifies extreme hourly energy consumption readings using sample Z-score per (plant_id, meter_id) "
+        "calculated against a separate strictly historical baseline window. Safely handles zero variance and small samples."
     ),
 )
 def read_statistical_anomalies(
@@ -41,6 +41,8 @@ def read_statistical_anomalies(
     meter_id: Optional[str] = Query(None, description="Meter ID filter, e.g. 'MTR-SMT'"),
     start_time: Optional[datetime] = Query(None, description="Start timestamp filter (ISO 8601)"),
     end_time: Optional[datetime] = Query(None, description="End timestamp filter (ISO 8601)"),
+    evaluation_scope: str = Query("latest_day", pattern="^(latest_day|historical)$", description="Scope of evaluation window when start_time is omitted: 'latest_day' (default, evaluates most recent 24h) or 'historical' (evaluates full period with prior baseline)"),
+    lookback_days: int = Query(30, ge=1, le=90, description="Historical baseline lookback period in days (default 30, range 1-90)"),
     threshold_z: float = Query(3.0, ge=0.1, le=15.0, description="Absolute Z-score threshold for anomaly flag (default 3.0, range 0.1-15.0)"),
     min_observations: int = Query(10, ge=2, le=50000, description="Minimum observations required before computing Z-score (min 2)"),
     limit: Optional[int] = Query(None, ge=1, le=5000, description="Optional maximum number of anomaly records to return"),
@@ -54,9 +56,11 @@ def read_statistical_anomalies(
             meter_id=meter_id,
             start_time=start_time,
             end_time=end_time,
+            lookback_days=lookback_days,
             threshold_z=threshold_z,
             min_observations=min_observations,
             limit=limit,
+            evaluation_scope=evaluation_scope,
         )
         return StatisticalAnomaliesResponse(**data)
     except ValueError as ve:
@@ -85,6 +89,7 @@ def read_rolling_anomalies(
     meter_id: Optional[str] = Query(None, description="Meter ID filter"),
     start_time: Optional[datetime] = Query(None, description="Start timestamp filter"),
     end_time: Optional[datetime] = Query(None, description="End timestamp filter"),
+    evaluation_scope: str = Query("latest_day", pattern="^(latest_day|historical)$", description="Scope of evaluation window when start_time is omitted: 'latest_day' (default, evaluates most recent 24h) or 'historical' (evaluates full period with prior baseline)"),
     window_size: int = Query(24, ge=2, le=720, description="Rolling window size in hours (default 24, range 2-720)"),
     min_observations: int = Query(12, ge=2, le=720, description="Minimum historical observations in window (default 12, range 2-720)"),
     threshold_z: float = Query(3.0, ge=0.1, le=15.0, description="Z-score threshold for rolling deviation (default 3.0, range 0.1-15.0)"),
@@ -108,6 +113,7 @@ def read_rolling_anomalies(
             min_observations=min_observations,
             threshold_z=threshold_z,
             limit=limit,
+            evaluation_scope=evaluation_scope,
         )
         return RollingAnomaliesResponse(**data)
     except ValueError as ve:
@@ -212,9 +218,12 @@ def read_zero_production_standby_anomalies(
 )
 def read_all_anomalies(
     plant_id: Optional[str] = Query(None, description="Plant ID filter"),
+    meter_id: Optional[str] = Query(None, description="Meter ID filter, e.g. 'MTR-SMT'"),
     start_time: Optional[datetime] = Query(None, description="Start timestamp filter"),
     end_time: Optional[datetime] = Query(None, description="End timestamp filter"),
+    evaluation_scope: str = Query("latest_day", pattern="^(latest_day|historical)$", description="Scope of evaluation window when start_time is omitted: 'latest_day' (default, evaluates most recent 24h) or 'historical' (evaluates full period with prior baseline)"),
     z_threshold: float = Query(3.0, ge=0.1, le=15.0, description="Z-score threshold for statistical anomalies (range 0.1-15.0)"),
+    lookback_days: int = Query(30, ge=1, le=90, description="Historical baseline lookback period in days for statistical anomalies (default 30, range 1-90)"),
     rolling_window_hours: int = Query(24, ge=2, le=720, description="Window size in hours for rolling baseline (range 2-720)"),
     pf_threshold: Decimal = Query(DEFAULT_POWER_FACTOR_THRESHOLD, ge=Decimal("0.1"), le=Decimal("1.0"), description="Application threshold for low power factor detection (range 0.1-1.0)"),
     limit: Optional[int] = Query(None, ge=1, le=5000, description="Optional maximum number of anomaly records to return per detector"),
@@ -225,12 +234,15 @@ def read_all_anomalies(
         data = detect_all_anomalies(
             session=db,
             plant_id=plant_id,
+            meter_id=meter_id,
             start_time=start_time,
             end_time=end_time,
             z_threshold=z_threshold,
+            lookback_days=lookback_days,
             rolling_window_hours=rolling_window_hours,
             pf_threshold=pf_threshold,
             limit=limit,
+            evaluation_scope=evaluation_scope,
         )
         return UnifiedAnomaliesResponse(**data)
     except ValueError as ve:
