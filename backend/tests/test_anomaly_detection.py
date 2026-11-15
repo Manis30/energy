@@ -41,11 +41,13 @@ class TestAnomalyDetectionServices(unittest.TestCase):
         self.session.close()
 
     def test_energy_statistical_anomalies_detection(self):
-        """Verify Z-score anomaly detection meets output contract and thresholds."""
+        """Verify Z-score anomaly detection meets output contract and thresholds under historical and latest-day scopes."""
+        # 1. Historical evaluation scope across the multi-month dataset
         res = detect_energy_statistical_anomalies(
             self.session,
             threshold_z=3.0,
             min_observations=10,
+            evaluation_scope="historical",
         )
 
         self.assertEqual(res["analysis_type"], "statistical_zscore")
@@ -54,7 +56,7 @@ class TestAnomalyDetectionServices(unittest.TestCase):
         self.assertEqual(len(res["zero_variance_groups"]), 0)
         self.assertEqual(len(res["insufficient_observations_groups"]), 0)
 
-        # There are statistically rare extreme hourly readings across 22,080 rows
+        # There are statistically rare extreme hourly readings across the historical evaluation window
         self.assertGreater(res["total_anomalies_detected"], 0)
         self.assertLessEqual(res["total_anomalies_detected"], 100)
 
@@ -70,7 +72,17 @@ class TestAnomalyDetectionServices(unittest.TestCase):
         self.assertIn(top["severity"], ["HIGH", "CRITICAL"])
         self.assertTrue(len(top["explanation"]) > 20)
         self.assertIn("sample_size", top["context_flags"])
-        self.assertEqual(top["context_flags"]["sample_size"], 2208)
+        self.assertEqual(top["context_flags"]["sample_size"], 720)  # 30 days * 24 hours baseline
+
+        # 2. Default latest_day evaluation scope evaluates the most recent 24-hour period
+        res_latest = detect_energy_statistical_anomalies(
+            self.session,
+            threshold_z=3.0,
+            min_observations=10,
+        )
+        self.assertEqual(res_latest["evaluation_period"]["evaluation_scope"], "latest_day")
+        self.assertEqual(res_latest["eligible_groups_count"], 10)
+        self.assertEqual(res_latest["total_anomalies_detected"], 0)
 
     def test_statistical_anomalies_safe_guards_and_edge_cases(self):
         """Verify edge cases: high min_observations causes safe bypass without errors."""
@@ -103,6 +115,7 @@ class TestAnomalyDetectionServices(unittest.TestCase):
             window_size=24,
             min_observations=12,
             threshold_z=3.0,
+            evaluation_scope="historical",
         )
 
         self.assertEqual(res["analysis_type"], "rolling_baseline")
@@ -118,6 +131,17 @@ class TestAnomalyDetectionServices(unittest.TestCase):
             self.assertGreaterEqual(anom["context_flags"]["historical_observations_used"], 12)
             self.assertLessEqual(anom["context_flags"]["historical_observations_used"], 24)
             self.assertGreaterEqual(abs(anom["deviation_score"]), 3.0)
+
+        # Also verify default latest_day evaluation scope operates safely
+        res_latest = detect_rolling_baseline_anomalies(
+            self.session,
+            plant_id="IN-KA-01",
+            meter_id="MTR-HVAC",
+            window_size=24,
+            min_observations=12,
+            threshold_z=3.0,
+        )
+        self.assertEqual(res_latest["evaluation_period"]["evaluation_scope"], "latest_day")
 
     def test_low_power_factor_monitoring(self):
         """Verify low power factor detection conforms to tariff rule constraints."""

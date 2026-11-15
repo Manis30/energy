@@ -17,7 +17,10 @@ from unittest.mock import patch
 
 from app.services.agent.agent import IndustrialEnergyAgent
 from app.services.agent.prompts import get_system_prompt
-from backend.tests.test_agent_orchestration import MockDomoClient
+try:
+    from backend.tests.test_agent_orchestration import MockDomoClient
+except ModuleNotFoundError:
+    from tests.test_agent_orchestration import MockDomoClient
 
 
 class TestAgentDomainRules(unittest.IsolatedAsyncioTestCase):

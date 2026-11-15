@@ -239,11 +239,25 @@ class TestAccuracyCorrections(unittest.TestCase):
 
     def test_anomaly_api_limit_parameter(self):
         """Verify optional limit parameter caps returned records while preserving total_anomalies_detected."""
-        resp = self.client.get("/api/anomalies/statistical", params={"threshold_z": 3.0, "limit": 5})
+        # Query with explicit historical evaluation scope to verify capping over a multi-anomaly window
+        resp = self.client.get(
+            "/api/anomalies/statistical",
+            params={"threshold_z": 3.0, "limit": 5, "evaluation_scope": "historical"},
+        )
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertGreater(data["total_anomalies_detected"], 5)
         self.assertEqual(len(data["anomalies"]), 5)
+
+        # Also verify default latest_day evaluation scope responds safely
+        resp_latest = self.client.get(
+            "/api/anomalies/statistical",
+            params={"threshold_z": 3.0, "limit": 5},
+        )
+        self.assertEqual(resp_latest.status_code, 200)
+        data_latest = resp_latest.json()
+        self.assertEqual(data_latest["evaluation_period"]["evaluation_scope"], "latest_day")
+        self.assertLessEqual(len(data_latest["anomalies"]), 5)
 
     # =========================================================================
     # Step 6: Power-Factor Aggregation (Energy-Weighted)
@@ -284,15 +298,58 @@ class TestAccuracyCorrections(unittest.TestCase):
             self.assertIsNotNone(d["arithmetic_avg_power_factor"])
 
     def test_power_factor_zero_energy_safe_handling(self):
-        """Verify that zero energy periods do not trigger ZeroDivisionError and safely return Decimal('0')."""
+        """Verify that periods with no observations preserve honest provenance: data_available=False, values None."""
         summary = get_energy_summary(
             self.session,
             start_date=date(2035, 1, 1),
             end_date=date(2035, 1, 2),
         )
-        self.assertEqual(summary["total_consumption_kwh"], Decimal("0"))
-        self.assertEqual(summary["avg_power_factor"], Decimal("0"))
-        self.assertEqual(summary["arithmetic_avg_power_factor"], Decimal("0"))
+        self.assertFalse(summary["data_available"])
+        self.assertFalse(summary["consumption_data_available"])
+        self.assertIsNone(summary["total_consumption_kwh"])
+        self.assertIsNone(summary["avg_power_factor"])
+        self.assertIsNone(summary["arithmetic_avg_power_factor"])
+        self.assertEqual(summary["total_readings"], 0)
+        self.assertEqual(summary["distinct_hours"], 0)
+
+    def test_actual_zero_energy_observation_handling(self):
+        """Verify actual zero-energy observations return total_consumption_kwh = 0 with data_available = True and safe PF fallback."""
+        from app.models import FactEnergyMeterHourly
+        test_ts = datetime(2035, 6, 1, 12, 0, 0)
+        zero_reading = FactEnergyMeterHourly(
+            meter_reading_id="MTR-TEST-ZERO-PF",
+            timestamp=test_ts,
+            date=test_ts.date(),
+            plant_id="IN-TN-01",
+            meter_id="MTR-SMT",
+            area="SMT",
+            energy_source="GRID",
+            consumption_kwh=Decimal("0.0000"),
+            demand_kw=Decimal("0.0000"),
+            power_factor=Decimal("0.9500"),
+            tariff_inr_per_kwh=Decimal("7.5000"),
+            cost_inr=Decimal("0.00"),
+            co2e_kg=Decimal("0.00"),
+            reading_quality="VALID",
+        )
+        try:
+            self.session.add(zero_reading)
+            self.session.flush()
+
+            summary = get_energy_summary(
+                self.session,
+                start_date=date(2035, 6, 1),
+                end_date=date(2035, 6, 1),
+            )
+            self.assertTrue(summary["data_available"])
+            self.assertTrue(summary["consumption_data_available"])
+            self.assertEqual(summary["total_consumption_kwh"], Decimal("0.0000"))
+            self.assertEqual(summary["total_readings"], 1)
+            # Power factor falls back to arithmetic mean via COALESCE, safely avoiding ZeroDivisionError
+            self.assertEqual(summary["avg_power_factor"], Decimal("0.9500"))
+            self.assertEqual(summary["arithmetic_avg_power_factor"], Decimal("0.9500"))
+        finally:
+            self.session.rollback()
 
     # =========================================================================
     # Step 7: Process-Meter Join Scalability

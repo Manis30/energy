@@ -240,12 +240,24 @@ class TestAnalyticsApiEndpoints(unittest.TestCase):
 
     def test_anomalies_statistical_endpoint(self):
         """Verify /api/anomalies/statistical detects Z-score anomalies."""
-        status_code, body = self.client.get("/api/anomalies/statistical", {"threshold_z": 3.0})
+        # 1. Historical evaluation scope
+        status_code, body = self.client.get(
+            "/api/anomalies/statistical",
+            {"threshold_z": 3.0, "evaluation_scope": "historical"},
+        )
         self.assertEqual(status_code, 200)
         self.assertGreater(body["total_anomalies_detected"], 0)
         top = body["anomalies"][0]
         self.assertIn("anomaly_type", top)
         self.assertIn("severity", top)
+
+        # 2. Default latest_day evaluation scope
+        status_code_latest, body_latest = self.client.get(
+            "/api/anomalies/statistical",
+            {"threshold_z": 3.0},
+        )
+        self.assertEqual(status_code_latest, 200)
+        self.assertEqual(body_latest["evaluation_period"]["evaluation_scope"], "latest_day")
 
     def test_anomalies_rolling_endpoint(self):
         """Verify /api/anomalies/rolling detects rolling deviations."""
