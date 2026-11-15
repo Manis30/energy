@@ -81,6 +81,7 @@
 .energy-relationship-chart {
   width: 100%;
   min-width: 0;
+  min-height: 320px;
   margin-top: 0.35rem;
 }
 

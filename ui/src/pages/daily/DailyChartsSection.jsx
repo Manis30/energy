@@ -32,6 +32,13 @@ const AREA_COLORS = {
   'HVAC': '#ec4899',
 };
 
+const hasNumericValue = (value) => value !== null
+  && value !== undefined
+  && value !== ''
+  && Number.isFinite(Number(value));
+
+const toNullableNumber = (value) => hasNumericValue(value) ? Number(value) : null;
+
 function CustomMeterTooltip({ active, payload }) {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
@@ -56,7 +63,7 @@ function CustomMeterTooltip({ active, payload }) {
         </div>
         <div className="tooltip-row">
           <span className="tooltip-label">Avg Power Factor:</span>
-          <span className="tooltip-val">{data.avg_power_factor ? Number(data.avg_power_factor).toFixed(4) : '—'}</span>
+          <span className="tooltip-val">{hasNumericValue(data.avg_power_factor) ? Number(data.avg_power_factor).toFixed(4) : '—'}</span>
         </div>
       </div>
     );
@@ -144,7 +151,7 @@ function CustomTrendTooltip({ active, payload }) {
         </div>
         <div className="tooltip-row">
           <span className="tooltip-label">Avg PF:</span>
-          <span className="tooltip-val">{data.avg_power_factor ? Number(data.avg_power_factor).toFixed(4) : '—'}</span>
+          <span className="tooltip-val">{hasNumericValue(data.avg_power_factor) ? Number(data.avg_power_factor).toFixed(4) : '—'}</span>
         </div>
       </div>
     );
@@ -162,34 +169,41 @@ export default function DailyChartsSection({
   trendAvailable = false,
 }) {
   // Meter chart data
-  const meterChartData = [...(byMeter || [])].sort(
+  const meterChartData = [...(byMeter || [])]
+    .filter((meter) => hasNumericValue(meter.consumption_kwh))
+    .sort(
     (a, b) => Number(b.consumption_kwh) - Number(a.consumption_kwh)
   );
 
   // Area pie data
-  const areaChartData = (byArea || []).map((a) => ({
+  const areaChartData = (byArea || [])
+    .filter((area) => hasNumericValue(area.consumption_kwh))
+    .map((a) => ({
     name: a.area,
-    value: Number(a.consumption_kwh),
+    value: toNullableNumber(a.consumption_kwh),
     percentage: a.percentage_of_total,
     cost: a.cost_inr,
     classification: (a.area === 'SMT' || a.area === 'FAL') ? 'Process Energy' : 'Facility Utilities',
-  }));
+    }));
 
   // Line chart data
   const lineChartData = (byLine || []).map((l) => ({
     ...l,
-    actual_num: Number(l.actual_qty),
-    good_num: Number(l.good_qty),
-    reject_num: Number(l.reject_qty),
-    downtime_num: Number(l.downtime_min),
+    actual_num: toNullableNumber(l.actual_qty),
+    good_num: toNullableNumber(l.good_qty),
+    reject_num: toNullableNumber(l.reject_qty),
+    downtime_num: toNullableNumber(l.downtime_min),
   }));
 
   // Trend data
-  const trendChartData = (dailyTrend || []).map((t) => ({
+  const returnedTrendCount = (dailyTrend || []).length;
+  const trendChartData = (dailyTrend || [])
+    .filter((trend) => hasNumericValue(trend.consumption_kwh))
+    .map((t) => ({
     ...t,
-    consumption_num: Number(t.consumption_kwh),
+    consumption_num: toNullableNumber(t.consumption_kwh),
     isSelected: t.date === selectedDate,
-  }));
+    }));
   const trendDates = trendChartData
     .map((item) => item.date)
     .filter((date) => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date))
@@ -360,7 +374,7 @@ export default function DailyChartsSection({
               <p className="chart-card-subtitle">
                 Requested window: {trendPeriod && trendDuration > 0
                   ? `${formatDate(trendPeriod.start_date)} – ${formatDate(trendPeriod.end_date)} (${trendDuration} calendar days)`
-                  : 'unavailable'}; {trendChartData.length} returned daily records
+                  : 'unavailable'}; {formatNumber(returnedTrendCount)} returned records, {formatNumber(trendChartData.length)} with numeric consumption
                 {trendDates.length > 0 && ` from ${formatDate(trendDates[0])} to ${formatDate(trendDates[trendDates.length - 1])}`}.
               </p>
             </div>

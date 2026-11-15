@@ -1,6 +1,6 @@
 """Deterministic energy intensity (SEC) and process-energy service."""
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -15,6 +15,14 @@ from app.models.source_data import (
 )
 
 FACILITY_UTILITY_METERS = ["MTR-HVAC", "MTR-COMPRESSOR", "MTR-CHILLER"]
+
+
+def _decimal_or_none(value):
+    return Decimal(str(value)) if value is not None else None
+
+
+def _int_or_none(value):
+    return int(value) if value is not None else None
 
 
 def validate_line_meter_topology(session: Session, plant_id: Optional[str] = None) -> None:
@@ -175,10 +183,11 @@ def get_factory_energy_analytics(
 ) -> Dict[str, Any]:
     """
     Calculate factory-level energy metrics and Factory SEC.
-    - Factory SEC = Total Plant Energy (all 5 meters) / Final Assembly Output.
+    - Factory SEC uses total plant energy and Final Assembly output from matching plant-hour records.
+    - Full requested-scope energy and production totals are reported separately.
     - Facility utility consumption (HVAC, Compressor, Chiller) is reported separately.
     """
-    # 1. Total Plant Energy across all 5 meters
+    # 1. Full requested-scope energy totals, separate from the aligned SEC numerator.
     e_conditions = []
     if plant_id:
         e_conditions.append(FactEnergyMeterHourly.plant_id == plant_id)
@@ -188,17 +197,19 @@ def get_factory_energy_analytics(
         e_conditions.append(FactEnergyMeterHourly.date <= end_date)
 
     q_total = select(
-        func.coalesce(func.sum(FactEnergyMeterHourly.consumption_kwh), Decimal("0")),
-        func.coalesce(func.sum(FactEnergyMeterHourly.cost_inr), Decimal("0")),
-        func.coalesce(func.sum(FactEnergyMeterHourly.co2e_kg), Decimal("0")),
+        func.sum(FactEnergyMeterHourly.consumption_kwh),
+        func.sum(FactEnergyMeterHourly.cost_inr),
+        func.sum(FactEnergyMeterHourly.co2e_kg),
+        func.count(FactEnergyMeterHourly.meter_reading_id),
     )
     if e_conditions:
         q_total = q_total.where(and_(*e_conditions))
     row_total = session.execute(q_total).fetchone()
 
-    total_plant_kwh = Decimal(str(row_total[0]))
-    total_plant_cost = Decimal(str(row_total[1]))
-    total_plant_co2e = Decimal(str(row_total[2]))
+    total_plant_kwh = _decimal_or_none(row_total[0]) if row_total else None
+    total_plant_cost = _decimal_or_none(row_total[1]) if row_total else None
+    total_plant_co2e = _decimal_or_none(row_total[2]) if row_total else None
+    total_energy_readings = int(row_total[3]) if row_total and row_total[3] is not None else 0
 
     # 2. Facility Utilities Breakdown (MTR-HVAC, MTR-COMPRESSOR, MTR-CHILLER)
     q_util = select(
@@ -207,6 +218,7 @@ def get_factory_energy_analytics(
         func.sum(FactEnergyMeterHourly.consumption_kwh).label("kwh"),
         func.sum(FactEnergyMeterHourly.cost_inr).label("cost"),
         func.sum(FactEnergyMeterHourly.co2e_kg).label("co2e"),
+        func.count(FactEnergyMeterHourly.meter_reading_id).label("reading_count"),
     ).where(FactEnergyMeterHourly.meter_id.in_(FACILITY_UTILITY_METERS))
     if e_conditions:
         q_util = q_util.where(and_(*e_conditions))
@@ -214,22 +226,42 @@ def get_factory_energy_analytics(
     util_rows = session.execute(q_util).fetchall()
 
     facility_utilities = []
-    total_utility_kwh = Decimal("0")
+    utility_kwh_values = []
     for ur in util_rows:
-        ukwh = Decimal(str(ur[2]))
-        total_utility_kwh += ukwh
+        ukwh = _decimal_or_none(ur[2])
+        utility_cost = _decimal_or_none(ur[3])
+        utility_co2e = _decimal_or_none(ur[4])
         facility_utilities.append({
             "meter_id": ur[0],
             "area": ur[1],
             "consumption_kwh": ukwh,
-            "cost_inr": Decimal(str(ur[3])),
-            "co2e_kg": Decimal(str(ur[4])),
-            "percentage_of_plant_total": round(ukwh / total_plant_kwh * 100, 2) if total_plant_kwh > 0 else Decimal("0"),
+            "cost_inr": utility_cost,
+            "co2e_kg": utility_co2e,
+            "reading_count": int(ur[5]) if ur[5] is not None else 0,
+            "percentage_of_plant_total": (
+                round(ukwh / total_plant_kwh * 100, 2)
+                if ukwh is not None and total_plant_kwh is not None and total_plant_kwh > 0
+                else None
+            ),
         })
+        if ukwh is not None:
+            utility_kwh_values.append(ukwh)
 
-    utility_share_pct = round(total_utility_kwh / total_plant_kwh * 100, 2) if total_plant_kwh > 0 else Decimal("0")
+    total_utility_kwh = (
+        sum(utility_kwh_values, Decimal("0"))
+        if util_rows and len(utility_kwh_values) == len(util_rows)
+        else None
+    )
+    utility_reading_count = sum(
+        int(row[5]) for row in util_rows if row[5] is not None
+    )
+    utility_share_pct = (
+        round(total_utility_kwh / total_plant_kwh * 100, 2)
+        if total_utility_kwh is not None and total_plant_kwh is not None and total_plant_kwh > 0
+        else None
+    )
 
-    # 3. Final Assembly Output (Finished Goods Gate)
+    # 3. Full requested-scope Final Assembly Output (Finished Goods Gate).
     p_conditions = [FactHourlyProduction.line_id.in_(["FAL-L1", "FAL-L2"])]
     if plant_id:
         p_conditions.append(FactHourlyProduction.plant_id == plant_id)
@@ -239,32 +271,139 @@ def get_factory_energy_analytics(
         p_conditions.append(FactHourlyProduction.event_date <= end_date)
 
     q_fal = select(
-        func.coalesce(func.sum(FactHourlyProduction.actual_qty), 0),
-        func.coalesce(func.sum(FactHourlyProduction.good_qty), 0),
+        func.sum(FactHourlyProduction.actual_qty),
+        func.sum(FactHourlyProduction.good_qty),
+        func.count(FactHourlyProduction.event_id),
     ).where(and_(*p_conditions))
     row_fal = session.execute(q_fal).fetchone()
 
-    fal_actual_qty = int(row_fal[0]) if row_fal else 0
-    fal_good_qty = int(row_fal[1]) if row_fal else 0
+    fal_actual_qty = _int_or_none(row_fal[0]) if row_fal else None
+    fal_good_qty = _int_or_none(row_fal[1]) if row_fal else None
+    fal_event_count = int(row_fal[2]) if row_fal and row_fal[2] is not None else 0
 
-    # 4. Factory SEC = Total Plant Energy / FAL Output
-    factory_sec_actual = round(total_plant_kwh / fal_actual_qty, 4) if fal_actual_qty > 0 else None
-    factory_sec_good = round(total_plant_kwh / fal_good_qty, 4) if fal_good_qty > 0 else None
+    # 4. Align plant energy and Final Assembly output at exact plant-hour scope.
+    energy_hourly_q = select(
+        FactEnergyMeterHourly.plant_id.label("plant_id"),
+        FactEnergyMeterHourly.timestamp.label("hour_ts"),
+        func.sum(FactEnergyMeterHourly.consumption_kwh).label("energy_kwh"),
+    ).group_by(
+        FactEnergyMeterHourly.plant_id,
+        FactEnergyMeterHourly.timestamp,
+    )
+    if e_conditions:
+        energy_hourly_q = energy_hourly_q.where(and_(*e_conditions))
+    energy_hourly = energy_hourly_q.subquery()
+
+    fal_hourly_q = select(
+        FactHourlyProduction.plant_id.label("plant_id"),
+        FactHourlyProduction.event_ts.label("hour_ts"),
+        func.sum(FactHourlyProduction.actual_qty).label("actual_qty"),
+        func.sum(FactHourlyProduction.good_qty).label("good_qty"),
+    ).where(and_(*p_conditions)).group_by(
+        FactHourlyProduction.plant_id,
+        FactHourlyProduction.event_ts,
+    )
+    fal_hourly = fal_hourly_q.subquery()
+    aligned_q = select(
+        energy_hourly.c.hour_ts,
+        energy_hourly.c.energy_kwh,
+        fal_hourly.c.actual_qty,
+        fal_hourly.c.good_qty,
+    ).select_from(
+        energy_hourly.join(
+            fal_hourly,
+            and_(
+                energy_hourly.c.plant_id == fal_hourly.c.plant_id,
+                energy_hourly.c.hour_ts == fal_hourly.c.hour_ts,
+            ),
+        )
+    ).order_by(energy_hourly.c.hour_ts.asc())
+    aligned_rows = session.execute(aligned_q).fetchall()
+    energy_hour_count = int(
+        session.execute(select(func.count()).select_from(energy_hourly)).scalar_one()
+    )
+    fal_hour_count = int(
+        session.execute(select(func.count()).select_from(fal_hourly)).scalar_one()
+    )
+
+    aligned_energy_values = [_decimal_or_none(row[1]) for row in aligned_rows]
+    aligned_actual_values = [_int_or_none(row[2]) for row in aligned_rows]
+    aligned_good_values = [_int_or_none(row[3]) for row in aligned_rows]
+    aligned_energy_kwh = (
+        sum((value for value in aligned_energy_values if value is not None), Decimal("0"))
+        if aligned_rows and all(value is not None for value in aligned_energy_values)
+        else None
+    )
+    aligned_actual_qty = (
+        sum(value for value in aligned_actual_values if value is not None)
+        if aligned_rows and all(value is not None for value in aligned_actual_values)
+        else None
+    )
+    aligned_good_qty = (
+        sum(value for value in aligned_good_values if value is not None)
+        if aligned_rows and all(value is not None for value in aligned_good_values)
+        else None
+    )
+    factory_sec_alignment_available = bool(aligned_rows)
+    factory_sec_scope_complete = (
+        energy_hour_count > 0
+        and energy_hour_count == fal_hour_count == len(aligned_rows)
+    )
+    factory_sec_actual = (
+        round(aligned_energy_kwh / aligned_actual_qty, 4)
+        if factory_sec_scope_complete
+        and aligned_energy_kwh is not None
+        and aligned_actual_qty is not None
+        and aligned_actual_qty > 0
+        else None
+    )
+    factory_sec_good = (
+        round(aligned_energy_kwh / aligned_good_qty, 4)
+        if factory_sec_scope_complete
+        and aligned_energy_kwh is not None
+        and aligned_good_qty is not None
+        and aligned_good_qty > 0
+        else None
+    )
+    aligned_dates = [
+        row[0].date() if isinstance(row[0], datetime) else row[0]
+        for row in aligned_rows
+        if row[0] is not None
+    ]
 
     return {
         "plant_id": plant_id,
         "start_date": start_date.isoformat() if start_date else None,
         "end_date": end_date.isoformat() if end_date else None,
+        "data_available": total_energy_readings > 0,
         "total_plant_energy_kwh": total_plant_kwh,
         "total_plant_cost_inr": total_plant_cost,
         "total_plant_co2e_kg": total_plant_co2e,
+        "final_assembly_data_available": fal_event_count > 0,
         "final_assembly_actual_output": fal_actual_qty,
         "final_assembly_good_output": fal_good_qty,
+        "factory_sec_alignment_available": factory_sec_alignment_available,
+        "factory_sec_scope_complete": factory_sec_scope_complete,
+        "factory_sec_data_available": factory_sec_actual is not None,
+        "factory_sec_good_data_available": factory_sec_good is not None,
+        "factory_sec_aligned_energy_kwh": aligned_energy_kwh,
+        "factory_sec_aligned_actual_output": aligned_actual_qty,
+        "factory_sec_aligned_good_output": aligned_good_qty,
+        "factory_sec_aligned_plant_hours": len(aligned_rows),
+        "factory_sec_alignment_start_date": min(aligned_dates).isoformat() if aligned_dates else None,
+        "factory_sec_alignment_end_date": max(aligned_dates).isoformat() if aligned_dates else None,
+        "factory_sec_alignment_note": (
+            "SEC uses energy-meter and Final Assembly records matched by plant and exact timestamp; "
+            "SEC is unavailable unless all requested-scope plant-hour groups match. Aligned values are "
+            "reported separately from full requested-scope totals."
+        ),
         "factory_sec_kwh_per_finished_unit": factory_sec_actual,
         "factory_sec_good_kwh_per_finished_unit": factory_sec_good,
         "facility_utilities": {
             "total_utility_consumption_kwh": total_utility_kwh,
             "utility_share_percentage": utility_share_pct,
+            "data_available": utility_reading_count > 0,
+            "reading_count": utility_reading_count,
             "meters": facility_utilities,
         },
     }

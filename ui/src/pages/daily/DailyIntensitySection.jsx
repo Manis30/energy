@@ -22,6 +22,11 @@ export default function DailyIntensitySection({
   const factorySecGood = factoryEnergy?.factory_sec_good_kwh_per_finished_unit;
   const totalPlantKwh = factoryEnergy?.total_plant_energy_kwh;
   const finishedPhones = factoryEnergy?.final_assembly_actual_output;
+  const alignedPlantKwh = factoryEnergy?.factory_sec_aligned_energy_kwh;
+  const alignedFinishedPhones = factoryEnergy?.factory_sec_aligned_actual_output;
+  const alignedPlantHours = factoryEnergy?.factory_sec_aligned_plant_hours;
+  const alignmentStartDate = factoryEnergy?.factory_sec_alignment_start_date;
+  const alignmentEndDate = factoryEnergy?.factory_sec_alignment_end_date;
   const utilitySharePct = factoryEnergy?.facility_utilities?.utility_share_percentage;
   const totalUtilityKwh = factoryEnergy?.facility_utilities?.total_utility_consumption_kwh;
 
@@ -160,7 +165,7 @@ export default function DailyIntensitySection({
 
           {/* Factory Overall SEC */}
           <div className="sec-card factory-sec">
-            <div className="sec-card-badge factory">Factory Level • All 5 Plant Meters</div>
+            <div className="sec-card-badge factory">Factory Level • Aligned Plant-Hour Scope</div>
             <div className="sec-card-header">
               <h4 className="sec-stage-title">Total Factory SEC</h4>
               <span className="sec-target-product">Plant Energy Per Finished Good Unit</span>
@@ -175,11 +180,26 @@ export default function DailyIntensitySection({
 
             <div className="sec-details-table">
               <div className="sec-detail-row">
-                <span className="sec-detail-label">Total Plant Energy:</span>
+                <span className="sec-detail-label">Full-period Plant Energy:</span>
                 <span className="sec-detail-val">{formatNumber(totalPlantKwh, 2)} kWh</span>
               </div>
               <div className="sec-detail-row">
-                <span className="sec-detail-label">Finished Output Gate:</span>
+                <span className="sec-detail-label">SEC-aligned Energy / Output:</span>
+                <span className="sec-detail-val">
+                  {formatNumber(alignedPlantKwh, 2)} kWh / {formatNumber(alignedFinishedPhones)} phones
+                </span>
+              </div>
+              <div className="sec-detail-row">
+                <span className="sec-detail-label">Matched plant-hours:</span>
+                <span className="sec-detail-val">
+                  {formatNumber(alignedPlantHours)}
+                  {alignmentStartDate && alignmentEndDate
+                    ? ` · ${alignmentStartDate} to ${alignmentEndDate}`
+                    : ''}
+                </span>
+              </div>
+              <div className="sec-detail-row">
+                <span className="sec-detail-label">Full-period FAL output:</span>
                 <span className="sec-detail-val">{formatNumber(finishedPhones)} phones</span>
               </div>
               <div className="sec-detail-row">
@@ -192,6 +212,9 @@ export default function DailyIntensitySection({
 
             <div className="sec-card-footer factory">
               <span className="sec-scope-indicator">Includes HVAC, Compressor, Chiller</span>
+              {factoryEnergy?.factory_sec_alignment_note && (
+                <span className="sec-scope-indicator">{factoryEnergy.factory_sec_alignment_note}</span>
+              )}
             </div>
           </div>
         </div>

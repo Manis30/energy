@@ -73,6 +73,7 @@ export default function EnergyMeterBreakdown({ byMeter = [], dataAvailable = tru
     consumption_num: hasNumber(m.consumption_kwh) ? Number(m.consumption_kwh) : null,
   }));
   const validChartData = chartData.filter((item) => hasNumber(item.consumption_num));
+  const chartHeight = Math.max(300, validChartData.length * 52);
 
   return (
     <div className="dashboard-section">
@@ -113,11 +114,11 @@ export default function EnergyMeterBreakdown({ byMeter = [], dataAvailable = tru
                     ? 'No meter records were returned.'
                     : 'Meter records were returned without usable energy values.'}
               </div>
-            ) : <ResponsiveContainer width="100%" height={300}>
+            ) : <ResponsiveContainer width="100%" height={chartHeight}>
               <BarChart
                 data={validChartData}
                 layout="vertical"
-                margin={{ top: 10, right: 30, left: 20, bottom: 5 }}
+                margin={{ top: 10, right: 25, left: 10, bottom: 8 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" horizontal={false} />
                 <XAxis
@@ -133,7 +134,8 @@ export default function EnergyMeterBreakdown({ byMeter = [], dataAvailable = tru
                   stroke="var(--chart-axis)"
                   tick={{ fontSize: 11, fill: 'var(--chart-axis)', fontWeight: 600 }}
                   tickLine={false}
-                  width={110}
+                  width={135}
+                  interval={0}
                 />
                 <Tooltip content={<CustomMeterTooltip />} />
                 <Bar dataKey="consumption_num" radius={[0, 4, 4, 0]}>
@@ -158,7 +160,12 @@ export default function EnergyMeterBreakdown({ byMeter = [], dataAvailable = tru
             </div>
           </div>
 
-          <div className="table-responsive">
+          <div
+            className="table-responsive meter-table-scroll-container"
+            tabIndex={0}
+            role="region"
+            aria-label="Detailed submeter telemetry table"
+          >
             <table className="energy-submeter-table">
               <thead>
                 <tr>

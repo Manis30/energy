@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import { formatDateTime, formatNumber } from '../../utils/formatters';
 
+const hasNumericValue = (value) => value !== null
+  && value !== undefined
+  && value !== ''
+  && Number.isFinite(Number(value));
+
 export default function DailyAnomalySummary({ anomaliesData, dataAvailable = true }) {
   const [filterSeverity, setFilterSeverity] = useState('ALL');
 
@@ -21,11 +26,15 @@ export default function DailyAnomalySummary({ anomaliesData, dataAvailable = tru
     );
   }
 
-  const totalAnomalies = anomaliesData ? anomaliesData.total_anomalies_detected : 0;
+  const totalAnomalies = anomaliesData?.total_anomalies_detected ?? null;
   const statData = anomaliesData?.statistical_zscore;
   const rollData = anomaliesData?.rolling_baseline;
   const lpfData = anomaliesData?.low_power_factor;
   const standbyData = anomaliesData?.zero_production_standby;
+  const statCount = statData?.total_anomalies_detected;
+  const rollCount = rollData?.total_anomalies_detected;
+  const lpfCount = lpfData?.total_anomalies_detected;
+  const standbyCount = standbyData?.total_events_detected;
   const statisticalDataLimited = Boolean(
     statData?.insufficient_observations_groups?.length
     || statData?.zero_variance_groups?.length,
@@ -72,8 +81,8 @@ export default function DailyAnomalySummary({ anomaliesData, dataAvailable = tru
           </p>
         </div>
         <div className="section-tag-group">
-          <span className={`section-tag ${totalAnomalies > 0 ? 'anomaly-count' : 'info'}`}>
-            {totalAnomalies} Total Detector Flags
+          <span className={`section-tag ${hasNumericValue(totalAnomalies) && Number(totalAnomalies) > 0 ? 'anomaly-count' : 'info'}`}>
+            {formatNumber(totalAnomalies)} Total Detector Flags
           </span>
         </div>
       </div>
@@ -84,23 +93,23 @@ export default function DailyAnomalySummary({ anomaliesData, dataAvailable = tru
         <div className="detector-card">
           <div className="detector-card-header">
             <span className="detector-name">Statistical Z-Score</span>
-            <span className={`detector-status-pill ${statData?.total_anomalies_detected > 0 ? 'alert' : statisticalDataLimited || !statData ? 'notice' : 'nominal'}`}>
-              {statData?.total_anomalies_detected > 0
-                ? `${statData.total_anomalies_detected} Flagged`
+            <span className={`detector-status-pill ${hasNumericValue(statCount) && Number(statCount) > 0 ? 'alert' : statisticalDataLimited || !statData || !hasNumericValue(statCount) ? 'notice' : 'nominal'}`}>
+              {!statData || !hasNumericValue(statCount)
+                ? 'Unavailable'
+                : Number(statCount) > 0
+                  ? `${formatNumber(statCount)} Flagged`
                 : statisticalDataLimited
                   ? 'Limited data'
-                  : statData
-                    ? 'No records flagged'
-                    : 'Unavailable'}
+                  : 'No records flagged'}
             </span>
           </div>
           <div className="detector-count">
-            {formatNumber(statData?.total_anomalies_detected || 0)}
+            {formatNumber(statCount)}
             <span className="detector-unit">records</span>
           </div>
           <div className="detector-meta">
-            <span>Threshold: |Z| ≥ {statData?.threshold_z || '3.0'}σ</span>
-            <span>Min Samples: {statData?.min_observations || 10}</span>
+            <span>Threshold: |Z| ≥ {hasNumericValue(statData?.threshold_z) ? formatNumber(statData.threshold_z, 1) : 'Unavailable'}σ</span>
+            <span>Min Samples: {formatNumber(statData?.min_observations)}</span>
           </div>
           <div className="detector-desc">
             Flags extreme deviations relative to the per-meter distribution within the analyzed period.
@@ -111,17 +120,17 @@ export default function DailyAnomalySummary({ anomaliesData, dataAvailable = tru
         <div className="detector-card">
           <div className="detector-card-header">
             <span className="detector-name">Rolling Baseline</span>
-            <span className={`detector-status-pill ${rollData?.total_anomalies_detected > 0 ? 'alert' : 'nominal'}`}>
-              {rollData?.total_anomalies_detected > 0 ? `${rollData.total_anomalies_detected} Flagged` : 'No records flagged'}
+            <span className={`detector-status-pill ${hasNumericValue(rollCount) && Number(rollCount) > 0 ? 'alert' : !hasNumericValue(rollCount) ? 'notice' : 'nominal'}`}>
+              {!hasNumericValue(rollCount) ? 'Unavailable' : Number(rollCount) > 0 ? `${formatNumber(rollCount)} Flagged` : 'No records flagged'}
             </span>
           </div>
           <div className="detector-count">
-            {formatNumber(rollData?.total_anomalies_detected || 0)}
+            {formatNumber(rollCount)}
             <span className="detector-unit">records</span>
           </div>
           <div className="detector-meta">
-            <span>Window: {rollData?.window_size_hours || 24} hours</span>
-            <span>Threshold: {rollData?.threshold_z || '3.0'}σ</span>
+            <span>Window: {formatNumber(rollData?.window_size_hours)} hours</span>
+            <span>Threshold: {hasNumericValue(rollData?.threshold_z) ? formatNumber(rollData.threshold_z, 1) : 'Unavailable'}σ</span>
           </div>
           <div className="detector-desc">
             Detects dynamic shifts against preceding 24-hour historical window.
@@ -132,16 +141,16 @@ export default function DailyAnomalySummary({ anomaliesData, dataAvailable = tru
         <div className="detector-card">
           <div className="detector-card-header">
             <span className="detector-name">Low Power Factor</span>
-            <span className={`detector-status-pill ${lpfData?.total_anomalies_detected > 0 ? 'alert' : 'nominal'}`}>
-              {lpfData?.total_anomalies_detected > 0 ? `${lpfData.total_anomalies_detected} Events` : 'No events flagged'}
+            <span className={`detector-status-pill ${hasNumericValue(lpfCount) && Number(lpfCount) > 0 ? 'alert' : !hasNumericValue(lpfCount) ? 'notice' : 'nominal'}`}>
+              {!hasNumericValue(lpfCount) ? 'Unavailable' : Number(lpfCount) > 0 ? `${formatNumber(lpfCount)} Events` : 'No events flagged'}
             </span>
           </div>
           <div className="detector-count">
-            {formatNumber(lpfData?.total_anomalies_detected || 0)}
+            {formatNumber(lpfCount)}
             <span className="detector-unit">events</span>
           </div>
           <div className="detector-meta">
-            <span>Detection Threshold: &lt; {lpfData?.threshold || '0.90'} PF</span>
+            <span>Detection Threshold: &lt; {hasNumericValue(lpfData?.threshold) ? formatNumber(lpfData.threshold, 2) : 'Unavailable'} PF</span>
             <span>Application Threshold Check: Active</span>
           </div>
           <div className="detector-desc">
@@ -153,17 +162,17 @@ export default function DailyAnomalySummary({ anomaliesData, dataAvailable = tru
         <div className="detector-card">
           <div className="detector-card-header">
             <span className="detector-name">Zero-Production Standby</span>
-            <span className={`detector-status-pill ${standbyData?.total_events_detected > 0 ? 'notice' : 'nominal'}`}>
-              {standbyData?.total_events_detected > 0 ? `${standbyData.total_events_detected} Events` : 'None'}
+            <span className={`detector-status-pill ${hasNumericValue(standbyCount) && Number(standbyCount) > 0 ? 'notice' : !hasNumericValue(standbyCount) ? 'notice' : 'nominal'}`}>
+              {!hasNumericValue(standbyCount) ? 'Unavailable' : Number(standbyCount) > 0 ? `${formatNumber(standbyCount)} Events` : 'None'}
             </span>
           </div>
           <div className="detector-count">
-            {formatNumber(standbyData?.total_standby_energy_kwh || 0, 1)}
+            {formatNumber(standbyData?.total_standby_energy_kwh, 1)}
             <span className="detector-unit">kWh recorded</span>
           </div>
           <div className="detector-meta">
-            <span>Events: {standbyData?.total_events_detected || 0}</span>
-            <span>Reported downtime: {formatNumber(standbyData?.total_stoppage_minutes ?? 0)} min</span>
+            <span>Events: {formatNumber(standbyCount)}</span>
+            <span>Reported downtime: {formatNumber(standbyData?.total_stoppage_minutes)} min</span>
           </div>
           <div className="detector-desc">
             Positive process-meter energy recorded during zero-output intervals; this alone does not establish avoidable waste.

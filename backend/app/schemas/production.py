@@ -23,18 +23,19 @@ class ProductionSummaryResponse(BaseModel):
     shift_id: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
-    target_qty: int
-    actual_qty: int
-    good_qty: int
-    reject_qty: int
-    rework_qty: int
-    downtime_min: int
+    data_available: bool
+    target_qty: Optional[int]
+    actual_qty: Optional[int]
+    good_qty: Optional[int]
+    reject_qty: Optional[int]
+    rework_qty: Optional[int]
+    downtime_min: Optional[int]
     event_count: int
-    quantity_balance_valid: bool
-    achievement_rate: Decimal = Field(..., description="Actual / Target (%)")
-    good_rate: Decimal = Field(..., description="Good / Actual (%)")
-    reject_rate: Decimal = Field(..., description="Reject / Actual (%)")
-    rework_rate: Decimal = Field(..., description="Rework / Actual (%)")
+    quantity_balance_valid: Optional[bool]
+    achievement_rate: Optional[Decimal] = Field(None, description="Actual / Target (%)")
+    good_rate: Optional[Decimal] = Field(None, description="Good / Actual (%)")
+    reject_rate: Optional[Decimal] = Field(None, description="Reject / Actual (%)")
+    rework_rate: Optional[Decimal] = Field(None, description="Rework / Actual (%)")
     oee: Optional[OeeAssessment] = None
 
 
@@ -44,17 +45,17 @@ class ProductionLineItem(BaseModel):
     plant_id: str
     line_type: str
     area: str
-    target_qty: int
-    actual_qty: int
-    good_qty: int
-    reject_qty: int
-    rework_qty: int
-    downtime_min: int
+    target_qty: Optional[int]
+    actual_qty: Optional[int]
+    good_qty: Optional[int]
+    reject_qty: Optional[int]
+    rework_qty: Optional[int]
+    downtime_min: Optional[int]
     operating_hours: int
-    achievement_rate: Decimal
-    good_rate: Decimal
-    reject_rate: Decimal
-    rework_rate: Decimal
+    achievement_rate: Optional[Decimal]
+    good_rate: Optional[Decimal]
+    reject_rate: Optional[Decimal]
+    rework_rate: Optional[Decimal]
 
 
 class ProductionProductItem(BaseModel):
@@ -62,37 +63,38 @@ class ProductionProductItem(BaseModel):
     product_id: str
     product_name: str
     product_family: str
-    target_qty: int
-    actual_qty: int
-    good_qty: int
-    reject_qty: int
-    rework_qty: int
+    target_qty: Optional[int]
+    actual_qty: Optional[int]
+    good_qty: Optional[int]
+    reject_qty: Optional[int]
+    rework_qty: Optional[int]
     operating_hours: int
-    achievement_rate: Decimal
-    good_rate: Decimal
-    reject_rate: Decimal
-    rework_rate: Decimal
+    achievement_rate: Optional[Decimal]
+    good_rate: Optional[Decimal]
+    reject_rate: Optional[Decimal]
+    rework_rate: Optional[Decimal]
 
 
 class ProductionShiftItem(BaseModel):
     """Production metrics aggregated by manufacturing shift."""
     shift_id: str
-    target_qty: int
-    actual_qty: int
-    good_qty: int
-    reject_qty: int
-    downtime_min: int
+    target_qty: Optional[int]
+    actual_qty: Optional[int]
+    good_qty: Optional[int]
+    reject_qty: Optional[int]
+    rework_qty: Optional[int] = None
+    downtime_min: Optional[int]
     operating_hours: int
-    achievement_rate: Decimal
-    good_rate: Decimal
-    reject_rate: Decimal
-    rework_rate: Decimal
+    achievement_rate: Optional[Decimal]
+    good_rate: Optional[Decimal]
+    reject_rate: Optional[Decimal]
+    rework_rate: Optional[Decimal]
 
 
 class DowntimeReasonItem(BaseModel):
     """Downtime minutes and occurrence share grouped by stoppage reason."""
     downtime_reason: str
-    total_downtime_min: int
+    total_downtime_min: Optional[int]
     event_count: int
     zero_output_events: int
 
@@ -100,12 +102,13 @@ class DowntimeReasonItem(BaseModel):
 class DailyProductionItem(BaseModel):
     """Daily production output and scrap time series."""
     date: str
-    target_qty: int
-    actual_qty: int
-    good_qty: int
-    reject_qty: int
-    downtime_min: int
-    achievement_rate: Decimal
-    good_rate: Decimal
-    reject_rate: Decimal
-    rework_rate: Decimal
+    target_qty: Optional[int]
+    actual_qty: Optional[int]
+    good_qty: Optional[int]
+    reject_qty: Optional[int]
+    rework_qty: Optional[int] = None
+    downtime_min: Optional[int]
+    achievement_rate: Optional[Decimal]
+    good_rate: Optional[Decimal]
+    reject_rate: Optional[Decimal]
+    rework_rate: Optional[Decimal]

@@ -151,7 +151,7 @@ export default function DailyDataConfidence({
       )}
 
       <p className="daily-confidence-limitation">
-        The APIs do not provide expected record counts, missing-interval details, or a completeness indicator. Returned counts cannot establish dataset completeness.
+        Coverage reports persisted records and date-level entity observations. No approved operating calendar, per-hour reporting expectation, or plant-specific energy-meter registry is available, so counts do not establish completeness.
       </p>
     </section>
   );

@@ -12,7 +12,9 @@ export default function DailyProductionSection({ productionSummary }) {
   const reworkRate = productionSummary ? productionSummary.rework_rate : null;
   const eventCount = productionSummary ? productionSummary.event_count : null;
 
-  const downtimeHours = downtimeMin !== null ? (Number(downtimeMin) / 60).toFixed(1) : null;
+  const downtimeHours = downtimeMin != null && Number.isFinite(Number(downtimeMin))
+    ? (Number(downtimeMin) / 60).toFixed(1)
+    : null;
 
   const cards = [
     {

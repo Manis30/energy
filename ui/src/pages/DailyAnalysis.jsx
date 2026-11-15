@@ -1,13 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   energyApi,
   productionApi,
   energyIntensityApi,
   anomalyApi,
+  dailyReportsApi,
 } from '../services';
 
 import DailyPageHeader from './daily/DailyPageHeader';
+import DailyCoverageSection from './daily/DailyCoverageSection';
 import DailyEnergyKpis from './daily/DailyEnergyKpis';
 import DailyProductionSection from './daily/DailyProductionSection';
 import DailyIntensitySection from './daily/DailyIntensitySection';
@@ -34,6 +36,10 @@ export default function DailyAnalysis() {
   const [error, setError] = useState(null);
   const [dateWarning, setDateWarning] = useState(null);
   const [lastRefreshed, setLastRefreshed] = useState(null);
+  const [coverageData, setCoverageData] = useState(null);
+  const [coverageLoading, setCoverageLoading] = useState(true);
+  const [coverageError, setCoverageError] = useState(null);
+  const coverageRequestId = useRef(0);
 
   // Sync with URL query parameter when navigating from Daily Reports
   useEffect(() => {
@@ -175,12 +181,51 @@ export default function DailyAnalysis() {
     }
   }, [selectedDate, selectedPlant]);
 
+  const loadCoverage = useCallback(async (reportingDate) => {
+    const requestId = ++coverageRequestId.current;
+    if (!reportingDate || reportingDate < MIN_DATE || reportingDate > MAX_DATE) {
+      setCoverageData(null);
+      setCoverageLoading(false);
+      setCoverageError(`Coverage is unavailable outside the supported date range (${MIN_DATE} to ${MAX_DATE}).`);
+      return;
+    }
+
+    setCoverageData(null);
+    setCoverageLoading(true);
+    setCoverageError(null);
+    try {
+      const result = await dailyReportsApi.getCoverage({
+        start_date: reportingDate,
+        end_date: reportingDate,
+      });
+      if (requestId === coverageRequestId.current) {
+        setCoverageData(result);
+      }
+    } catch (err) {
+      if (requestId === coverageRequestId.current) {
+        setCoverageError(err.message || 'Unable to retrieve persisted data coverage.');
+      }
+    } finally {
+      if (requestId === coverageRequestId.current) {
+        setCoverageLoading(false);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     loadDailyData(false);
   }, [loadDailyData]);
 
+  useEffect(() => {
+    loadCoverage(selectedDate);
+    return () => {
+      coverageRequestId.current += 1;
+    };
+  }, [selectedDate, loadCoverage]);
+
   const handleRefresh = () => {
     loadDailyData(true);
+    loadCoverage(selectedDate);
   };
 
   const hasEnergyData = Boolean(energySummary && Number(energySummary.total_readings) > 0);
@@ -202,6 +247,15 @@ export default function DailyAnalysis() {
         dateWarning={dateWarning}
         minDate={MIN_DATE}
         maxDate={MAX_DATE}
+      />
+
+      <DailyCoverageSection
+        coverage={coverageData}
+        selectedPlant={selectedPlant}
+        loading={coverageLoading}
+        error={coverageError}
+        onRetry={() => loadCoverage(selectedDate)}
+        reportingDate={selectedDate}
       />
 
       {!loading && (

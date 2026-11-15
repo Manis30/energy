@@ -87,6 +87,78 @@ function getPearsonCorrelation(observations) {
   };
 }
 
+/**
+ * Calculates human-friendly axis domains and tick marks to avoid congested
+ * plotting without distorting underlying observations.
+ */
+function getAxisScale(values, { isInteger = false, targetTicks = 5, minRange = 10 } = {}) {
+  const validValues = (values || []).filter((v) => typeof v === 'number' && Number.isFinite(v));
+  if (validValues.length === 0) {
+    return { domain: [0, 100], ticks: [0, 25, 50, 75, 100], step: 25 };
+  }
+
+  const rawMin = Math.min(...validValues);
+  const rawMax = Math.max(...validValues);
+
+  // Single point or identical values
+  if (rawMin === rawMax) {
+    const pad = Math.max(Math.abs(rawMin) * 0.1, minRange);
+    const low = Math.max(0, isInteger ? Math.floor(rawMin - pad) : Math.floor((rawMin - pad) * 10) / 10);
+    const high = isInteger ? Math.ceil(rawMax + pad) : Math.ceil((rawMax + pad) * 10) / 10;
+    const step = (high - low) / 4 || 1;
+    const ticks = [low, low + step, low + 2 * step, low + 3 * step, high];
+    return { domain: [low, high], ticks, step };
+  }
+
+  const range = rawMax - rawMin;
+
+  // Add 6-8% breathing room so points near edge don't hit borders
+  const pad = Math.max(range * 0.08, isInteger ? 1 : 0.01);
+  let targetMin = rawMin - pad;
+  let targetMax = rawMax + pad;
+
+  // Physical energy and production quantities are non-negative
+  if (targetMin < 0) {
+    targetMin = 0;
+  }
+
+  // If min is already within 15% of zero, anchor to zero naturally
+  if (rawMin >= 0 && rawMin <= range * 0.15) {
+    targetMin = 0;
+  }
+
+  const activeRange = targetMax - targetMin;
+  const rawStep = activeRange / targetTicks;
+
+  // Find nearest power of 10 "nice" step (1, 2, or 5 * 10^n)
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep || 1)));
+  const normalized = rawStep / magnitude;
+  let step = magnitude;
+  if (normalized >= 4.5) {
+    step = 5 * magnitude;
+  } else if (normalized >= 1.8) {
+    step = 2 * magnitude;
+  } else {
+    step = magnitude;
+  }
+
+  if (isInteger && step < 1) {
+    step = 1;
+  }
+
+  // Align domain boundaries cleanly to step multiples
+  const domainMin = Math.max(0, Math.floor(targetMin / step) * step);
+  const domainMax = Math.ceil(targetMax / step) * step;
+
+  // Generate explicit, clean tick marks
+  const ticks = [];
+  for (let t = domainMin; t <= domainMax + step * 0.001; t += step) {
+    ticks.push(isInteger ? Math.round(t) : Number(t.toFixed(4)));
+  }
+
+  return { domain: [domainMin, domainMax], ticks, step };
+}
+
 function RelationshipTooltip({ active, payload }) {
   if (!active || !payload?.length) return null;
   const observation = payload[0]?.payload;
@@ -163,6 +235,15 @@ export default function EnergyProductionRelationship({
     x: row.actual_qty,
     y: row.consumption_kwh,
   })), [matchedRows]);
+
+  const xScale = useMemo(
+    () => getAxisScale(chartRows.map((r) => r.x), { isInteger: true, targetTicks: 5 }),
+    [chartRows]
+  );
+  const yScale = useMemo(
+    () => getAxisScale(chartRows.map((r) => r.y), { isInteger: false, targetTicks: 5 }),
+    [chartRows]
+  );
   const energyMissingCount = rows.filter((row) => !row.energyEntry).length;
   const productionMissingCount = rows.filter((row) => !row.productionEntry).length;
   const energyRecordCount = Array.isArray(energyTrend) ? energyTrend.length : 0;
@@ -271,32 +352,43 @@ export default function EnergyProductionRelationship({
                 role="group"
                 aria-label="Scatter plot of daily actual production output in units against daily energy consumption in kilowatt-hours for matched dates"
               >
-                <ResponsiveContainer width="100%" height={300}>
-                  <ScatterChart margin={{ top: 16, right: 18, bottom: 18, left: 8 }}>
+                <ResponsiveContainer width="100%" height={320}>
+                  <ScatterChart margin={{ top: 16, right: 24, bottom: 20, left: 12 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                     <XAxis
                       type="number"
                       dataKey="x"
                       name="Actual production output"
                       unit=" units"
+                      domain={xScale.domain}
+                      ticks={xScale.ticks}
                       tick={{ fontSize: 11, fill: 'var(--chart-axis)' }}
                       stroke="var(--chart-axis)"
                       tickLine={false}
-                      tickFormatter={(value) => formatNumber(value, 0)}
+                      tickFormatter={(value) => formatNumber(value, xScale.step < 1 ? 1 : 0)}
                     />
                     <YAxis
                       type="number"
                       dataKey="y"
                       name="Energy consumption"
                       unit=" kWh"
+                      domain={yScale.domain}
+                      ticks={yScale.ticks}
                       tick={{ fontSize: 11, fill: 'var(--chart-axis)' }}
                       stroke="var(--chart-axis)"
                       tickLine={false}
-                      width={64}
-                      tickFormatter={(value) => formatNumber(value, 0)}
+                      width={75}
+                      tickFormatter={(value) => formatNumber(value, yScale.step < 1 ? 1 : 0)}
                     />
                     <Tooltip content={<RelationshipTooltip />} />
-                    <Scatter data={chartRows} fill="var(--brand-purple)" name="Matched dates" />
+                    <Scatter
+                      data={chartRows}
+                      fill="var(--brand-purple)"
+                      fillOpacity={0.85}
+                      stroke="var(--bg-surface)"
+                      strokeWidth={1.5}
+                      name="Matched dates"
+                    />
                   </ScatterChart>
                 </ResponsiveContainer>
               </div>

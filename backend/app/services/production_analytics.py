@@ -10,6 +10,10 @@ from sqlalchemy.orm import Session
 from app.models.source_data import DimProduct, DimProductionLine, FactHourlyProduction
 
 
+def _int_or_none(value) -> Optional[int]:
+    return int(value) if value is not None else None
+
+
 def _apply_production_filters(
     query,
     plant_id: Optional[str] = None,
@@ -39,12 +43,12 @@ def _apply_production_filters(
 
 
 def _compute_production_rates(
-    target_qty: int,
-    actual_qty: int,
-    good_qty: int,
-    reject_qty: int,
-    rework_qty: int,
-) -> Dict[str, Decimal]:
+    target_qty: Optional[int],
+    actual_qty: Optional[int],
+    good_qty: Optional[int],
+    reject_qty: Optional[int],
+    rework_qty: Optional[int],
+) -> Dict[str, Optional[Decimal]]:
     """
     Compute production operational rates with safe zero-division guards.
     - achievement_rate: actual_qty / target_qty * 100
@@ -52,22 +56,32 @@ def _compute_production_rates(
     - reject_rate: reject_qty / actual_qty * 100
     - rework_rate: rework_qty / actual_qty * 100
     """
-    actual_d = Decimal(str(actual_qty))
-    target_d = Decimal(str(target_qty))
-    good_d = Decimal(str(good_qty))
-    reject_d = Decimal(str(reject_qty))
-    rework_d = Decimal(str(rework_qty))
-
-    achievement_rate = (actual_d / target_d * 100) if target_d > 0 else Decimal("0")
-    good_rate = (good_d / actual_d * 100) if actual_d > 0 else Decimal("0")
-    reject_rate = (reject_d / actual_d * 100) if actual_d > 0 else Decimal("0")
-    rework_rate = (rework_d / actual_d * 100) if actual_d > 0 else Decimal("0")
+    achievement_rate = (
+        Decimal(str(actual_qty)) / Decimal(str(target_qty)) * 100
+        if actual_qty is not None and target_qty is not None and target_qty > 0
+        else None
+    )
+    good_rate = (
+        Decimal(str(good_qty)) / Decimal(str(actual_qty)) * 100
+        if good_qty is not None and actual_qty is not None and actual_qty > 0
+        else None
+    )
+    reject_rate = (
+        Decimal(str(reject_qty)) / Decimal(str(actual_qty)) * 100
+        if reject_qty is not None and actual_qty is not None and actual_qty > 0
+        else None
+    )
+    rework_rate = (
+        Decimal(str(rework_qty)) / Decimal(str(actual_qty)) * 100
+        if rework_qty is not None and actual_qty is not None and actual_qty > 0
+        else None
+    )
 
     return {
-        "achievement_rate": round(achievement_rate, 2),
-        "good_rate": round(good_rate, 2),
-        "reject_rate": round(reject_rate, 2),
-        "rework_rate": round(rework_rate, 2),
+        "achievement_rate": round(achievement_rate, 2) if achievement_rate is not None else None,
+        "good_rate": round(good_rate, 2) if good_rate is not None else None,
+        "reject_rate": round(reject_rate, 2) if reject_rate is not None else None,
+        "rework_rate": round(rework_rate, 2) if rework_rate is not None else None,
     }
 
 
@@ -82,26 +96,31 @@ def get_production_summary(
 ) -> Dict[str, Any]:
     """Calculate overall factory production output, quality rates, and downtime."""
     q = select(
-        func.coalesce(func.sum(FactHourlyProduction.target_qty), 0),
-        func.coalesce(func.sum(FactHourlyProduction.actual_qty), 0),
-        func.coalesce(func.sum(FactHourlyProduction.good_qty), 0),
-        func.coalesce(func.sum(FactHourlyProduction.reject_qty), 0),
-        func.coalesce(func.sum(FactHourlyProduction.rework_qty), 0),
-        func.coalesce(func.sum(FactHourlyProduction.downtime_min), 0),
+        func.sum(FactHourlyProduction.target_qty),
+        func.sum(FactHourlyProduction.actual_qty),
+        func.sum(FactHourlyProduction.good_qty),
+        func.sum(FactHourlyProduction.reject_qty),
+        func.sum(FactHourlyProduction.rework_qty),
+        func.sum(FactHourlyProduction.downtime_min),
         func.count(FactHourlyProduction.event_id),
     )
     q = _apply_production_filters(q, plant_id, line_id, product_id, shift_id, start_date, end_date)
     row = session.execute(q).fetchone()
 
-    target_qty = int(row[0]) if row else 0
-    actual_qty = int(row[1]) if row else 0
-    good_qty = int(row[2]) if row else 0
-    reject_qty = int(row[3]) if row else 0
-    rework_qty = int(row[4]) if row else 0
-    downtime_min = int(row[5]) if row else 0
-    event_count = int(row[6]) if row else 0
+    target_qty = _int_or_none(row[0]) if row else None
+    actual_qty = _int_or_none(row[1]) if row else None
+    good_qty = _int_or_none(row[2]) if row else None
+    reject_qty = _int_or_none(row[3]) if row else None
+    rework_qty = _int_or_none(row[4]) if row else None
+    downtime_min = _int_or_none(row[5]) if row else None
+    event_count = int(row[6]) if row and row[6] is not None else 0
 
     rates = _compute_production_rates(target_qty, actual_qty, good_qty, reject_qty, rework_qty)
+    quantity_balance_valid = (
+        actual_qty == good_qty + reject_qty
+        if event_count > 0 and actual_qty is not None and good_qty is not None and reject_qty is not None
+        else None
+    )
 
     return {
         "plant_id": plant_id,
@@ -117,7 +136,8 @@ def get_production_summary(
         "rework_qty": rework_qty,
         "downtime_min": downtime_min,
         "event_count": event_count,
-        "quantity_balance_valid": actual_qty == good_qty + reject_qty,
+        "data_available": event_count > 0,
+        "quantity_balance_valid": quantity_balance_valid,
         "oee": {
             "status": "unavailable",
             "quality_rate": rates["good_rate"],
@@ -171,11 +191,11 @@ def get_production_by_line(
 
     results = []
     for r in rows:
-        target = int(r[4])
-        actual = int(r[5])
-        good = int(r[6])
-        reject = int(r[7])
-        rework = int(r[8])
+        target = _int_or_none(r[4])
+        actual = _int_or_none(r[5])
+        good = _int_or_none(r[6])
+        reject = _int_or_none(r[7])
+        rework = _int_or_none(r[8])
         rates = _compute_production_rates(target, actual, good, reject, rework)
         results.append({
             "line_id": r[0],
@@ -187,8 +207,8 @@ def get_production_by_line(
             "good_qty": good,
             "reject_qty": reject,
             "rework_qty": rework,
-            "downtime_min": int(r[9]),
-            "operating_hours": int(r[10]),
+            "downtime_min": _int_or_none(r[9]),
+            "operating_hours": int(r[10]) if r[10] is not None else 0,
             **rates,
         })
     return results
@@ -226,11 +246,11 @@ def get_production_by_product(
 
     results = []
     for r in rows:
-        target = int(r[3])
-        actual = int(r[4])
-        good = int(r[5])
-        reject = int(r[6])
-        rework = int(r[7])
+        target = _int_or_none(r[3])
+        actual = _int_or_none(r[4])
+        good = _int_or_none(r[5])
+        reject = _int_or_none(r[6])
+        rework = _int_or_none(r[7])
         rates = _compute_production_rates(target, actual, good, reject, rework)
         results.append({
             "product_id": r[0],
@@ -241,7 +261,7 @@ def get_production_by_product(
             "good_qty": good,
             "reject_qty": reject,
             "rework_qty": rework,
-            "operating_hours": int(r[8]),
+            "operating_hours": int(r[8]) if r[8] is not None else 0,
             **rates,
         })
     return results
@@ -260,6 +280,7 @@ def get_production_by_shift(
         func.sum(FactHourlyProduction.actual_qty).label("actual"),
         func.sum(FactHourlyProduction.good_qty).label("good"),
         func.sum(FactHourlyProduction.reject_qty).label("reject"),
+        func.sum(FactHourlyProduction.rework_qty).label("rework"),
         func.sum(FactHourlyProduction.downtime_min).label("downtime"),
         func.count(FactHourlyProduction.event_id).label("hours"),
     ).group_by(FactHourlyProduction.shift_id).order_by(FactHourlyProduction.shift_id.asc())
@@ -269,19 +290,21 @@ def get_production_by_shift(
 
     results = []
     for r in rows:
-        target = int(r[1])
-        actual = int(r[2])
-        good = int(r[3])
-        reject = int(r[4])
-        rates = _compute_production_rates(target, actual, good, reject, 0)
+        target = _int_or_none(r[1])
+        actual = _int_or_none(r[2])
+        good = _int_or_none(r[3])
+        reject = _int_or_none(r[4])
+        rework = _int_or_none(r[5])
+        rates = _compute_production_rates(target, actual, good, reject, rework)
         results.append({
             "shift_id": r[0],
             "target_qty": target,
             "actual_qty": actual,
             "good_qty": good,
             "reject_qty": reject,
-            "downtime_min": int(r[5]),
-            "operating_hours": int(r[6]),
+            "rework_qty": rework,
+            "downtime_min": _int_or_none(r[6]),
+            "operating_hours": int(r[7]) if r[7] is not None else 0,
             **rates,
         })
     return results
@@ -308,9 +331,9 @@ def get_downtime_by_reason(
     return [
         {
             "downtime_reason": r[0],
-            "total_downtime_min": int(r[1]),
-            "event_count": int(r[2]),
-            "zero_output_events": int(r[3]),
+            "total_downtime_min": _int_or_none(r[1]),
+            "event_count": int(r[2]) if r[2] is not None else 0,
+            "zero_output_events": int(r[3]) if r[3] is not None else 0,
         }
         for r in rows
     ]
@@ -329,6 +352,7 @@ def get_production_daily_trend(
         func.sum(FactHourlyProduction.actual_qty).label("actual"),
         func.sum(FactHourlyProduction.good_qty).label("good"),
         func.sum(FactHourlyProduction.reject_qty).label("reject"),
+        func.sum(FactHourlyProduction.rework_qty).label("rework"),
         func.sum(FactHourlyProduction.downtime_min).label("downtime"),
     ).group_by(FactHourlyProduction.event_date).order_by(FactHourlyProduction.event_date.asc())
 
@@ -337,18 +361,20 @@ def get_production_daily_trend(
 
     results = []
     for r in rows:
-        target = int(r[1])
-        actual = int(r[2])
-        good = int(r[3])
-        reject = int(r[4])
-        rates = _compute_production_rates(target, actual, good, reject, 0)
+        target = _int_or_none(r[1])
+        actual = _int_or_none(r[2])
+        good = _int_or_none(r[3])
+        reject = _int_or_none(r[4])
+        rework = _int_or_none(r[5])
+        rates = _compute_production_rates(target, actual, good, reject, rework)
         results.append({
             "date": r[0].isoformat(),
             "target_qty": target,
             "actual_qty": actual,
             "good_qty": good,
             "reject_qty": reject,
-            "downtime_min": int(r[5]),
+            "rework_qty": rework,
+            "downtime_min": _int_or_none(r[6]),
             **rates,
         })
     return results

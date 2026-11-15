@@ -36,16 +36,19 @@ class FactoryUtilityItem(BaseModel):
     """Utility meter consumption and share of total plant energy."""
     meter_id: str
     area: str
-    consumption_kwh: Decimal
-    cost_inr: Decimal
-    co2e_kg: Decimal
-    percentage_of_plant_total: Decimal
+    consumption_kwh: Optional[Decimal]
+    cost_inr: Optional[Decimal]
+    co2e_kg: Optional[Decimal]
+    reading_count: int
+    percentage_of_plant_total: Optional[Decimal]
 
 
 class FacilityUtilitiesSummary(BaseModel):
     """Summary of non-process facility utility meters."""
-    total_utility_consumption_kwh: Decimal
-    utility_share_percentage: Decimal
+    total_utility_consumption_kwh: Optional[Decimal]
+    utility_share_percentage: Optional[Decimal]
+    data_available: bool
+    reading_count: int
     meters: List[FactoryUtilityItem]
 
 
@@ -54,13 +57,32 @@ class FactoryEnergyResponse(BaseModel):
     plant_id: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
-    total_plant_energy_kwh: Decimal = Field(..., description="Sum of all 5 plant meters (kWh)")
-    total_plant_cost_inr: Decimal
-    total_plant_co2e_kg: Decimal
-    final_assembly_actual_output: int = Field(..., description="Finished phones output at Final Assembly gate")
-    final_assembly_good_output: int
-    factory_sec_kwh_per_finished_unit: Optional[Decimal] = Field(..., description="Total Plant kWh / Finished Phones")
-    factory_sec_good_kwh_per_finished_unit: Optional[Decimal]
+    data_available: bool = Field(..., description="Whether plant energy readings were returned for the requested scope")
+    total_plant_energy_kwh: Optional[Decimal] = Field(None, description="Energy returned from all plant meters in the requested scope (kWh)")
+    total_plant_cost_inr: Optional[Decimal] = Field(None, description="Dataset-calculated cost for the requested scope (INR)")
+    total_plant_co2e_kg: Optional[Decimal] = Field(None, description="Estimated CO2e for the requested scope (kg)")
+    final_assembly_data_available: bool
+    final_assembly_actual_output: Optional[int] = Field(None, description="Finished phones output at Final Assembly gate")
+    final_assembly_good_output: Optional[int] = None
+    factory_sec_alignment_available: bool
+    factory_sec_scope_complete: bool
+    factory_sec_data_available: bool
+    factory_sec_good_data_available: bool
+    factory_sec_aligned_energy_kwh: Optional[Decimal] = None
+    factory_sec_aligned_actual_output: Optional[int] = None
+    factory_sec_aligned_good_output: Optional[int] = None
+    factory_sec_aligned_plant_hours: int
+    factory_sec_alignment_start_date: Optional[str] = None
+    factory_sec_alignment_end_date: Optional[str] = None
+    factory_sec_alignment_note: str
+    factory_sec_kwh_per_finished_unit: Optional[Decimal] = Field(
+        None,
+        description="Aligned plant-hour energy divided by aligned Final Assembly actual output (kWh/unit)",
+    )
+    factory_sec_good_kwh_per_finished_unit: Optional[Decimal] = Field(
+        None,
+        description="Aligned plant-hour energy divided by aligned Final Assembly good output (kWh/unit)",
+    )
     facility_utilities: FacilityUtilitiesSummary
 
 

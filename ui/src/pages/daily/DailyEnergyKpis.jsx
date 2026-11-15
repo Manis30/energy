@@ -6,9 +6,15 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
   const hasEnergyReadingsCount = totalReadings !== null && Number.isFinite(Number(totalReadings));
   const hasEnergyReadings = hasEnergyReadingsCount && Number(totalReadings) > 0;
   const noEnergyReadings = hasEnergyReadingsCount && Number(totalReadings) === 0;
-  const totalKwh = hasEnergyReadings ? Number(energySummary.total_consumption_kwh) : null;
-  const totalCost = hasEnergyReadings ? Number(energySummary.total_cost_inr) : null;
-  const totalCo2e = hasEnergyReadings ? Number(energySummary.total_co2e_kg) : null;
+  const totalKwh = hasEnergyReadings && energySummary?.total_consumption_kwh != null
+    ? Number(energySummary.total_consumption_kwh)
+    : null;
+  const totalCost = hasEnergyReadings && energySummary?.total_cost_inr != null
+    ? Number(energySummary.total_cost_inr)
+    : null;
+  const totalCo2e = hasEnergyReadings && energySummary?.total_co2e_kg != null
+    ? Number(energySummary.total_co2e_kg)
+    : null;
   const avgPf = hasEnergyReadings && energySummary?.avg_power_factor != null
     ? Number(energySummary.avg_power_factor)
     : null;
@@ -35,7 +41,7 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
         : hasEnergyReadingsCount
           ? `${formatNumber(distinctHours)} distinct timestamps • ${formatNumber(totalReadings)} meter readings`
           : 'Energy reading count unavailable',
-      kind: hasEnergyReadings ? 'Calculated' : 'Unavailable',
+      kind: totalKwh !== null ? 'Calculated' : 'Unavailable',
       accent: 'purple',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -48,8 +54,10 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
       title: 'Daily Energy Spend',
       value: formatCurrency(totalCost),
       unit: 'INR',
-      sublabel: hasEnergyReadings ? 'Dataset tariff ₹8.25 / kWh applied deterministically' : 'No cost total available without energy readings',
-      kind: hasEnergyReadings ? 'Calculated' : 'Unavailable',
+      sublabel: totalCost !== null
+        ? 'Dataset tariff ₹8.25 / kWh applied deterministically'
+        : hasEnergyReadings ? 'Cost total unavailable' : 'No cost total available without energy readings',
+      kind: totalCost !== null ? 'Calculated' : 'Unavailable',
       accent: 'blue',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -65,10 +73,10 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
       title: 'Carbon Emissions',
       value: formatNumber(totalCo2e, 2),
       unit: 'kg CO₂e',
-      sublabel: hasEnergyReadings
-        ? `${(Number(totalCo2e || 0) / 1000).toFixed(2)} MT CO₂e • Dataset emissions factor ~0.716 kg CO₂e/kWh`
-        : 'No emissions total available without energy readings',
-      kind: hasEnergyReadings ? 'Calculated' : 'Unavailable',
+      sublabel: totalCo2e !== null
+        ? `${(totalCo2e / 1000).toFixed(2)} MT CO₂e • Dataset emissions factor ~0.716 kg CO₂e/kWh`
+        : hasEnergyReadings ? 'Emissions estimate unavailable' : 'No emissions total available without energy readings',
+      kind: totalCo2e !== null ? 'Calculated' : 'Unavailable',
       accent: 'cyan',
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
