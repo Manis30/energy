@@ -163,6 +163,7 @@ class ZeroProductionPeriodEnergyInput(BaseDateRangeInput):
 
 class StatisticalAnomaliesInput(BaseTimeRangeInput):
     meter_id: Optional[str] = Field(None, description="Optional meter filter: 'MTR-SMT', 'MTR-FAL', 'MTR-HVAC', 'MTR-COMPRESSOR', 'MTR-CHILLER'")
+    lookback_days: int = Field(default=30, ge=1, le=90, description="Historical baseline lookback in days (default 30, range 1-90)")
     threshold_z: float = Field(default=3.0, ge=1.0, le=10.0, description="Z-score deviation threshold (default 3.0)")
     min_observations: int = Field(default=10, ge=2, description="Minimum sample size required per group (default 10)")
     limit: Optional[int] = Field(None, ge=1, le=5000, description="Optional maximum number of anomalies to return")
@@ -188,8 +189,10 @@ class ZeroProductionStandbyAnomaliesInput(BaseTimeRangeInput):
 
 
 class UnifiedAnomalyDetectionInput(BaseTimeRangeInput):
+    meter_id: Optional[str] = Field(None, description="Optional meter filter")
     z_threshold: float = Field(default=3.0, description="Z-score threshold for statistical anomalies (default 3.0)")
-    rolling_window_hours: int = Field(default=24, description="Elapsed-time window for rolling baseline (default 24)")
+    lookback_days: int = Field(default=30, ge=1, le=90, description="Historical baseline lookback in days for statistical anomalies (default 30, range 1-90)")
+    rolling_window_hours: int = Field(default=24, ge=2, le=720, description="Elapsed-time window for rolling baseline (default 24)")
     pf_threshold: Decimal = Field(default=Decimal("0.90"), description="Power factor threshold (default 0.90)")
     limit: Optional[int] = Field(None, ge=1, le=5000, description="Optional maximum number of anomalies to return")
 
@@ -460,9 +463,11 @@ register_tool(
 register_tool(
     name="statistical_energy_anomalies",
     description=(
-        "Flag hourly energy readings that are statistical outliers relative to the per-meter distribution "
-        "within the analyzed period. This is not an expected-energy baseline or proof of waste or equipment fault. "
-        "Handles zero variance safely and never compares unrelated meters or plants."
+        "Flag hourly energy readings that are statistical outliers relative to a strictly segregated "
+        "historical baseline window (default 30 days) partitioned per meter and plant. Evaluates deterministic "
+        "baseline qualification (QUALIFIED, INCONCLUSIVE, NOT_QUALIFIED) before computing Z-scores. Untrusted baselines "
+        "(NOT_QUALIFIED) are excluded from anomaly evaluation, preventing invalid comparisons. "
+        "Inconclusive baselines attach explicit confidence limitations. Distinguishes verified anomalies from untrusted or missing baseline data."
     ),
     category="anomalies",
     args_schema=StatisticalAnomaliesInput,
@@ -506,9 +511,9 @@ register_tool(
 register_tool(
     name="unified_anomaly_detection",
     description=(
-        "Run the complete unified anomaly detection suite combining statistical Z-score, rolling baseline, "
-        "power factor, and zero-output energy findings. Aggregate counts sum detector findings; the same "
-        "underlying observation may be flagged by more than one detector."
+        "Run the complete unified anomaly detection suite combining statistical Z-score (with deterministic baseline "
+        "qualification), rolling baseline, power factor, and zero-output energy findings. Untrusted statistical baselines "
+        "are disqualified from comparison. Aggregate counts sum detector findings."
     ),
     category="anomalies",
     args_schema=UnifiedAnomalyDetectionInput,

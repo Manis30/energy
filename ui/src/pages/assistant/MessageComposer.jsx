@@ -9,6 +9,8 @@ export default function MessageComposer({
   onSendMessage,
   onSelectSuggestion,
   disabled = false,
+  showSuggestions = false,
+  setShowSuggestions,
 }) {
   const textareaRef = useRef(null);
 
@@ -31,10 +33,28 @@ export default function MessageComposer({
   const handleSubmit = () => {
     const trimmed = (input || '').trim();
     if (!trimmed || trimmed.length > MAX_CHARS || disabled) return;
+    if (showSuggestions && setShowSuggestions) {
+      setShowSuggestions(false);
+    }
     onSendMessage(trimmed);
     setInput('');
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
+    }
+  };
+
+  const handleInputChange = (e) => {
+    setInput(e.target.value);
+    // Keep suggestions closed while user types
+    if (showSuggestions && setShowSuggestions) {
+      setShowSuggestions(false);
+    }
+  };
+
+  const handleInputFocus = () => {
+    // Prevent suggestions panel from blocking composer interaction
+    if (showSuggestions && setShowSuggestions) {
+      setShowSuggestions(false);
     }
   };
 
@@ -50,7 +70,8 @@ export default function MessageComposer({
           className="assistant-textarea"
           aria-label="Message to AI Assistant"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={handleInputChange}
+          onFocus={handleInputFocus}
           onKeyDown={handleKeyDown}
           placeholder={disabled ? 'Waiting for assistant response...' : 'Ask about plant energy, line intensity, anomalies, or shift performance...'}
           rows={1}
@@ -82,6 +103,9 @@ export default function MessageComposer({
       <div className="assistant-composer-meta-row">
         <div className="composer-meta-left">
           <SuggestedQuestions
+            isOpen={showSuggestions}
+            onToggle={() => setShowSuggestions && setShowSuggestions((prev) => !prev)}
+            onClose={() => setShowSuggestions && setShowSuggestions(false)}
             onSelectQuestion={onSelectSuggestion || onSendMessage}
             disabled={disabled}
           />

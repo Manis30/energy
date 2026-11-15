@@ -12,6 +12,7 @@ export default function AIAssistant({ theme, onToggleTheme }) {
   const [error, setError] = useState(null);
   const [lastFailedMessage, setLastFailedMessage] = useState(null);
   const [input, setInput] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const conversationRef = useRef(null);
 
   const formatTimestamp = () => {
@@ -21,6 +22,9 @@ export default function AIAssistant({ theme, onToggleTheme }) {
   const handleSendMessage = async (text) => {
     const trimmed = (text || '').trim();
     if (!trimmed || isLoading) return;
+
+    // Explicitly keep suggestions popover closed during message send
+    setShowSuggestions(false);
 
     // 1. Create and render user question
     const userMessageId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
@@ -70,6 +74,10 @@ export default function AIAssistant({ theme, onToggleTheme }) {
         tool_count: response.tool_count || 0,
         model_call_count: response.model_call_count || 0,
         execution_limit_reached: Boolean(response.execution_limit_reached),
+        verification_status: response.verification_status || 'NO_ANALYTIC_CLAIMS',
+        verified_claims_count: response.verified_claims_count ?? 0,
+        unverified_claims_count: response.unverified_claims_count ?? 0,
+        claims: response.claims || [],
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -108,6 +116,7 @@ export default function AIAssistant({ theme, onToggleTheme }) {
     setError(null);
     setLastFailedMessage(null);
     setInput('');
+    setShowSuggestions(false);
   };
 
   return (
@@ -158,8 +167,13 @@ export default function AIAssistant({ theme, onToggleTheme }) {
         input={input}
         setInput={setInput}
         onSendMessage={handleSendMessage}
-        onSelectSuggestion={handleSendMessage}
+        onSelectSuggestion={(suggestion) => {
+          setShowSuggestions(false);
+          handleSendMessage(suggestion);
+        }}
         disabled={isLoading}
+        showSuggestions={showSuggestions}
+        setShowSuggestions={setShowSuggestions}
       />
     </div>
   );

@@ -37,6 +37,13 @@ from app.services.agent.domo_client import (
     DomoTimeoutError,
     get_domo_client,
 )
+from app.services.agent.evidence_verifier import (
+    ClaimVerificationResult,
+    VerificationOutcome,
+    VerificationResponse,
+    VerificationSummary,
+    verify_numeric_claims,
+)
 from app.services.agent.prompts import (
     build_react_prompt,
     format_tool_catalog,
@@ -71,6 +78,12 @@ __all__ = [
     "AgentInputError",
     "MaxToolExecutionsError",
     "MaxModelCallsError",
+    # Evidence & Claim Verification
+    "ClaimVerificationResult",
+    "VerificationOutcome",
+    "VerificationResponse",
+    "VerificationSummary",
+    "verify_numeric_claims",
     # Action Parser
     "ActionParseError",
     "ToolNotFoundError",

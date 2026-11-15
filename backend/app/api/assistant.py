@@ -18,6 +18,7 @@ from app.api.deps import get_agent
 from app.schemas.assistant import (
     AssistantChatRequest,
     AssistantChatResponse,
+    ClaimVerificationItem,
     ToolEvidenceItem,
 )
 from app.schemas.common import ErrorResponse
@@ -156,6 +157,11 @@ async def chat_with_assistant(
         _sanitize_tool_evidence(ev) for ev in response.evidence
     ]
 
+    # 5. Serialize verification claims safely
+    serialized_claims: List[ClaimVerificationItem] = [
+        ClaimVerificationItem(**c) for c in getattr(response, "claims", [])
+    ]
+
     return AssistantChatResponse(
         conversation_id=str(conversation_id),
         answer=response.answer,
@@ -164,4 +170,8 @@ async def chat_with_assistant(
         tool_count=response.tool_executions_count,
         model_call_count=response.model_calls_count,
         execution_limit_reached=response.limit_reached,
+        verification_status=getattr(response, "verification_status", "VERIFIED"),
+        claims=serialized_claims,
+        verified_claims_count=getattr(response, "verified_claims_count", 0),
+        unverified_claims_count=getattr(response, "unverified_claims_count", 0),
     )

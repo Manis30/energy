@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { marked } from 'marked';
 import ToolEvidenceView from './ToolEvidenceView';
+import ClaimVerificationView from './ClaimVerificationView';
 
 // Configure marked with standard GFM tables and breaks
 marked.setOptions({
@@ -96,14 +97,23 @@ export default function ConversationView({
                   />
 
                   {!isError && (
-                    <ToolEvidenceView
-                      evidenceId={`assistant-evidence-${msg.id}`}
-                      toolReferences={msg.tool_references || []}
-                      toolEvidence={msg.tool_evidence || []}
-                      toolCount={msg.tool_count || 0}
-                      modelCallCount={msg.model_call_count || 0}
-                      executionLimitReached={Boolean(msg.execution_limit_reached)}
-                    />
+                    <>
+                      <ClaimVerificationView
+                        evidenceId={`assistant-claims-${msg.id}`}
+                        verificationStatus={msg.verification_status}
+                        claims={msg.claims || []}
+                        verifiedClaimsCount={msg.verified_claims_count || 0}
+                        unverifiedClaimsCount={msg.unverified_claims_count || 0}
+                      />
+                      <ToolEvidenceView
+                        evidenceId={`assistant-evidence-${msg.id}`}
+                        toolReferences={msg.tool_references || []}
+                        toolEvidence={msg.tool_evidence || []}
+                        toolCount={msg.tool_count || 0}
+                        modelCallCount={msg.model_call_count || 0}
+                        executionLimitReached={Boolean(msg.execution_limit_reached)}
+                      />
+                    </>
                   )}
                 </div>
               )}

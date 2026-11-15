@@ -79,6 +79,22 @@ class ToolEvidenceItem(BaseModel):
     )
 
 
+class ClaimVerificationItem(BaseModel):
+    """Detailed verification outcome for an individual numerical claim."""
+    model_config = ConfigDict(extra="forbid")
+
+    claimed_number: str = Field(..., description="Exact numerical string parsed from assistant response")
+    metric: Optional[str] = Field(None, description="Inferred or matched metric category (energy, cost, production, etc.)")
+    unit: Optional[str] = Field(None, description="Metric unit (kWh, INR, %, units, minutes, etc.)")
+    scope: Optional[str] = Field(None, description="Applicable plant, meter, line, product, or shift scope")
+    outcome: str = Field(..., description="Verification outcome: VERIFIED, UNVERIFIED, CONFLICTING, SCOPE_MISMATCH, UNIT_MISMATCH, or NOT_APPLICABLE")
+    authoritative_value: Optional[str] = Field(None, description="Authoritative numeric value from successful backend tool results")
+    authoritative_unit: Optional[str] = Field(None, description="Authoritative unit from backend evidence")
+    supporting_tool: Optional[str] = Field(None, description="Identifier of the successful tool providing authoritative evidence")
+    explanation: str = Field(..., description="Deterministic verification rationale or mismatch diagnosis")
+    was_corrected: bool = Field(default=False, description="Whether an unambiguous conflicting claim was corrected in the response")
+
+
 class AssistantChatResponse(BaseModel):
     """Structured response returned by POST /api/assistant/chat."""
     model_config = ConfigDict(extra="forbid")
@@ -98,4 +114,20 @@ class AssistantChatResponse(BaseModel):
     execution_limit_reached: bool = Field(
         default=False,
         description="True if the hard limit of 5 tool executions was reached",
+    )
+    verification_status: Optional[str] = Field(
+        default="VERIFIED",
+        description="Overall response verification status: VERIFIED, PARTIALLY_VERIFIED, UNVERIFIED, CONFLICT_DETECTED, or NO_ANALYTIC_CLAIMS",
+    )
+    claims: List[ClaimVerificationItem] = Field(
+        default_factory=list,
+        description="Deterministic verification outcomes for individual numerical claims in the response",
+    )
+    verified_claims_count: int = Field(
+        default=0,
+        description="Count of numerical claims successfully verified against backend evidence",
+    )
+    unverified_claims_count: int = Field(
+        default=0,
+        description="Count of numerical claims that could not be verified against backend evidence",
     )

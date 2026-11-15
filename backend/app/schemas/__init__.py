@@ -12,6 +12,7 @@ from app.schemas.assistant import (
     AssistantChatRequest,
     AssistantChatResponse,
     ChatMessage,
+    ClaimVerificationItem,
     ToolEvidenceItem,
 )
 from app.schemas.common import (
@@ -59,6 +60,7 @@ __all__ = [
     "ChatMessage",
     "AssistantChatRequest",
     "ToolEvidenceItem",
+    "ClaimVerificationItem",
     "AssistantChatResponse",
     # Common
     "ErrorResponse",

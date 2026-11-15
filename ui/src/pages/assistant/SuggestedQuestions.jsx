@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useRef, useEffect } from 'react';
 
 const SUGGESTED_QUESTIONS = [
   'What is our total energy consumption?',
@@ -9,13 +9,20 @@ const SUGGESTED_QUESTIONS = [
   'What is our factory SEC?',
 ];
 
-export default function SuggestedQuestions({ onSelectQuestion, disabled = false }) {
-  const [isOpen, setIsOpen] = useState(false);
+export default function SuggestedQuestions({
+  isOpen = false,
+  onToggle,
+  onClose,
+  onSelectQuestion,
+  disabled = false,
+}) {
   const anchorRef = useRef(null);
   const triggerRef = useRef(null);
 
-  const closeAndReturnFocus = () => {
-    setIsOpen(false);
+  const handleClose = () => {
+    if (onClose) {
+      onClose();
+    }
     triggerRef.current?.focus();
   };
 
@@ -23,13 +30,13 @@ export default function SuggestedQuestions({ onSelectQuestion, disabled = false 
   useEffect(() => {
     function handleClickOutside(event) {
       if (anchorRef.current && !anchorRef.current.contains(event.target)) {
-        setIsOpen(false);
+        if (onClose) onClose();
       }
     }
 
     function handleKeyDown(event) {
       if (event.key === 'Escape') {
-        closeAndReturnFocus();
+        handleClose();
       }
     }
 
@@ -41,12 +48,14 @@ export default function SuggestedQuestions({ onSelectQuestion, disabled = false 
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen]);
+  }, [isOpen, onClose]);
 
   const handleSelect = (question) => {
     if (disabled) return;
-    onSelectQuestion(question);
-    setIsOpen(false);
+    if (onClose) onClose();
+    if (onSelectQuestion) {
+      onSelectQuestion(question);
+    }
   };
 
   return (
@@ -54,7 +63,7 @@ export default function SuggestedQuestions({ onSelectQuestion, disabled = false 
       <button
         type="button"
         className={`assistant-suggestions-trigger ${isOpen ? 'active' : ''}`}
-        onClick={() => setIsOpen((prev) => !prev)}
+        onClick={onToggle}
         disabled={disabled}
         ref={triggerRef}
         title="View suggested energy analytics queries"
@@ -80,19 +89,19 @@ export default function SuggestedQuestions({ onSelectQuestion, disabled = false 
         </svg>
       </button>
 
-      <div
-        id="assistant-suggestions-dialog"
-        className="assistant-suggestions-popover"
-        role="dialog"
-        aria-label="Suggested Energy Queries"
-        hidden={!isOpen}
-      >
+      {isOpen && (
+        <div
+          id="assistant-suggestions-dialog"
+          className="assistant-suggestions-popover"
+          role="dialog"
+          aria-label="Suggested Energy Queries"
+        >
           <div className="suggestions-popover-header">
             <span className="popover-title">Suggested Energy Queries</span>
             <button
               type="button"
               className="popover-close-btn"
-              onClick={closeAndReturnFocus}
+              onClick={handleClose}
               aria-label="Close suggestions"
               title="Close"
             >
@@ -113,7 +122,8 @@ export default function SuggestedQuestions({ onSelectQuestion, disabled = false 
               </button>
             ))}
           </div>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

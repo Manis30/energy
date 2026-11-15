@@ -54,6 +54,13 @@ from app.services.agent.tool_registry import (
     execute_tool,
     get_tool,
 )
+from app.services.agent.evidence_verifier import (
+    ClaimVerificationResult,
+    VerificationOutcome,
+    VerificationResponse,
+    VerificationSummary,
+    verify_numeric_claims,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +123,10 @@ class AgentResponse:
     tool_executions_count: int
     model_calls_count: int
     limit_reached: bool = False
+    verification_status: str = "VERIFIED"
+    claims: List[Dict[str, Any]] = field(default_factory=list)
+    verified_claims_count: int = 0
+    unverified_claims_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -125,6 +136,10 @@ class AgentResponse:
             "tool_executions_count": self.tool_executions_count,
             "model_calls_count": self.model_calls_count,
             "limit_reached": self.limit_reached,
+            "verification_status": self.verification_status,
+            "claims": self.claims,
+            "verified_claims_count": self.verified_claims_count,
+            "unverified_claims_count": self.unverified_claims_count,
         }
 
 
@@ -421,6 +436,10 @@ class IndustrialEnergyAgent:
                             tool_executions_count=tool_executions_count,
                             model_calls_count=model_calls_count,
                             limit_reached=limit_reached,
+                            verification_status="PARTIALLY_VERIFIED" if evidence else "UNVERIFIED",
+                            claims=[],
+                            verified_claims_count=0,
+                            unverified_claims_count=0,
                         )
                     raise AgentError(
                         f"Model failed to produce a valid action after {self.max_corrections_per_step} correction attempts: {str(parse_err)}"
@@ -468,6 +487,10 @@ class IndustrialEnergyAgent:
                             tool_executions_count=tool_executions_count,
                             model_calls_count=model_calls_count,
                             limit_reached=limit_reached,
+                            verification_status="UNVERIFIED",
+                            claims=[],
+                            verified_claims_count=0,
+                            unverified_claims_count=0,
                         )
 
                 # 4b. Verify tool references: model must not claim tools that were never run or failed
@@ -491,13 +514,24 @@ class IndustrialEnergyAgent:
                 else:
                     valid_references = action.tool_references
 
-                return AgentResponse(
+                # 4c. Deterministic Numeric Claim Verification against authoritative tool evidence
+                verification = verify_numeric_claims(
                     answer=action.answer,
+                    evidence=evidence,
+                    user_question=clean_question,
+                )
+
+                return AgentResponse(
+                    answer=verification.final_answer,
                     tool_references=valid_references,
                     evidence=evidence,
                     tool_executions_count=tool_executions_count,
                     model_calls_count=model_calls_count,
                     limit_reached=limit_reached,
+                    verification_status=verification.summary.status,
+                    claims=[c.to_dict() for c in verification.claims],
+                    verified_claims_count=verification.summary.verified_claims,
+                    unverified_claims_count=verification.summary.unverified_claims,
                 )
 
             # ---------------------------------------------------------------
@@ -602,6 +636,10 @@ class IndustrialEnergyAgent:
                 tool_executions_count=tool_executions_count,
                 model_calls_count=model_calls_count,
                 limit_reached=True,
+                verification_status="PARTIALLY_VERIFIED" if any(e.success for e in evidence) else "UNVERIFIED",
+                claims=[],
+                verified_claims_count=0,
+                unverified_claims_count=0,
             )
 
         raise MaxModelCallsError(
