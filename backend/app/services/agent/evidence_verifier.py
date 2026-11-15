@@ -261,7 +261,41 @@ RE_METER_ID = re.compile(r'\bMTR-(?:SMT|FAL|HVAC|COMPRESSOR|CHILLER)\b', re.IGNO
 RE_SKU_ID = re.compile(r'\bSPH-(?:A15|PRO)-(?:128|256)\b', re.IGNORECASE)
 RE_PRODUCT_NAME = re.compile(r'\bAster\s+(?:15|Pro)\b', re.IGNORECASE)
 RE_VERSION = re.compile(r'\bv?\d+\.\d+(?:\.\d+)?\b', re.IGNORECASE)
-RE_STATUS_CODE = re.compile(r'\b(?:200|400|401|403|404|422|429|500|502|503|504)\b')
+
+# Contextual HTTP status code pattern (DEF-01): requires explicit HTTP/status/code/error context
+HTTP_CODES = r'200|400|401|403|404|422|429|500|502|503|504'
+RE_HTTP_STATUS_CODE = re.compile(
+    r'(?:'
+    # Leading context: HTTP, HTTP/1.1, status [code], response [code], error [code], code, returned/gave/giving [status/a]
+    r'(?:(?:HTTP(?:/[0-9.]+)?|status(?:\s*code)?|response(?:\s*code)?|error(?:\s*code)?|\bcode)\s*(?:of|:)?\s*(?:a\s+|an\s+|was\s+)?|(?:returned|returned\s+status|gave|giving)\s*(?:a\s+|an\s+)?)\s*'
+    rf'({HTTP_CODES})\b'
+    r'|'
+    # Trailing context: status code followed by HTTP status label or 'error' / 'status' / 'response'
+    rf'\b({HTTP_CODES})\s+'
+    r'(?:OK|Bad\s+Request|Unauthorized|Forbidden|Not\s+Found|Unprocessable(?:\s+Entity)?|Too\s+Many\s+Requests|Internal(?:\s+Server)?\s+Error|Bad\s+Gateway|Service\s+Unavailable|Gateway\s+Timeout|status|error|response\b)'
+    r')',
+    re.IGNORECASE,
+)
+RE_STATUS_CODE = RE_HTTP_STATUS_CODE  # Alias for backward compatibility
+
+# Enumeration patterns (DEF-02): numbered lists (1., 2)), step/item labels (Step 1:, Item 2:), and markdown headers
+RE_ENUMERATION_MARKER = re.compile(
+    r'^\s*(?:'
+    r'[-*]\s+'
+    r')?'
+    r'(?:'
+    r'\(?\d{1,3}[\.\)]'
+    r'|'
+    r'(?:Step|Item|Rule|Section|Phase)\s+\d{1,3}:?'
+    r'|'
+    r'#{1,6}\s*\d{1,3}:?'
+    r')',
+    re.IGNORECASE,
+)
+RE_ENUM_LINE_SPLIT = re.compile(
+    r'^((?:[-*]\s+)?(?:\(?\d{1,3}[\.\)]|(?:Step|Item|Rule|Section|Phase)\s+\d{1,3}:?|#{1,6}\s*\d{1,3}:?))(?:\s+(.*))?$',
+    re.IGNORECASE,
+)
 RE_TOOL_LIMIT_REF = re.compile(r'\b(?:limit\s*(?:of)?\s*5|5\s*tool\s*(?:calls?|executions?))\b', re.IGNORECASE)
 RE_POLICY_THRESHOLD_PF = re.compile(r'\b(?:threshold\s*(?:of|=)?\s*0\.90|0\.90\s*(?:threshold|cutoff))\b', re.IGNORECASE)
 RE_POLICY_THRESHOLD_Z = re.compile(r'\b(?:threshold\s*(?:of|=)?\s*3\.0|3\.0\s*(?:sigma|threshold|z-score))\b', re.IGNORECASE)
@@ -541,19 +575,33 @@ def _normalize_claim_number(raw_match: str) -> Tuple[bool, Optional[Decimal], st
 
 
 def _split_into_sentences(text: str) -> List[str]:
-    """Split text into distinct sentences and bullet lines."""
+    """Split text into distinct sentences and bullet lines preserving enumeration prefixes."""
     raw_lines = text.split("\n")
     sentences: List[str] = []
     for line in raw_lines:
         line_clean = line.strip()
         if not line_clean:
             continue
-        # Split by sentence periods followed by space and capital letter, preserving bullets
-        parts = re.split(r'(?<=[.!?])\s+(?=[A-Z0-9*#>-])', line_clean)
-        for p in parts:
-            p_strip = p.strip()
-            if p_strip:
-                sentences.append(p_strip)
+        m_enum = RE_ENUM_LINE_SPLIT.match(line_clean)
+        if m_enum:
+            prefix = m_enum.group(1)
+            rest = m_enum.group(2)
+            if rest:
+                parts = re.split(r'(?<=[.!?])\s+(?=[A-Z0-9*#>-])', rest)
+                if parts:
+                    sentences.append(f"{prefix} {parts[0].strip()}")
+                    for p in parts[1:]:
+                        p_strip = p.strip()
+                        if p_strip:
+                            sentences.append(p_strip)
+            else:
+                sentences.append(prefix)
+        else:
+            parts = re.split(r'(?<=[.!?])\s+(?=[A-Z0-9*#>-])', line_clean)
+            for p in parts:
+                p_strip = p.strip()
+                if p_strip:
+                    sentences.append(p_strip)
     return sentences
 
 
@@ -587,17 +635,16 @@ def _is_non_claim(sentence: str, match_start: int, match_end: int, num_str: str)
         (RE_SKU_ID, "Product SKU identifier"),
         (RE_PRODUCT_NAME, "Product model name"),
         (RE_VERSION, "Algorithm or tool version"),
-        (RE_STATUS_CODE, "HTTP status code"),
+        (RE_HTTP_STATUS_CODE, "HTTP status code"),
     ]:
         for m in pat.finditer(sentence):
             if m.start() <= match_start and match_end <= m.end():
                 return True, label
 
-    # 4. Check if number is part of list enumeration at start of sentence (e.g. '1. ', '2) ')
-    prefix = sentence[:match_end].strip()
-    if re.match(r'^(?:(?:\d+[\.\)])|Step\s+\d+:?|Rule\s+\d+:?|###?\s*\d+)', prefix):
-        if match_start <= 4:
-            return True, "List enumeration or step marker"
+    # 4. Check if number is part of list enumeration at start of sentence (e.g. '1. ', '2) ', 'Step 1:')
+    m_enum = RE_ENUMERATION_MARKER.match(sentence)
+    if m_enum and m_enum.start() <= match_start and match_end <= m_enum.end():
+        return True, "List enumeration or step marker"
 
     # 5. Check if number is a static system constant or execution limit
     for pat, label in [
