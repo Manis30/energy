@@ -8,9 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db_session
-from app.config import MAX_UPLOAD_SIZE_MB
+from app.config import get_settings
 from app.models.upload_history import UploadHistory
+from app.schemas.common import validate_date_range
 from app.schemas.daily_reports import (
+    DailyReportCoverageResponse,
     IngestReportResponse,
     InspectResponse,
     UploadHistoryItem,
@@ -18,6 +20,7 @@ from app.schemas.daily_reports import (
 )
 from app.services.daily_report_service import (
     generate_template_csv,
+    get_daily_report_coverage,
     ingest_validated_report,
     inspect_file,
     validate_report_file,
@@ -25,7 +28,9 @@ from app.services.daily_report_service import (
 
 router = APIRouter()
 
+MAX_UPLOAD_SIZE_MB = get_settings().MAX_UPLOAD_SIZE_MB
 MAX_FILE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+MAX_COVERAGE_RANGE_DAYS = 366
 
 
 async def read_uploaded_file_safely(file: UploadFile, max_bytes: int = MAX_FILE_BYTES) -> bytes:
@@ -171,6 +176,36 @@ def get_upload_history(
     stmt = stmt.order_by(UploadHistory.uploaded_at.desc()).limit(limit)
     records = db.execute(stmt).scalars().all()
     return [UploadHistoryItem.model_validate(r) for r in records]
+
+
+@router.get(
+    "/coverage",
+    response_model=DailyReportCoverageResponse,
+    summary="Report persisted daily energy and production coverage",
+    description=(
+        "Groups observed energy and production records by plant and reporting date. "
+        "Does not assume a 24-hour schedule or per-hour entity expectations."
+    ),
+)
+def get_report_coverage(
+    start_date: date = Query(..., description="Inclusive start reporting date (YYYY-MM-DD)"),
+    end_date: date = Query(..., description="Inclusive end reporting date (YYYY-MM-DD)"),
+    db: Session = Depends(get_db_session),
+) -> DailyReportCoverageResponse:
+    validate_date_range(start_date, end_date)
+    requested_days = (end_date - start_date).days + 1
+    if requested_days > MAX_COVERAGE_RANGE_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Date range must not exceed {MAX_COVERAGE_RANGE_DAYS} inclusive days.",
+        )
+
+    data = get_daily_report_coverage(
+        session=db,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return DailyReportCoverageResponse(**data)
 
 
 @router.get(

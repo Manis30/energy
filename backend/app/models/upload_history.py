@@ -1,11 +1,14 @@
 """SQLAlchemy model for tracking daily report uploads and ingestion audit history."""
 
 from datetime import date, datetime
-from typing import Optional
+from typing import TYPE_CHECKING, List, Optional
 from sqlalchemy import Date, DateTime, Index, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+
+if TYPE_CHECKING:
+    from app.models.source_data import FactEnergyMeterHourly, FactHourlyProduction
 
 
 class UploadHistory(Base):
@@ -37,6 +40,18 @@ class UploadHistory(Base):
         Index("idx_upload_history_report_type", "report_type"),
         Index("idx_upload_history_uploaded_at", "uploaded_at"),
         Index("idx_upload_history_reporting_date", "reporting_date"),
+    )
+
+    # Provenance relationships
+    energy_records: Mapped[List["FactEnergyMeterHourly"]] = relationship(
+        "FactEnergyMeterHourly",
+        back_populates="upload",
+        foreign_keys="FactEnergyMeterHourly.upload_id",
+    )
+    production_records: Mapped[List["FactHourlyProduction"]] = relationship(
+        "FactHourlyProduction",
+        back_populates="upload",
+        foreign_keys="FactHourlyProduction.upload_id",
     )
 
 

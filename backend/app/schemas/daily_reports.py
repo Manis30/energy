@@ -1,6 +1,7 @@
 """Pydantic schemas for daily report validation, inspection, ingestion, and audit history."""
 
 from datetime import date, datetime
+from enum import Enum
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
@@ -33,6 +34,18 @@ class PreviewRow(BaseModel):
     errors: List[str] = Field(default_factory=list)
 
 
+class CompletenessInfo(BaseModel):
+    """Assessment of reporting coverage against standard 24-hour factory structures."""
+    is_complete: bool = True
+    coverage_status: str = Field("COMPLETE", description="'COMPLETE' or 'PARTIAL'")
+    hours_reported: int = 24
+    missing_hours: List[int] = Field(default_factory=list)
+    found_entities: List[str] = Field(default_factory=list)
+    missing_entities: List[str] = Field(default_factory=list)
+    plant_scopes: Dict[str, Any] = Field(default_factory=dict)
+    limitations: List[str] = Field(default_factory=list)
+
+
 class ValidationSummary(BaseModel):
     """Aggregated validation statistics and operational metrics."""
     report_type: str
@@ -46,6 +59,12 @@ class ValidationSummary(BaseModel):
     meters_found: Optional[List[str]] = None
     lines_found: Optional[List[str]] = None
     is_ready_for_ingest: bool = False
+    is_complete: bool = True
+    coverage_status: str = "COMPLETE"
+    missing_hours: List[int] = Field(default_factory=list)
+    missing_entities: List[str] = Field(default_factory=list)
+    limitations: List[str] = Field(default_factory=list)
+    completeness: Optional[CompletenessInfo] = None
 
 
 class ValidateReportResponse(BaseModel):
@@ -72,6 +91,8 @@ class IngestReportResponse(BaseModel):
     rejected_rows: int
     mode: str = Field(..., description="INCREMENTAL or OVERWRITE_CORRECTION")
     message: str
+    replaced_rows: int = 0
+    affected_scope: Optional[Dict[str, Any]] = None
 
 
 class UploadHistoryItem(BaseModel):
@@ -95,4 +116,84 @@ class UploadHistoryItem(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class CoverageRecordStatus(str, Enum):
+    """Whether any persisted records were observed for a plant and date."""
+
+    NO_RECORDS = "NO_RECORDS"
+    OBSERVED = "OBSERVED"
+
+
+class EntityCoverageStatus(str, Enum):
+    """Date-level entity observation status, not an hourly operating schedule."""
+
+    NO_RECORDS = "NO_RECORDS"
+    PARTIAL_OBSERVED = "PARTIAL_OBSERVED"
+    ALL_REGISTERED_OBSERVED = "ALL_REGISTERED_OBSERVED"
+    UNDETERMINED = "UNDETERMINED"
+
+
+class DailyStreamCoverage(BaseModel):
+    """Persisted data coverage for one stream, plant, and reporting date."""
+
+    plant_id: str
+    reporting_date: date
+    record_status: CoverageRecordStatus = Field(
+        ..., description="Whether persisted records exist for this plant and date"
+    )
+    coverage_status: EntityCoverageStatus = Field(
+        ...,
+        description=(
+            "Entity presence across the date only; ALL_REGISTERED_OBSERVED means each "
+            "known registered entity appeared at least once, not once per hour"
+        ),
+    )
+    record_count: int = Field(..., ge=0, description="Number of persisted fact rows")
+    observed_hours: int = Field(
+        ...,
+        ge=0,
+        description="Distinct hourly fact timestamps containing records; not scheduled operating hours",
+    )
+    expected_entity_count: Optional[int] = Field(
+        None, description="Registered entities applicable to this plant, when determinable"
+    )
+    expected_entities: Optional[List[str]] = Field(
+        None, description="Registered entities applicable to this plant, when determinable"
+    )
+    observed_entity_count: int = Field(..., ge=0)
+    observed_entities: List[str] = Field(default_factory=list)
+    unobserved_registered_entities: Optional[List[str]] = Field(
+        None,
+        description="Registered entities with no record on this date; does not imply they were scheduled",
+    )
+    unregistered_observed_entities: List[str] = Field(
+        default_factory=list,
+        description="Observed entity identifiers absent from the available registry",
+    )
+    all_registered_entities_observed_for_date: Optional[bool] = Field(
+        None,
+        description="Whether all applicable registered entities appeared at least once on this date",
+    )
+    missing_hours: Optional[List[int]] = Field(
+        None,
+        description="Unavailable without an approved operating calendar or expected-hour schedule",
+    )
+    first_observed_timestamp: Optional[datetime] = None
+    last_observed_timestamp: Optional[datetime] = None
+    limitations: List[str] = Field(default_factory=list)
+
+
+class DailyReportCoverageResponse(BaseModel):
+    """Read-only energy and production coverage for an inclusive date range."""
+
+    start_date: date
+    end_date: date
+    registered_energy_meters: List[str] = Field(
+        default_factory=list,
+        description="Globally configured meter catalog; no plant-to-meter registry is available",
+    )
+    energy_coverage: List[DailyStreamCoverage] = Field(default_factory=list)
+    production_coverage: List[DailyStreamCoverage] = Field(default_factory=list)
+    limitations: List[str] = Field(default_factory=list)
 

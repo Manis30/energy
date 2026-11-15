@@ -8,12 +8,12 @@ import os
 import re
 import uuid
 import zipfile
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import openpyxl
-from sqlalchemy import delete, inspect, select, text
+from sqlalchemy import delete, func, inspect, select, text, tuple_
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -25,6 +25,7 @@ from app.models.source_data import (
 )
 from app.models.upload_history import UploadHistory
 from app.schemas.daily_reports import (
+    CompletenessInfo,
     InspectResponse,
     PreviewRow,
     RowValidationError,
@@ -103,6 +104,8 @@ METER_AREA_MAPPING = {
     "MTR-COMPRESSOR": "COMPRESSOR",
     "MTR-CHILLER": "CHILLER",
 }
+VALID_METERS = frozenset(METER_AREA_MAPPING)
+VALID_ENERGY_SOURCES = frozenset({"ELECTRICITY"})
 
 NON_FINITE_STRINGS = {"nan", "infinity", "-infinity", "inf", "-inf", "null", "none"}
 
@@ -262,6 +265,99 @@ def classify_columns(columns: List[str]) -> str:
     return "UNKNOWN"
 
 
+NUMERIC_COLUMNS = frozenset({
+    # Energy schema numeric columns
+    "consumption_kwh",
+    "demand_kw",
+    "power_factor",
+    "tariff_inr_per_kwh",
+    "cost_inr",
+    "co2e_kg",
+    # Production schema numeric columns
+    "target_qty",
+    "actual_qty",
+    "good_qty",
+    "reject_qty",
+    "rework_qty",
+    "downtime_min",
+    "year",
+    "month",
+    "week",
+    "day",
+    "hour",
+})
+
+
+def is_numeric_column(col_name: str) -> bool:
+    """Determine if a column is a numeric measurement or count field."""
+    norm = normalize_col_name(col_name)
+    if norm in NUMERIC_COLUMNS:
+        return True
+    if any(norm.startswith(p) for p in ("consumption_", "demand_", "tariff_", "cost_", "co2e_")):
+        return True
+    if any(norm.endswith(s) for s in ("_qty", "_min", "_kwh", "_kw", "_inr", "_kg")):
+        return True
+    return False
+
+
+def sanitize_cell_value(val: Any, col_name: str) -> Any:
+    """
+    Column-aware cell sanitization protecting against formula injection while
+    strictly preserving negative and positive numeric values for validation.
+
+    Rules:
+    1. Numeric objects (int, float, Decimal) are preserved untouched.
+    2. In numeric columns:
+       - Legitimate numbers with optional sign (e.g., -50, +50, 50, -0.92) are preserved
+         for subsequent Decimal/int and range validation.
+       - Never strip leading minus '-' or plus '+' signs.
+       - Dangerous formula prefixes ('=', '@') are safely neutralized by prepending a single quote
+         so they cannot execute as formulas and will fail numeric parsing cleanly.
+    3. In text columns:
+       - Ordinary text is preserved unchanged (including legitimate '+' or '-' characters).
+       - Dangerous formula-like text beginning with '=' or '@' is safely neutralized by
+         prepending a single quote "'".
+    """
+    if val is None:
+        return None
+
+    # Already numeric type from Excel parser (int, float, Decimal)
+    if isinstance(val, (int, float, Decimal)) and not isinstance(val, bool):
+        return val
+
+    # Non-string types (datetime, date, bool) are preserved
+    if not isinstance(val, str):
+        return val
+
+    s = val.strip()
+    if not s:
+        return ""
+
+    if is_numeric_column(col_name):
+        # Numeric column:
+        # Check if it begins with dangerous formula prefix '=' or '@'
+        if s.startswith(("=", "@")):
+            return f"'{s}"
+        # Legitimate numeric strings (including -50, +50, 50.5, etc.) are preserved exactly
+        return s
+    else:
+        # Text / Non-numeric column:
+        # Ordinary text preserved unchanged; never strip '+' or '-'
+        if s.startswith(("=", "@")):
+            # Dangerous formula-like text: safely neutralize with leading single quote
+            return f"'{s}"
+        return s
+
+
+def check_cell_formula_injection(val: Any) -> bool:
+    """Check if a cell value contains a formula injection attempt starting with '=' or '@'."""
+    if isinstance(val, str):
+        s = val.strip()
+        if s.startswith(("=", "@")) or s.startswith(("'=", "'@")):
+            return True
+    return False
+
+
 def parse_raw_sheet_rows(
     file_bytes: bytes, file_format: str, sheet_name: Optional[str] = None
 ) -> Tuple[List[str], List[Dict[str, Any]]]:
@@ -297,10 +393,7 @@ def parse_raw_sheet_rows(
                 row_dict = {}
                 for idx, col_name in enumerate(headers):
                     val = r[idx].strip() if idx < len(r) else ""
-                    # Security: formula injection defense
-                    if isinstance(val, str) and val.startswith(("=", "+", "-", "@")):
-                        val = val.lstrip("=+-@")
-                    row_dict[col_name] = val
+                    row_dict[col_name] = sanitize_cell_value(val, col_name)
                 rows.append(row_dict)
 
     elif file_format == "XLSX":
@@ -332,11 +425,7 @@ def parse_raw_sheet_rows(
                 row_dict = {}
                 for idx, col_name in enumerate(headers):
                     val = row[idx] if idx < len(row) else None
-                    if val is not None:
-                        # Prevent formula execution
-                        if isinstance(val, str) and val.startswith(("=", "+", "-", "@")):
-                            val = val.lstrip("=+-@")
-                    row_dict[col_name] = val
+                    row_dict[col_name] = sanitize_cell_value(val, col_name)
                 rows.append(row_dict)
         wb.close()
 
@@ -362,8 +451,8 @@ def parse_raw_sheet_rows(
                         # Convert date tuple to datetime
                         date_tuple = xlrd.xldate_as_tuple(val, wb.datemode)
                         val = datetime(*date_tuple)
-                    elif isinstance(val, str) and val.startswith(("=", "+", "-", "@")):
-                        val = val.lstrip("=+-@")
+                    else:
+                        val = sanitize_cell_value(val, col_name)
                     if val is not None and str(val).strip() != "":
                         is_empty = False
                     row_dict[col_name] = val
@@ -446,6 +535,14 @@ def parse_cell_decimal(val: Any) -> Optional[Decimal]:
     """Parse numeric cell safely into finite Decimal, rejecting NaN, Inf, and non-numbers."""
     if val is None:
         return None
+    if isinstance(val, Decimal):
+        return val if val.is_finite() else None
+    if isinstance(val, int) and not isinstance(val, bool):
+        return Decimal(val)
+    if isinstance(val, float):
+        if not math.isfinite(val):
+            return None
+        return Decimal(str(val))
     s = str(val).strip()
     if not s or s.lower() in NON_FINITE_STRINGS:
         return None
@@ -463,6 +560,16 @@ def parse_cell_int(val: Any) -> Optional[int]:
     """Parse numeric cell safely into Integer, rejecting non-finite, fractions, or overflow."""
     if val is None:
         return None
+    if isinstance(val, int) and not isinstance(val, bool):
+        return val
+    if isinstance(val, float):
+        if not math.isfinite(val) or val != math.floor(val):
+            return None
+        return int(val)
+    if isinstance(val, Decimal):
+        if not val.is_finite() or val != val.to_integral_value():
+            return None
+        return int(val)
     s = str(val).strip()
     if not s or s.lower() in NON_FINITE_STRINGS:
         return None
@@ -486,6 +593,7 @@ class MasterDataCache:
         self.products: Set[str] = set()
         self.lines_by_plant: Set[Tuple[str, str]] = set()
         self.plants: Set[str] = set()
+        self.lines_for_plant: Dict[str, List[str]] = {}
 
         # Load dim_product
         prods = session.execute(select(DimProduct.product_id)).scalars().all()
@@ -498,6 +606,7 @@ class MasterDataCache:
         for l_id, p_id in lines:
             self.lines_by_plant.add((l_id, p_id))
             self.plants.add(p_id)
+            self.lines_for_plant.setdefault(p_id, []).append(l_id)
 
 
 def detect_reporting_dates_from_rows(
@@ -523,6 +632,379 @@ def detect_reporting_dates_from_rows(
     return sorted(list(found_dates))
 
 
+def assess_report_completeness(
+    report_type: str,
+    valid_records: List[Dict[str, Any]],
+    master_cache: MasterDataCache,
+) -> CompletenessInfo:
+    """
+    Assess whether the validated records provide complete operational coverage.
+    Checks:
+    1. 24 hourly intervals (hours 0..23). Zero-consumption or zero-production records
+       still count as reported intervals (distinguishing missing intervals from reported zeros).
+    2. All expected meters per plant for energy reports (5 submeters).
+    3. All expected production lines per plant for production reports from dim_production_line.
+    """
+    if not valid_records:
+        return CompletenessInfo(
+            is_complete=False,
+            coverage_status="PARTIAL",
+            hours_reported=0,
+            missing_hours=list(range(24)),
+            found_entities=[],
+            missing_entities=[],
+            plant_scopes={},
+            limitations=["No valid records to evaluate coverage."],
+        )
+
+    plant_scopes: Dict[str, Any] = {}
+    limitations: List[str] = []
+
+    if report_type == "ENERGY":
+        expected_meters = sorted(list(VALID_METERS))
+        # Group records by plant
+        by_plant: Dict[str, List[Dict[str, Any]]] = {}
+        for r in valid_records:
+            pid = r.get("plant_id", "UNKNOWN")
+            by_plant.setdefault(pid, []).append(r)
+
+        all_found_hours: Set[int] = set()
+        all_found_meters: Set[str] = set()
+
+        for pid, precs in by_plant.items():
+            hours = {r["timestamp"].hour for r in precs if r.get("timestamp")}
+            all_found_hours.update(hours)
+            meters = {r["meter_id"] for r in precs if r.get("meter_id")}
+            all_found_meters.update(meters)
+
+            missing_hrs = sorted(list(set(range(24)) - hours))
+            missing_mtrs = sorted(list(set(expected_meters) - meters))
+            p_complete = len(missing_hrs) == 0 and len(missing_mtrs) == 0
+
+            plant_scopes[pid] = {
+                "hours_reported": len(hours),
+                "missing_hours": missing_hrs,
+                "meters_reported": len(meters),
+                "found_meters": sorted(list(meters)),
+                "expected_meters": expected_meters,
+                "missing_meters": missing_mtrs,
+                "is_complete": p_complete,
+            }
+
+            if missing_hrs:
+                limitations.append(
+                    f"Plant '{pid}': {len(hours)}/24 hourly intervals reported. Missing hours: {missing_hrs}. "
+                    f"Daily total energy will reflect partial operating hours and underestimate 24-hour consumption."
+                )
+            if missing_mtrs:
+                limitations.append(
+                    f"Plant '{pid}': {len(meters)}/5 submeters reported. Missing meters: {', '.join(missing_mtrs)}. "
+                    f"Utility segregation and Factory SEC will be unavailable or incomplete."
+                )
+
+        overall_missing_hours = sorted(list(set(range(24)) - all_found_hours))
+        overall_missing_meters = sorted(list(set(expected_meters) - all_found_meters))
+        is_complete = all(ps["is_complete"] for ps in plant_scopes.values())
+
+        return CompletenessInfo(
+            is_complete=is_complete,
+            coverage_status="COMPLETE" if is_complete else "PARTIAL",
+            hours_reported=len(all_found_hours),
+            missing_hours=overall_missing_hours,
+            found_entities=sorted(list(all_found_meters)),
+            missing_entities=overall_missing_meters,
+            plant_scopes=plant_scopes,
+            limitations=limitations,
+        )
+
+    elif report_type == "PRODUCTION":
+        by_plant: Dict[str, List[Dict[str, Any]]] = {}
+        for r in valid_records:
+            pid = r.get("plant_id", "UNKNOWN")
+            by_plant.setdefault(pid, []).append(r)
+
+        all_found_hours = set()
+        all_found_lines = set()
+        all_expected_lines = set()
+
+        for pid, precs in by_plant.items():
+            hours = {r["event_ts"].hour for r in precs if r.get("event_ts")}
+            all_found_hours.update(hours)
+            lines = {r["line_id"] for r in precs if r.get("line_id")}
+            all_found_lines.update(lines)
+
+            expected_lines_plant = sorted(master_cache.lines_for_plant.get(pid, []))
+            all_expected_lines.update(expected_lines_plant)
+
+            missing_hrs = sorted(list(set(range(24)) - hours))
+            missing_lns = sorted(list(set(expected_lines_plant) - lines)) if expected_lines_plant else []
+            p_complete = len(missing_hrs) == 0 and len(missing_lns) == 0
+
+            plant_scopes[pid] = {
+                "hours_reported": len(hours),
+                "missing_hours": missing_hrs,
+                "lines_reported": len(lines),
+                "found_lines": sorted(list(lines)),
+                "expected_lines": expected_lines_plant,
+                "missing_lines": missing_lns,
+                "is_complete": p_complete,
+            }
+
+            if missing_hrs:
+                limitations.append(
+                    f"Plant '{pid}': {len(hours)}/24 hourly intervals reported. Missing hours: {missing_hrs}. "
+                    f"Reported production output and downtime reflect partial operating intervals."
+                )
+            if missing_lns:
+                limitations.append(
+                    f"Plant '{pid}': {len(lines)}/{len(expected_lines_plant)} lines reported. Missing lines: {', '.join(missing_lns)}. "
+                    f"Production output does not represent full facility output."
+                )
+
+        overall_missing_hours = sorted(list(set(range(24)) - all_found_hours))
+        overall_missing_lines = sorted(list(all_expected_lines - all_found_lines))
+        is_complete = all(ps["is_complete"] for ps in plant_scopes.values())
+
+        return CompletenessInfo(
+            is_complete=is_complete,
+            coverage_status="COMPLETE" if is_complete else "PARTIAL",
+            hours_reported=len(all_found_hours),
+            missing_hours=overall_missing_hours,
+            found_entities=sorted(list(all_found_lines)),
+            missing_entities=overall_missing_lines,
+            plant_scopes=plant_scopes,
+            limitations=limitations,
+        )
+
+    return CompletenessInfo(
+        is_complete=True,
+        coverage_status="COMPLETE",
+        hours_reported=24,
+        missing_hours=[],
+        found_entities=[],
+        missing_entities=[],
+        plant_scopes={},
+        limitations=[],
+    )
+
+
+def get_daily_report_coverage(
+    session: Session,
+    start_date: date,
+    end_date: date,
+) -> Dict[str, Any]:
+    """Report persisted daily energy and production coverage without assuming schedules."""
+    energy_daily_rows = session.execute(
+        select(
+            FactEnergyMeterHourly.plant_id,
+            FactEnergyMeterHourly.date,
+            func.count(FactEnergyMeterHourly.meter_reading_id),
+            func.count(func.distinct(FactEnergyMeterHourly.timestamp)),
+            func.min(FactEnergyMeterHourly.timestamp),
+            func.max(FactEnergyMeterHourly.timestamp),
+        )
+        .where(
+            FactEnergyMeterHourly.date >= start_date,
+            FactEnergyMeterHourly.date <= end_date,
+        )
+        .group_by(FactEnergyMeterHourly.plant_id, FactEnergyMeterHourly.date)
+    ).all()
+    energy_entities_rows = session.execute(
+        select(
+            FactEnergyMeterHourly.plant_id,
+            FactEnergyMeterHourly.date,
+            FactEnergyMeterHourly.meter_id,
+        )
+        .where(
+            FactEnergyMeterHourly.date >= start_date,
+            FactEnergyMeterHourly.date <= end_date,
+        )
+        .group_by(
+            FactEnergyMeterHourly.plant_id,
+            FactEnergyMeterHourly.date,
+            FactEnergyMeterHourly.meter_id,
+        )
+    ).all()
+
+    production_daily_rows = session.execute(
+        select(
+            FactHourlyProduction.plant_id,
+            FactHourlyProduction.event_date,
+            func.count(FactHourlyProduction.event_id),
+            func.count(func.distinct(FactHourlyProduction.event_ts)),
+            func.min(FactHourlyProduction.event_ts),
+            func.max(FactHourlyProduction.event_ts),
+        )
+        .where(
+            FactHourlyProduction.event_date >= start_date,
+            FactHourlyProduction.event_date <= end_date,
+        )
+        .group_by(FactHourlyProduction.plant_id, FactHourlyProduction.event_date)
+    ).all()
+    production_entities_rows = session.execute(
+        select(
+            FactHourlyProduction.plant_id,
+            FactHourlyProduction.event_date,
+            FactHourlyProduction.line_id,
+        )
+        .where(
+            FactHourlyProduction.event_date >= start_date,
+            FactHourlyProduction.event_date <= end_date,
+        )
+        .group_by(
+            FactHourlyProduction.plant_id,
+            FactHourlyProduction.event_date,
+            FactHourlyProduction.line_id,
+        )
+    ).all()
+
+    energy_by_day = {
+        (plant_id, reporting_date): {
+            "record_count": int(record_count),
+            "observed_hours": int(observed_hours),
+            "first_timestamp": first_timestamp,
+            "last_timestamp": last_timestamp,
+        }
+        for plant_id, reporting_date, record_count, observed_hours, first_timestamp, last_timestamp in energy_daily_rows
+    }
+    energy_entities_by_day: Dict[Tuple[str, date], Set[str]] = {}
+    for plant_id, reporting_date, meter_id in energy_entities_rows:
+        energy_entities_by_day.setdefault((plant_id, reporting_date), set()).add(meter_id)
+
+    production_by_day = {
+        (plant_id, reporting_date): {
+            "record_count": int(record_count),
+            "observed_hours": int(observed_hours),
+            "first_timestamp": first_timestamp,
+            "last_timestamp": last_timestamp,
+        }
+        for plant_id, reporting_date, record_count, observed_hours, first_timestamp, last_timestamp in production_daily_rows
+    }
+    production_entities_by_day: Dict[Tuple[str, date], Set[str]] = {}
+    for plant_id, reporting_date, line_id in production_entities_rows:
+        production_entities_by_day.setdefault((plant_id, reporting_date), set()).add(line_id)
+
+    observed_plants = {
+        plant_id
+        for plant_id, _ in set(energy_by_day) | set(production_by_day)
+    }
+    lines_by_plant: Dict[str, Set[str]] = {}
+    registered_line_rows = session.execute(
+        select(DimProductionLine.plant_id, DimProductionLine.line_id)
+    ).all()
+    for plant_id, line_id in registered_line_rows:
+        lines_by_plant.setdefault(plant_id, set()).add(line_id)
+    coverage_plant_ids = observed_plants | set(lines_by_plant)
+
+    reporting_dates = [
+        start_date + timedelta(days=offset)
+        for offset in range((end_date - start_date).days + 1)
+    ]
+    energy_coverage = []
+    production_coverage = []
+    energy_limitations = [
+        "The configured energy meter catalog is global and has no plant-to-meter mapping; "
+        "plant-specific expected meters and unobserved registered meters cannot be determined.",
+        "No approved operating calendar or expected-hour schedule is available; missing hours are not inferred.",
+        "Entity observation is summarized across the date and does not imply that every entity should report each hour.",
+    ]
+    production_limitations = [
+        "Production lines are compared with the current plant-to-line registry; the registry has no effective dates "
+        "to establish which lines were active historically.",
+        "No approved operating calendar or expected-hour schedule is available; missing hours are not inferred.",
+        "Entity observation is summarized across the date and does not imply that every line should report each hour.",
+    ]
+
+    for plant_id in sorted(coverage_plant_ids):
+        registered_lines = lines_by_plant.get(plant_id)
+        for reporting_date in reporting_dates:
+            key = (plant_id, reporting_date)
+
+            energy_day = energy_by_day.get(key)
+            observed_meters = sorted(energy_entities_by_day.get(key, set()))
+            energy_record_count = energy_day["record_count"] if energy_day else 0
+            energy_coverage.append({
+                "plant_id": plant_id,
+                "reporting_date": reporting_date,
+                "record_status": "OBSERVED" if energy_record_count else "NO_RECORDS",
+                "coverage_status": "UNDETERMINED" if energy_record_count else "NO_RECORDS",
+                "record_count": energy_record_count,
+                "observed_hours": energy_day["observed_hours"] if energy_day else 0,
+                "expected_entity_count": None,
+                "expected_entities": None,
+                "observed_entity_count": len(observed_meters),
+                "observed_entities": observed_meters,
+                "unobserved_registered_entities": None,
+                "unregistered_observed_entities": sorted(set(observed_meters) - VALID_METERS),
+                "all_registered_entities_observed_for_date": None,
+                "missing_hours": None,
+                "first_observed_timestamp": energy_day["first_timestamp"] if energy_day else None,
+                "last_observed_timestamp": energy_day["last_timestamp"] if energy_day else None,
+                "limitations": energy_limitations,
+            })
+
+            production_day = production_by_day.get(key)
+            observed_lines = sorted(production_entities_by_day.get(key, set()))
+            production_record_count = production_day["record_count"] if production_day else 0
+            expected_lines = sorted(registered_lines) if registered_lines else None
+            unobserved_lines = (
+                sorted(set(expected_lines) - set(observed_lines))
+                if expected_lines is not None
+                else None
+            )
+            all_registered_lines_observed = (
+                set(expected_lines).issubset(observed_lines)
+                if expected_lines is not None
+                else None
+            )
+            if not production_record_count:
+                production_status = "NO_RECORDS"
+            elif expected_lines is None:
+                production_status = "UNDETERMINED"
+            elif all_registered_lines_observed:
+                production_status = "ALL_REGISTERED_OBSERVED"
+            else:
+                production_status = "PARTIAL_OBSERVED"
+
+            production_coverage.append({
+                "plant_id": plant_id,
+                "reporting_date": reporting_date,
+                "record_status": "OBSERVED" if production_record_count else "NO_RECORDS",
+                "coverage_status": production_status,
+                "record_count": production_record_count,
+                "observed_hours": production_day["observed_hours"] if production_day else 0,
+                "expected_entity_count": len(expected_lines) if expected_lines is not None else None,
+                "expected_entities": expected_lines,
+                "observed_entity_count": len(observed_lines),
+                "observed_entities": observed_lines,
+                "unobserved_registered_entities": unobserved_lines,
+                "unregistered_observed_entities": (
+                    sorted(set(observed_lines) - set(expected_lines))
+                    if expected_lines is not None
+                    else observed_lines
+                ),
+                "all_registered_entities_observed_for_date": all_registered_lines_observed,
+                "missing_hours": None,
+                "first_observed_timestamp": production_day["first_timestamp"] if production_day else None,
+                "last_observed_timestamp": production_day["last_timestamp"] if production_day else None,
+                "limitations": production_limitations,
+            })
+
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "registered_energy_meters": sorted(VALID_METERS),
+        "energy_coverage": energy_coverage,
+        "production_coverage": production_coverage,
+        "limitations": [
+            "Plants are discovered from requested-range energy or production records and the current production-line registry. "
+            "A plant with no records and no registered production line cannot be enumerated.",
+            "Missing hours are null because no approved operating calendar or expected-hour schedule is available.",
+            "Registered entity coverage is date-level observation only; no per-hour reporting requirement is assumed.",
+        ],
+    }
+
+
 def validate_energy_rows(
     rows: List[Dict[str, Any]],
     confirmed_date: Optional[date],
@@ -545,6 +1027,20 @@ def validate_energy_rows(
     for idx, row in enumerate(rows, start=1):
         row_errors: List[str] = []
         is_duplicate = False
+
+        # Security: Formula injection detection
+        for col_k, col_v in row.items():
+            if check_cell_formula_injection(col_v):
+                row_errors.append(f"Dangerous formula-like expression detected in '{col_k}'")
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column=col_k,
+                        error_type="SECURITY_VIOLATION",
+                        message=f"Formula injection detected: cell in '{col_k}' contains dangerous formula prefix '=' or '@'",
+                        value=str(col_v),
+                    )
+                )
 
         # 1. Required fields presence check
         for req in ENERGY_REQUIRED_COLUMNS:
@@ -834,6 +1330,8 @@ def validate_energy_rows(
     total_rows = len(rows)
     valid_rows = len(valid_records)
 
+    completeness = assess_report_completeness("ENERGY", valid_records, master_cache)
+
     summary = ValidationSummary(
         report_type="ENERGY",
         total_rows=total_rows,
@@ -845,6 +1343,12 @@ def validate_energy_rows(
         plants_found=sorted(list(plants_found)),
         meters_found=sorted(list(meters_found)),
         is_ready_for_ingest=(valid_rows > 0),
+        is_complete=completeness.is_complete,
+        coverage_status=completeness.coverage_status,
+        missing_hours=completeness.missing_hours,
+        missing_entities=completeness.missing_entities,
+        limitations=completeness.limitations,
+        completeness=completeness,
     )
 
     return valid_records, errors, preview, summary
@@ -872,6 +1376,20 @@ def validate_production_rows(
     for idx, row in enumerate(rows, start=1):
         row_errors: List[str] = []
         is_duplicate = False
+
+        # Security: Formula injection detection
+        for col_k, col_v in row.items():
+            if check_cell_formula_injection(col_v):
+                row_errors.append(f"Dangerous formula-like expression detected in '{col_k}'")
+                errors.append(
+                    RowValidationError(
+                        row_number=idx,
+                        column=col_k,
+                        error_type="SECURITY_VIOLATION",
+                        message=f"Formula injection detected: cell in '{col_k}' contains dangerous formula prefix '=' or '@'",
+                        value=str(col_v),
+                    )
+                )
 
         # 1. Required fields presence check
         for req in PRODUCTION_REQUIRED_COLUMNS:
@@ -1158,6 +1676,8 @@ def validate_production_rows(
     total_rows = len(rows)
     valid_rows = len(valid_records)
 
+    completeness = assess_report_completeness("PRODUCTION", valid_records, master_cache)
+
     summary = ValidationSummary(
         report_type="PRODUCTION",
         total_rows=total_rows,
@@ -1169,6 +1689,12 @@ def validate_production_rows(
         plants_found=sorted(list(plants_found)),
         lines_found=sorted(list(lines_found)),
         is_ready_for_ingest=(valid_rows > 0),
+        is_complete=completeness.is_complete,
+        coverage_status=completeness.coverage_status,
+        missing_hours=completeness.missing_hours,
+        missing_entities=completeness.missing_entities,
+        limitations=completeness.limitations,
+        completeness=completeness,
     )
 
     return valid_records, errors, preview, summary
@@ -1291,6 +1817,9 @@ def validate_report_file(
         summary.valid_rows = 0
         summary.rejected_rows = len(rows)
         summary.is_ready_for_ingest = False
+        summary.is_complete = False
+        summary.coverage_status = "PARTIAL"
+        summary.limitations = ["Report rejected due to source schema mismatches."]
 
     return {
         "filename": filename,
@@ -1341,64 +1870,20 @@ def ingest_validated_report(
 
     upload_id = f"UPL-{reporting_date.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
     file_format = val_result["file_format"]
-    imported_count = 0
+    imported_count = len(valid_records)
     overwritten_count = 0
+    ingested_at = datetime.utcnow()
+
+    # Exact batch attribution: stamp every valid record with current upload_id and ingestion timestamp
+    for r in valid_records:
+        r["upload_id"] = upload_id
+        r["ingested_at"] = ingested_at
 
     try:
-        # Atomic database transaction with isolated scope deletion for historical corrections
-        if report_type == "ENERGY":
-            if mode == "OVERWRITE_CORRECTION":
-                affected_plants = {r["plant_id"] for r in valid_records}
-                affected_meters = {r["meter_id"] for r in valid_records}
-                del_stmt = delete(FactEnergyMeterHourly).where(
-                    FactEnergyMeterHourly.date == reporting_date,
-                    FactEnergyMeterHourly.plant_id.in_(affected_plants),
-                    FactEnergyMeterHourly.meter_id.in_(affected_meters),
-                )
-                del_res = session.execute(del_stmt)
-                overwritten_count = del_res.rowcount or 0
-
-            # Bulk insert valid mappings
-            session.bulk_insert_mappings(FactEnergyMeterHourly, valid_records)
-            imported_count = len(valid_records)
-
-        elif report_type == "PRODUCTION":
-            if mode == "OVERWRITE_CORRECTION":
-                affected_plants = {r["plant_id"] for r in valid_records}
-                affected_lines = {r["line_id"] for r in valid_records}
-                del_stmt = delete(FactHourlyProduction).where(
-                    FactHourlyProduction.event_date == reporting_date,
-                    FactHourlyProduction.plant_id.in_(affected_plants),
-                    FactHourlyProduction.line_id.in_(affected_lines),
-                )
-                del_res = session.execute(del_stmt)
-                overwritten_count = del_res.rowcount or 0
-
-            session.bulk_insert_mappings(FactHourlyProduction, valid_records)
-            imported_count = len(valid_records)
-
-        status = "COMPLETED"
-        if summary.rejected_rows > 0:
-            status = "PARTIAL"
-
-        # Audit details
-        audit_details = json.dumps(
-            {
-                "imported_records": imported_count,
-                "overwritten_records": overwritten_count,
-                "plants_affected": summary.plants_found,
-                "meters_affected": summary.meters_found,
-                "lines_affected": summary.lines_found,
-                "rejected_count": summary.rejected_rows,
-                "duplicate_count": summary.duplicate_rows,
-                "mode": mode,
-            }
-        )
-
-        # Record upload history audit entry
+        # Insert parent UploadHistory entry and flush to satisfy foreign key constraints transactionally
         history_entry = UploadHistory(
             upload_id=upload_id,
-            uploaded_at=datetime.utcnow(),
+            uploaded_at=ingested_at,
             report_type=report_type,
             filename=os.path.basename(filename),
             file_format=file_format,
@@ -1409,19 +1894,166 @@ def ingest_validated_report(
             valid_rows=imported_count,
             rejected_rows=summary.rejected_rows,
             duplicate_rows=summary.duplicate_rows,
-            status=status,
+            status="PROCESSING",
             mode=mode,
-            audit_details=audit_details,
+            audit_details=None,
         )
         session.add(history_entry)
+        session.flush()
+
+        energy_superseded: Dict[str, int] = {}
+        prod_superseded: Dict[str, int] = {}
+
+        # Atomic database transaction with strictly scoped key deletion for historical corrections
+        if report_type == "ENERGY":
+            if mode == "OVERWRITE_CORRECTION":
+                # Replacement scope strictly restricted to incoming (timestamp, plant_id, meter_id) keys
+                replacement_keys = [
+                    (r["timestamp"], r["plant_id"], r["meter_id"])
+                    for r in valid_records
+                    if r.get("timestamp") and r.get("plant_id") and r.get("meter_id")
+                ]
+                if replacement_keys:
+                    chunk_size = 500
+                    for i in range(0, len(replacement_keys), chunk_size):
+                        chunk = replacement_keys[i : i + chunk_size]
+                        del_stmt = (
+                            delete(FactEnergyMeterHourly)
+                            .where(
+                                FactEnergyMeterHourly.date == reporting_date,
+                                tuple_(
+                                    FactEnergyMeterHourly.timestamp,
+                                    FactEnergyMeterHourly.plant_id,
+                                    FactEnergyMeterHourly.meter_id,
+                                ).in_(chunk),
+                            )
+                            .returning(FactEnergyMeterHourly.upload_id)
+                        )
+                        del_rows = session.execute(del_stmt).scalars().all()
+                        overwritten_count += len(del_rows)
+                        for orig_uid in del_rows:
+                            key = orig_uid if orig_uid is not None else "__LEGACY__"
+                            energy_superseded[key] = energy_superseded.get(key, 0) + 1
+
+            # Bulk insert valid mappings
+            session.bulk_insert_mappings(FactEnergyMeterHourly, valid_records)
+
+        elif report_type == "PRODUCTION":
+            if mode == "OVERWRITE_CORRECTION":
+                # Replacement scope strictly restricted to incoming (event_ts, plant_id, line_id) keys
+                replacement_keys = [
+                    (r["event_ts"], r["plant_id"], r["line_id"])
+                    for r in valid_records
+                    if r.get("event_ts") and r.get("plant_id") and r.get("line_id")
+                ]
+                if replacement_keys:
+                    chunk_size = 500
+                    for i in range(0, len(replacement_keys), chunk_size):
+                        chunk = replacement_keys[i : i + chunk_size]
+                        del_stmt = (
+                            delete(FactHourlyProduction)
+                            .where(
+                                FactHourlyProduction.event_date == reporting_date,
+                                tuple_(
+                                    FactHourlyProduction.event_ts,
+                                    FactHourlyProduction.plant_id,
+                                    FactHourlyProduction.line_id,
+                                ).in_(chunk),
+                            )
+                            .returning(FactHourlyProduction.upload_id)
+                        )
+                        del_rows = session.execute(del_stmt).scalars().all()
+                        overwritten_count += len(del_rows)
+                        for orig_uid in del_rows:
+                            key = orig_uid if orig_uid is not None else "__LEGACY__"
+                            prod_superseded[key] = prod_superseded.get(key, 0) + 1
+
+            session.bulk_insert_mappings(FactHourlyProduction, valid_records)
+
+        # Structure exact supersession attribution metadata
+        superseded_batches: Dict[str, int] = {}
+        superseded_by_type: Dict[str, Dict[str, int]] = {}
+
+        if energy_superseded:
+            superseded_by_type["ENERGY"] = energy_superseded
+            for k, v in energy_superseded.items():
+                superseded_batches[k] = superseded_batches.get(k, 0) + v
+
+        if prod_superseded:
+            superseded_by_type["PRODUCTION"] = prod_superseded
+            for k, v in prod_superseded.items():
+                superseded_batches[k] = superseded_batches.get(k, 0) + v
+
+        status = "COMPLETED"
+        if summary.rejected_rows > 0:
+            status = "PARTIAL"
+
+        # Build affected scope summary
+        if report_type == "ENERGY":
+            affected_scope = {
+                "report_type": "ENERGY",
+                "reporting_date": reporting_date.isoformat(),
+                "plants": summary.plants_found,
+                "meters": summary.meters_found,
+                "hours_covered": sorted(list({r["timestamp"].hour for r in valid_records if r.get("timestamp")})),
+                "timestamps_count": len({r["timestamp"] for r in valid_records if r.get("timestamp")}),
+                "overwritten_records": overwritten_count,
+                "superseded_batches": superseded_batches,
+                "superseded_by_type": superseded_by_type,
+                "coverage_status": summary.coverage_status,
+                "upload_id": upload_id,
+            }
+        else:
+            affected_scope = {
+                "report_type": "PRODUCTION",
+                "reporting_date": reporting_date.isoformat(),
+                "plants": summary.plants_found,
+                "lines": summary.lines_found,
+                "hours_covered": sorted(list({r["event_ts"].hour for r in valid_records if r.get("event_ts")})),
+                "timestamps_count": len({r["event_ts"] for r in valid_records if r.get("event_ts")}),
+                "overwritten_records": overwritten_count,
+                "superseded_batches": superseded_batches,
+                "superseded_by_type": superseded_by_type,
+                "coverage_status": summary.coverage_status,
+                "upload_id": upload_id,
+            }
+
+        # Audit details
+        audit_details = json.dumps(
+            {
+                "upload_id": upload_id,
+                "ingested_at": ingested_at.isoformat(),
+                "imported_records": imported_count,
+                "overwritten_records": overwritten_count,
+                "superseded_batches": superseded_batches,
+                "superseded_by_type": superseded_by_type,
+                "plants_affected": summary.plants_found,
+                "meters_affected": summary.meters_found,
+                "lines_affected": summary.lines_found,
+                "rejected_count": summary.rejected_rows,
+                "duplicate_count": summary.duplicate_rows,
+                "coverage_status": summary.coverage_status,
+                "missing_hours": summary.missing_hours,
+                "missing_entities": summary.missing_entities,
+                "mode": mode,
+                "affected_scope": affected_scope,
+            }
+        )
+
+        # Finalize upload history audit entry
+        history_entry.status = status
+        history_entry.valid_rows = imported_count
+        history_entry.audit_details = audit_details
         session.commit()
 
         message = (
             f"Successfully ingested {imported_count} records into {report_type.lower()} facts "
             f"for reporting date {reporting_date.isoformat()} (mode: {mode})."
         )
-        if overwritten_count > 0:
-            message += f" Historical correction replaced {overwritten_count} previous records for matching plant/meter scopes."
+        if mode == "OVERWRITE_CORRECTION":
+            message += f" Historical correction replaced {overwritten_count} existing records matching exact incoming keys."
+        if summary.coverage_status == "PARTIAL":
+            message += f" Note: Report coverage is partial ({summary.completeness.hours_reported if summary.completeness else 'N/A'}/24 hours reported)."
 
         return {
             "upload_id": upload_id,
@@ -1434,6 +2066,8 @@ def ingest_validated_report(
             "rejected_rows": summary.rejected_rows,
             "mode": mode,
             "message": message,
+            "replaced_rows": overwritten_count,
+            "affected_scope": affected_scope,
         }
 
     except Exception as exc:

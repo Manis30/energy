@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List
+from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import (
     CheckConstraint,
@@ -20,6 +20,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+
+if TYPE_CHECKING:
+    from app.models.upload_history import UploadHistory
 
 
 class DimProduct(Base):
@@ -96,6 +99,18 @@ class FactEnergyMeterHourly(Base):
     co2e_kg: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     reading_quality: Mapped[str] = mapped_column(String(20), nullable=False)
 
+    # Provenance fields (nullable for backward compatibility with historical records)
+    upload_id: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        ForeignKey("upload_history.upload_id", name="fk_fact_energy_upload_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    ingested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False),
+        nullable=True,
+    )
+
     __table_args__ = (
         UniqueConstraint("timestamp", "plant_id", "meter_id", name="uq_energy_meter_hourly"),
         CheckConstraint("consumption_kwh >= 0", name="chk_energy_consumption_positive"),
@@ -107,6 +122,15 @@ class FactEnergyMeterHourly(Base):
         Index("idx_energy_timestamp", "timestamp"),
         Index("idx_energy_plant_meter", "plant_id", "meter_id"),
         Index("idx_energy_meter_area", "area"),
+        Index("idx_energy_upload_id", "upload_id"),
+        Index("idx_energy_upload_date", "upload_id", "date"),
+    )
+
+    # Relationships
+    upload: Mapped[Optional["UploadHistory"]] = relationship(
+        "UploadHistory",
+        foreign_keys=[upload_id],
+        back_populates="energy_records",
     )
 
 
@@ -143,6 +167,18 @@ class FactHourlyProduction(Base):
     source_system: Mapped[str] = mapped_column(String(20), nullable=False)
     data_quality: Mapped[str] = mapped_column(String(20), nullable=False)
 
+    # Provenance fields (nullable for backward compatibility with historical records)
+    upload_id: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        ForeignKey("upload_history.upload_id", name="fk_fact_production_upload_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    ingested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False),
+        nullable=True,
+    )
+
     __table_args__ = (
         ForeignKeyConstraint(
             ["line_id", "plant_id"],
@@ -163,6 +199,8 @@ class FactHourlyProduction(Base):
         Index("idx_prod_product_id", "product_id"),
         Index("idx_prod_shift_id", "shift_id"),
         Index("idx_prod_plant_id", "plant_id"),
+        Index("idx_prod_upload_id", "upload_id"),
+        Index("idx_prod_upload_date", "upload_id", "event_date"),
     )
 
     # Relationships
@@ -170,4 +208,9 @@ class FactHourlyProduction(Base):
     production_line: Mapped["DimProductionLine"] = relationship(
         back_populates="production_events",
         foreign_keys=[line_id, plant_id],
+    )
+    upload: Mapped[Optional["UploadHistory"]] = relationship(
+        "UploadHistory",
+        foreign_keys=[upload_id],
+        back_populates="production_records",
     )
