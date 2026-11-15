@@ -5,6 +5,7 @@ export default function StatisticalAnomaliesSection({ statisticalData }) {
   const anomalies = statisticalData?.anomalies || [];
   const totalDetected = statisticalData?.total_anomalies_detected || anomalies.length;
   const thresholdZ = statisticalData?.threshold_z || 3.0;
+  const lookbackDays = statisticalData?.lookback_days || statisticalData?.baseline_period?.lookback_days || 30;
   const meterBaselines = statisticalData?.meter_baselines || {};
 
   // State for expanded row to inspect anomaly context
@@ -20,11 +21,12 @@ export default function StatisticalAnomaliesSection({ statisticalData }) {
         <div>
           <h3 className="section-title">Statistical Energy Consumption Anomalies</h3>
           <p className="section-desc">
-            Extreme hourly deviations flagged via sample Z-score ($|Z| \ge {thresholdZ}\sigma$) computed per meter against historical sample distributions.
+            Extreme hourly deviations flagged via sample Z-score ($|Z| \ge {thresholdZ}\sigma$) computed per meter against a strictly segregated historical baseline ({lookbackDays} days lookback).
           </p>
         </div>
         <div className="section-tag-group">
           <span className="section-tag anomaly-count">Flagged Events: {totalDetected}</span>
+          <span className="section-tag process">Baseline Lookback: {lookbackDays} Days</span>
           <span className="section-tag info">Threshold: |Z| ≥ {thresholdZ}σ</span>
         </div>
       </div>
@@ -98,10 +100,12 @@ export default function StatisticalAnomaliesSection({ statisticalData }) {
                           </span>
                         </td>
                         <td className="numeric-cell text-right font-mono font-semibold">
-                          {formatNumber(item.actual_value, 2)}
+                          {item.actual_value !== null && item.actual_value !== undefined ? formatNumber(item.actual_value, 2) : 'Unavailable'}
                         </td>
                         <td className="numeric-cell text-right font-mono">
-                          {formatNumber(item.baseline_value, 2)}
+                          {item.baseline_value !== null && item.baseline_value !== undefined
+                            ? formatNumber(item.baseline_value, 2)
+                            : <span className="baseline-empty-text">Baseline unavailable</span>}
                         </td>
                         <td className="numeric-cell text-right font-mono font-bold">
                           {zFormatted}
@@ -126,11 +130,15 @@ export default function StatisticalAnomaliesSection({ statisticalData }) {
                               </div>
                               <div className="detail-flags-grid">
                                 <div className="flag-item">
-                                  <span className="flag-label">Sample Observations (N):</span>
-                                  <span className="flag-val font-mono">{item.context_flags?.sample_size || '2,208'}</span>
+                                  <span className="flag-label">Historical Lookback:</span>
+                                  <span className="flag-val font-mono">{item.context_flags?.lookback_days || lookbackDays} days (preceding start)</span>
                                 </div>
                                 <div className="flag-item">
-                                  <span className="flag-label">Standard Deviation (σ):</span>
+                                  <span className="flag-label">Baseline Sample Size (N):</span>
+                                  <span className="flag-val font-mono">{item.context_flags?.sample_size || 'Unavailable'} readings</span>
+                                </div>
+                                <div className="flag-item">
+                                  <span className="flag-label">Baseline Standard Deviation (σ):</span>
                                   <span className="flag-val font-mono">{formatNumber(item.context_flags?.std_kwh, 4)} kWh</span>
                                 </div>
                                 <div className="flag-item">
@@ -138,12 +146,20 @@ export default function StatisticalAnomaliesSection({ statisticalData }) {
                                   <span className="flag-val font-mono">{item.context_flags?.threshold_z || thresholdZ}σ</span>
                                 </div>
                                 <div className="flag-item">
+                                  <span className="flag-label">Historical Baseline Window:</span>
+                                  <span className="flag-val font-mono">
+                                    {item.context_flags?.baseline_start && item.context_flags?.baseline_end
+                                      ? `${formatDateTime(item.context_flags.baseline_start)} → ${formatDateTime(item.context_flags.baseline_end)}`
+                                      : 'Unavailable'}
+                                  </span>
+                                </div>
+                                <div className="flag-item">
                                   <span className="flag-label">Direction:</span>
                                   <span className="flag-val">{item.context_flags?.is_spike ? 'Spike (Surge)' : 'Drop (Curtailment)'}</span>
                                 </div>
                               </div>
                               <div className="detail-panel-note">
-                                <strong>Operational Interpretation:</strong> This statistical anomaly marks an hourly reading deviating {Math.abs(item.deviation_score).toFixed(2)} standard deviations from the sample mean. In accordance with ISO 50006, this represents a statistical variance requiring review, not definitive equipment breakdown.
+                                <strong>Operational Interpretation:</strong> This statistical anomaly marks an hourly reading deviating {Math.abs(item.deviation_score).toFixed(2)} standard deviations from the historical baseline mean. In accordance with ISO 50006, this represents a statistical variance requiring review, not definitive equipment breakdown or avoidable energy waste.
                               </div>
                             </div>
                           </td>

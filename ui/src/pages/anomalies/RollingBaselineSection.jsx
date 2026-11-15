@@ -6,6 +6,11 @@ export default function RollingBaselineSection({ rollingData }) {
   const totalDetected = rollingData?.total_anomalies_detected || anomalies.length;
   const windowHours = rollingData?.window_size_hours || 24;
   const thresholdZ = rollingData?.threshold_z || 3.0;
+  const totalEvaluated = rollingData?.total_evaluated_observations ?? null;
+  const insufficientHistoryCount = rollingData?.insufficient_history_count ?? null;
+  const zeroVarCount = rollingData?.zero_variance_count ?? null;
+  const insufficientMeters = rollingData?.insufficient_history_meters || [];
+  const zeroVarMeters = rollingData?.zero_variance_meters || [];
 
   const [expandedId, setExpandedId] = useState(null);
 
@@ -25,6 +30,12 @@ export default function RollingBaselineSection({ rollingData }) {
         <div className="section-tag-group">
           <span className="section-tag anomaly-count">Flagged Events: {totalDetected}</span>
           <span className="section-tag process">Window: Prior {windowHours} Hours</span>
+          {totalEvaluated !== null && (
+            <span className="section-tag info">Evaluated: {totalEvaluated.toLocaleString('en-IN')} obs</span>
+          )}
+          {insufficientHistoryCount !== null && insufficientHistoryCount > 0 && (
+            <span className="section-tag scrap">Insufficient History: {insufficientHistoryCount.toLocaleString('en-IN')}</span>
+          )}
         </div>
       </div>
 
@@ -97,10 +108,12 @@ export default function RollingBaselineSection({ rollingData }) {
                           </span>
                         </td>
                         <td className="numeric-cell text-right font-mono font-semibold">
-                          {formatNumber(item.actual_value, 2)}
+                          {item.actual_value !== null && item.actual_value !== undefined ? formatNumber(item.actual_value, 2) : 'Unavailable'}
                         </td>
                         <td className="numeric-cell text-right font-mono">
-                          {formatNumber(item.baseline_value, 2)}
+                          {item.baseline_value !== null && item.baseline_value !== undefined
+                            ? formatNumber(item.baseline_value, 2)
+                            : <span className="baseline-empty-text">Baseline unavailable</span>}
                         </td>
                         <td className="numeric-cell text-right font-mono font-bold">
                           {zFormatted}
@@ -124,16 +137,16 @@ export default function RollingBaselineSection({ rollingData }) {
                               </div>
                               <div className="detail-flags-grid">
                                 <div className="flag-item">
-                                  <span className="flag-label">Window Size:</span>
+                                  <span className="flag-label">Configured Window:</span>
                                   <span className="flag-val font-mono">{item.context_flags?.window_size_hours || windowHours} hours</span>
                                 </div>
                                 <div className="flag-item">
-                                  <span className="flag-label">Observations Used:</span>
+                                  <span className="flag-label">Historical Observations Used:</span>
                                   <span className="flag-val font-mono">{item.context_flags?.historical_observations_used || windowHours} prior readings</span>
                                 </div>
                                 <div className="flag-item">
                                   <span className="flag-label">Self-Exclusion Verified:</span>
-                                  <span className="flag-val text-success">Current reading excluded from baseline</span>
+                                  <span className="flag-val text-success">Current reading strictly excluded from baseline</span>
                                 </div>
                                 <div className="flag-item">
                                   <span className="flag-label">Rolling Std Dev:</span>
@@ -141,7 +154,8 @@ export default function RollingBaselineSection({ rollingData }) {
                                 </div>
                               </div>
                               <div className="detail-panel-note">
-                                <strong>Operational Notice:</strong> This deviation reflects an abrupt change in hourly energy consumption relative to the meter's recent 24-hour moving baseline. It does not constitute proof of machine failure or mechanical breakdown, but flags an operational transition (such as product changeover or thermal ramp-up) for verification.
+                                <p><strong>Historical Coverage Notice:</strong> Rolling windows dynamically query available database records in the preceding {windowHours} hours. Telemetry dropouts or missing meter intervals do not guarantee continuous hourly coverage.</p>
+                                <p><strong>Operational Notice:</strong> This deviation reflects an abrupt change in hourly energy consumption relative to the meter's recent moving baseline. In accordance with ISO 50006, it flags an operational transition for verification and does not constitute proof of machine failure, equipment breakdown, or avoidable waste.</p>
                               </div>
                             </div>
                           </td>

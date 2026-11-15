@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { anomalyApi } from '../services';
 import AnomalyPageHeader from './anomalies/AnomalyPageHeader';
+import BaselineContextSection from './anomalies/BaselineContextSection';
 import AlertList from './anomalies/AlertList';
 import './anomalies/alert-centre.css';
 
@@ -121,6 +122,8 @@ export default function AnomalyMonitoring() {
         onChangeFilters={setFilters}
         onApplyFilters={handleApplyFilters}
         dateRange={dateRange}
+        evaluationPeriod={anomalyData?.statistical_zscore?.evaluation_period || anomalyData?.analysis_period}
+        baselinePeriod={anomalyData?.statistical_zscore?.baseline_period}
         lastRefreshed={lastRefreshed}
         onRefresh={handleRefresh}
         refreshing={refreshing}
@@ -166,6 +169,13 @@ export default function AnomalyMonitoring() {
               </button>
             ))}
           </section>
+
+          {/* Historical Baseline Surveillance & Diagnostic Context */}
+          <BaselineContextSection
+            statisticalData={anomalyData?.statistical_zscore}
+            rollingData={anomalyData?.rolling_baseline}
+            analysisPeriod={anomalyData?.analysis_period}
+          />
 
           <section className="alert-list-panel" aria-label="Alert list" aria-busy={loading}>
             <div className="alert-list-toolbar">

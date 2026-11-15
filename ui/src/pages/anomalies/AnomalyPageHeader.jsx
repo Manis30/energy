@@ -1,15 +1,36 @@
 import React from 'react';
-import { formatDate } from '../../utils/formatters';
+import { formatDate, formatDateTime } from '../../utils/formatters';
 
 export default function AnomalyPageHeader({
   filters,
   onChangeFilters,
   onApplyFilters,
   dateRange,
+  evaluationPeriod,
+  baselinePeriod,
   lastRefreshed,
   onRefresh,
   refreshing,
 }) {
+  const evalStart = evaluationPeriod?.start_time;
+  const evalEnd = evaluationPeriod?.end_time;
+  const baseStart = baselinePeriod?.start_time;
+  const baseEnd = baselinePeriod?.end_time;
+  const lookbackDays = baselinePeriod?.lookback_days ?? 30;
+
+  let evalPeriodText = 'All available dates';
+  if (evalStart && evalEnd) {
+    evalPeriodText = `${formatDateTime(evalStart)} – ${formatDateTime(evalEnd)}`;
+  } else if (typeof dateRange === 'object' && dateRange?.start_date && dateRange?.end_date) {
+    evalPeriodText = `${formatDate(dateRange.start_date)} – ${formatDate(dateRange.end_date)}`;
+  } else if (typeof dateRange === 'string') {
+    evalPeriodText = dateRange;
+  }
+
+  const baselinePeriodText = baseStart && baseEnd
+    ? `${formatDateTime(baseStart)} – ${formatDateTime(baseEnd)} (${lookbackDays}d lookback)`
+    : 'Baseline unavailable';
+
   return (
     <header className="alert-centre-header">
       <div className="alert-centre-heading">
@@ -64,11 +85,15 @@ export default function AnomalyPageHeader({
         </button>
       </form>
       <div className="alert-centre-period">
-        <span>
-          Data period: {typeof dateRange === 'string'
-            ? dateRange
-            : `${formatDate(dateRange.start_date)} – ${formatDate(dateRange.end_date)}`}
-        </span>
+        <div className="period-indicators">
+          <span>
+            <strong>Evaluation Period:</strong> {evalPeriodText}
+          </span>
+          <span className="period-separator">·</span>
+          <span>
+            <strong>Historical Baseline:</strong> {baselinePeriodText}
+          </span>
+        </div>
         {lastRefreshed && (
           <span>Updated {lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
         )}

@@ -12,6 +12,8 @@ export const anomalyApi = {
    * @param {string} [params.meter_id]
    * @param {string} [params.start_time] - ISO 8601
    * @param {string} [params.end_time] - ISO 8601
+   * @param {string} [params.evaluation_scope] - 'latest_day' (default, most recent 24h) or 'historical' (evaluates full period with prior baseline)
+   * @param {number} [params.lookback_days] - Historical lookback duration in days (default 30, range 1-90)
    * @param {number} [params.threshold_z] - Default 3.0
    * @param {number} [params.min_observations] - Default 10
    */
@@ -24,6 +26,7 @@ export const anomalyApi = {
    * @param {string} [params.meter_id]
    * @param {string} [params.start_time]
    * @param {string} [params.end_time]
+   * @param {string} [params.evaluation_scope] - 'latest_day' (default) or 'historical'
    * @param {number} [params.window_size] - Default 24
    * @param {number} [params.min_observations] - Default 12
    * @param {number} [params.threshold_z] - Default 3.0
@@ -55,8 +58,11 @@ export const anomalyApi = {
    * Run unified anomaly suite returning all 4 detection categories.
    * @param {object} [params]
    * @param {string} [params.plant_id]
+   * @param {string} [params.meter_id]
    * @param {string} [params.start_time]
    * @param {string} [params.end_time]
+   * @param {string} [params.evaluation_scope] - 'latest_day' (default) or 'historical'
+   * @param {number} [params.lookback_days] - Historical lookback duration in days (default 30, range 1-90)
    * @param {number} [params.z_threshold] - Default 3.0
    * @param {number} [params.rolling_window_hours] - Default 24
    * @param {number} [params.pf_threshold] - Default 0.90

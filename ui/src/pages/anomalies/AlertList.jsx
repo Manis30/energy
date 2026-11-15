@@ -5,9 +5,12 @@ function formatSeverity(severity) {
   return severity ? severity.toLowerCase() : 'unclassified';
 }
 
-function formatContextValue(value) {
+function formatContextValue(key, value) {
   if (value === null || value === undefined || value === '') return 'Unavailable';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'string' && (key.endsWith('_start') || key.endsWith('_end') || key.includes('timestamp'))) {
+    return formatDateTime(value);
+  }
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }
@@ -19,22 +22,36 @@ function AlertEvidence({ alert }) {
     || alert.anomaly_type?.startsWith('ROLLING_BASELINE_');
   const unit = isPowerFactor ? ' PF' : ' kWh';
 
+  const hasBaseline = alert.baseline_value !== null && alert.baseline_value !== undefined;
+
   return (
     <div className="alert-detail-content">
       <div className="alert-evidence-grid">
         <div>
           <span>Measured</span>
-          <strong>{formatNumber(alert.actual_value, 4)}{unit}</strong>
+          <strong>
+            {alert.actual_value !== null && alert.actual_value !== undefined
+              ? `${formatNumber(alert.actual_value, 4)}${unit}`
+              : 'Unavailable'}
+          </strong>
         </div>
-        {!isStandby && (
-          <div>
-            <span>Reference mean / threshold</span>
-            <strong>{formatNumber(alert.baseline_value, 4)}{unit}</strong>
-          </div>
-        )}
+        <div>
+          <span>Reference mean / threshold</span>
+          <strong>
+            {isStandby
+              ? 'No baseline (Zero output standby)'
+              : hasBaseline
+                ? `${formatNumber(alert.baseline_value, 4)}${unit}`
+                : 'Baseline unavailable'}
+          </strong>
+        </div>
         <div>
           <span>{isZScore ? 'Z-score' : isStandby ? 'Standby energy' : isPowerFactor ? 'Power factor deficit' : 'Deviation score'}</span>
-          <strong>{formatNumber(alert.deviation_score, 4)}{isZScore ? 'σ' : isStandby ? ' kWh' : ''}</strong>
+          <strong>
+            {alert.deviation_score !== null && alert.deviation_score !== undefined
+              ? `${formatNumber(alert.deviation_score, 4)}${isZScore ? 'σ' : isStandby ? ' kWh' : ''}`
+              : 'Unavailable'}
+          </strong>
         </div>
         {alert.source && (
           <div>
@@ -51,7 +68,7 @@ function AlertEvidence({ alert }) {
             {Object.entries(alert.context_flags).map(([key, value]) => (
               <div key={key}>
                 <dt>{key.replace(/_/g, ' ')}</dt>
-                <dd>{formatContextValue(value)}</dd>
+                <dd>{formatContextValue(key, value)}</dd>
               </div>
             ))}
           </dl>
@@ -94,8 +111,9 @@ export default function AlertList({ alerts }) {
               </span>
               <span className="alert-source">{alert.source}</span>
               <span className="alert-measurement">
-                {formatNumber(alert.actual_value, 2)}
-                {alert.anomaly_type === 'LOW_POWER_FACTOR' ? ' PF' : ' kWh'}
+                {alert.actual_value !== null && alert.actual_value !== undefined
+                  ? `${formatNumber(alert.actual_value, 2)}${alert.anomaly_type === 'LOW_POWER_FACTOR' ? ' PF' : ' kWh'}`
+                  : 'Unavailable'}
               </span>
               <span className={`alert-disclosure ${expanded ? 'expanded' : ''}`} aria-hidden="true">⌄</span>
             </button>
