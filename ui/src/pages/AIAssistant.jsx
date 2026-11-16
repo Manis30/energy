@@ -82,7 +82,7 @@ export default function AIAssistant({ theme, onToggleTheme }) {
 
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (err) {
-      console.error('Assistant chat failed:', err);
+      console.warn('Assistant chat request ended with error:', err?.message || err);
       const errorText = err.message || 'Unable to communicate with the AI assistant. Please try again.';
       setError(errorText);
       setLastFailedMessage(trimmed);

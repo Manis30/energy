@@ -38,6 +38,11 @@ export default function AnomalyMonitoring() {
   const [lastRefreshed, setLastRefreshed] = useState(null);
 
   const loadAnomalyData = useCallback(async (nextFilters, isRefresh = false) => {
+    if (nextFilters.start_date && nextFilters.end_date && nextFilters.start_date > nextFilters.end_date) {
+      setError('Start date must be on or before end date.');
+      return;
+    }
+
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     setError(null);
@@ -53,7 +58,7 @@ export default function AnomalyMonitoring() {
       setAppliedFilters(nextFilters);
       setLastRefreshed(new Date());
     } catch (err) {
-      console.error('Anomaly Monitoring data load error:', err);
+      console.warn('Anomaly Monitoring data load issue:', err?.message || err);
       setError(err.message || 'Unable to load alert data. Verify the backend connection and try again.');
     } finally {
       setLoading(false);

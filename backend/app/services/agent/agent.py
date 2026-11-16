@@ -348,6 +348,23 @@ class IndustrialEnergyAgent:
             AgentError: If unrecoverable execution or model error occurs.
         """
         clean_question = self._validate_user_question(user_question)
+
+        # 0. Deterministic Greeting & Conversational Intent Detection
+        # Pure greetings return assistant capabilities immediately without invoking analytical tools or LLM calls.
+        if self.conversation_context.is_greeting(clean_question):
+            return AgentResponse(
+                answer=self.conversation_context.get_greeting_response(clean_question),
+                tool_references=[],
+                evidence=[],
+                tool_executions_count=0,
+                model_calls_count=0,
+                limit_reached=False,
+                verification_status="NO_ANALYTIC_CLAIMS",
+                claims=[],
+                verified_claims_count=0,
+                unverified_claims_count=0,
+            )
+
         client = self._get_domo_client()
 
         system_prompt = get_system_prompt()
@@ -404,6 +421,9 @@ class IndustrialEnergyAgent:
             except DomoError as e:
                 logger.error("Domo client error: %s", str(e))
                 raise AgentError("AI service encountered an unexpected error.") from e
+            except Exception as e:
+                logger.exception("Unexpected error communicating with AI service: %s", str(e))
+                raise AgentError("AI service is currently unavailable. Please try again later.") from e
 
             # 3. Parse and validate model action
             try:

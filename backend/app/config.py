@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     DOMO_DEVELOPER_TOKEN: Optional[str] = None
     MODEL_NAME: Optional[str] = None
     DOMO_TIMEOUT_SECONDS: float = 30.0
-    DOMO_MAX_RETRIES: int = 3
+    DOMO_MAX_RETRIES: int = 3  # Maximum total request attempts (1 initial attempt + up to 2 retries = 3 total attempts)
 
     # Ingestion & Upload security limits
     MAX_UPLOAD_SIZE_MB: int = 25

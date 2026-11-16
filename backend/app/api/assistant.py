@@ -135,10 +135,10 @@ async def chat_with_assistant(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                 detail="AI service request timed out. Please try again.",
             )
-        elif "unavailable" in err_msg:
+        elif "unavailable" in err_msg or "failed to connect" in err_msg:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="AI service is currently unavailable. Please try again later.",
+                detail="AI service is currently unavailable. Please verify AI provider configuration or network connectivity.",
             )
         else:
             raise HTTPException(
@@ -146,7 +146,13 @@ async def chat_with_assistant(
                 detail=f"Assistant execution error: {str(e)}",
             )
     except Exception as e:
+        err_str = str(e).lower()
         logger.exception("Unexpected exception in assistant chat endpoint: %s", str(e))
+        if any(term in err_str for term in ("connect", "dns", "socket", "network", "blocked", "timeout", "refused")):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="AI service is currently unreachable. Please check network connectivity or AI provider configuration.",
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",

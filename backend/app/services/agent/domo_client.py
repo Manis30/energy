@@ -103,6 +103,7 @@ class DomoClient:
         default_model: Optional[str] = None,
         timeout_seconds: Optional[float] = None,
         max_retries: Optional[int] = None,
+        max_attempts: Optional[int] = None,
         http_client: Optional[httpx.AsyncClient] = None,
     ):
         settings = get_settings()
@@ -110,7 +111,12 @@ class DomoClient:
         self._token = developer_token if developer_token is not None else (settings.DOMO_DEVELOPER_TOKEN or "")
         self.default_model = default_model if default_model is not None else (settings.MODEL_NAME or "")
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else settings.DOMO_TIMEOUT_SECONDS
-        self.max_retries = max_retries if max_retries is not None else settings.DOMO_MAX_RETRIES
+
+        # Total attempt semantics:
+        # max_attempts / max_retries specifies total allowable HTTP requests (1 initial attempt + up to max_attempts - 1 retries)
+        resolved_attempts = max_attempts if max_attempts is not None else max_retries
+        self.max_attempts: int = resolved_attempts if resolved_attempts is not None else settings.DOMO_MAX_RETRIES
+        self.max_retries: int = self.max_attempts  # Backward-compatible alias
 
         self._external_client = http_client is not None
         self._client: Optional[httpx.AsyncClient] = http_client
@@ -158,6 +164,17 @@ class DomoClient:
         """
         Execute a text generation call to Domo AI Services.
 
+        Attempt and Retry Semantics:
+        - Total provider requests: Capped at self.max_attempts (default: 3 total attempts = 1 initial + up to 2 retries).
+        - Exponential backoff between retries: 0.5s * 2^(attempt - 1)
+          - Attempt 1 failure: wait 0.50s, proceed to attempt 2 (retry 1).
+          - Attempt 2 failure: wait 1.00s, proceed to attempt 3 (retry 2).
+          - Attempt 3 failure: terminal failure raised (0s delay, no further retries).
+        - Maximum total backoff delay across retries: 1.50s.
+        - Non-retryable errors fail immediately on attempt 1 without retry:
+          - HTTP 401 / 403 (Authentication failure -> DomoAuthenticationError)
+          - HTTP 400 / 422 (Invalid payload -> DomoError)
+
         Args:
             prompt: User or system prompt input string.
             model: Optional model override (defaults to configured MODEL_NAME).
@@ -192,7 +209,7 @@ class DomoClient:
 
         last_error: Optional[Exception] = None
 
-        for attempt in range(1, self.max_retries + 1):
+        for attempt in range(1, self.max_attempts + 1):
             try:
                 response = await client.post(
                     endpoint,
@@ -215,18 +232,18 @@ class DomoClient:
 
                 # 3. Rate limiting (429) — retry if attempts remain
                 if response.status_code == 429:
-                    if attempt < self.max_retries:
+                    if attempt < self.max_attempts:
                         backoff = 0.5 * (2 ** (attempt - 1))
-                        logger.warning("Domo rate limit (429) encountered. Backing off for %.2fs...", backoff)
+                        logger.warning("Domo rate limit (429) encountered on attempt %d/%d. Backing off for %.2fs...", attempt, self.max_attempts, backoff)
                         await asyncio.sleep(backoff)
                         continue
                     raise DomoRateLimitError("Domo API rate limit exceeded after maximum retry attempts.")
 
                 # 4. Server errors (5xx) — retry if attempts remain
                 if response.status_code >= 500:
-                    if attempt < self.max_retries:
+                    if attempt < self.max_attempts:
                         backoff = 0.5 * (2 ** (attempt - 1))
-                        logger.warning("Domo server error (%d). Retrying in %.2fs...", response.status_code, backoff)
+                        logger.warning("Domo server error (%d) on attempt %d/%d. Retrying in %.2fs...", response.status_code, attempt, self.max_attempts, backoff)
                         await asyncio.sleep(backoff)
                         continue
                     raise DomoServerError(f"Domo server returned error HTTP {response.status_code} after retries.")
@@ -238,20 +255,32 @@ class DomoClient:
                 # Fallback unexpected status
                 raise DomoError(f"Unexpected response status from Domo API: HTTP {response.status_code}")
 
+            except DomoError:
+                raise
+
             except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout) as e:
                 last_error = DomoTimeoutError(f"Request to Domo API timed out after {self.timeout_seconds}s.")
-                if attempt < self.max_retries:
+                if attempt < self.max_attempts:
                     backoff = 0.5 * (2 ** (attempt - 1))
-                    logger.warning("Domo request timeout. Retrying in %.2fs...", backoff)
+                    logger.warning("Domo request timeout on attempt %d/%d. Retrying in %.2fs...", attempt, self.max_attempts, backoff)
                     await asyncio.sleep(backoff)
                     continue
                 raise last_error from e
 
             except (httpx.ConnectError, httpx.NetworkError) as e:
                 last_error = DomoConnectionError("Failed to connect to Domo AI API service.")
-                if attempt < self.max_retries:
+                if attempt < self.max_attempts:
                     backoff = 0.5 * (2 ** (attempt - 1))
-                    logger.warning("Domo connection error. Retrying in %.2fs...", backoff)
+                    logger.warning("Domo connection error on attempt %d/%d. Retrying in %.2fs...", attempt, self.max_attempts, backoff)
+                    await asyncio.sleep(backoff)
+                    continue
+                raise last_error from e
+
+            except Exception as e:
+                last_error = DomoConnectionError(f"Failed to connect to Domo AI API service: {str(e)}")
+                if attempt < self.max_attempts:
+                    backoff = 0.5 * (2 ** (attempt - 1))
+                    logger.warning("Domo connection transport error on attempt %d/%d: %s. Retrying in %.2fs...", attempt, self.max_attempts, str(e), backoff)
                     await asyncio.sleep(backoff)
                     continue
                 raise last_error from e

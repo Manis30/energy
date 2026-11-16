@@ -300,7 +300,7 @@ RE_TOOL_LIMIT_REF = re.compile(r'\b(?:limit\s*(?:of)?\s*5|5\s*tool\s*(?:calls?|e
 RE_POLICY_THRESHOLD_PF = re.compile(r'\b(?:threshold\s*(?:of|=)?\s*0\.90|0\.90\s*(?:threshold|cutoff))\b', re.IGNORECASE)
 RE_POLICY_THRESHOLD_Z = re.compile(r'\b(?:threshold\s*(?:of|=)?\s*3\.0|3\.0\s*(?:sigma|threshold|z-score))\b', re.IGNORECASE)
 RE_EMISSIONS_FACTOR = re.compile(r'\b(?:factor\s*(?:of|=)?\s*0\.716|0\.716\s*kg)\b', re.IGNORECASE)
-RE_YEAR_ONLY = re.compile(r'\b(?:in|for|since|year|during)\s+(19\d{2}|20\d{2})\b|\b(19\d{2}|20\d{2})\s+(?:data|records|fiscal)\b', re.IGNORECASE)
+RE_YEAR_ONLY = re.compile(r'\b(?:in|for|since|year|during|january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+(19\d{2}|20\d{2})\b|\b(19\d{2}|20\d{2})\s+(?:data|records|fiscal)\b', re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------

@@ -78,7 +78,7 @@ def detect_energy_statistical_anomalies(
     """
     Detect hourly energy consumption anomalies using sample Z-score per (plant_id, meter_id).
 
-    Evaluates observations within the evaluation period [eval_start, eval_end] against a
+    Evaluates observations within the evaluation period [eval_start, eval_end) against a
     strictly segregated historical baseline period [baseline_start, baseline_end).
 
     Key Engineering Protections:
@@ -123,29 +123,44 @@ def detect_energy_statistical_anomalies(
         if bounds_row:
             max_ts, min_ts = bounds_row[0], bounds_row[1]
 
-    if end_time is not None:
-        eval_end = end_time
-    elif max_ts is not None:
-        eval_end = max_ts
-    else:
-        eval_end = datetime.utcnow()
-
-    if start_time is not None:
+    if start_time is not None and end_time is not None:
         eval_start = start_time
+        if end_time == start_time:
+            eval_end = start_time + timedelta(days=1)
+        elif end_time.hour == 23 and end_time.minute == 0 and end_time.second == 0:
+            eval_end = end_time + timedelta(hours=1)
+        else:
+            eval_end = end_time
         baseline_end = eval_start
         baseline_start = eval_start - timedelta(days=int(lookback_days))
-    elif evaluation_scope == "historical" and min_ts is not None:
-        baseline_start = min_ts
-        baseline_end = min_ts + timedelta(days=int(lookback_days))
-        eval_start = baseline_end
-        if eval_start > eval_end:
-            eval_start = eval_end
+    elif start_time is not None:
+        eval_start = start_time
+        eval_end = start_time + timedelta(days=1)
+        baseline_end = eval_start
+        baseline_start = eval_start - timedelta(days=int(lookback_days))
+    elif end_time is not None:
+        eval_end = end_time
+        eval_start = eval_end - timedelta(days=1)
+        baseline_end = eval_start
+        baseline_start = eval_start - timedelta(days=int(lookback_days))
     elif max_ts is not None:
-        eval_start = eval_end - timedelta(days=1)
-        baseline_end = eval_start
-        baseline_start = eval_start - timedelta(days=int(lookback_days))
+        if evaluation_scope == "historical" and min_ts is not None:
+            baseline_start = min_ts
+            baseline_end = min_ts + timedelta(days=int(lookback_days))
+            eval_start = baseline_end
+            eval_end = datetime.combine(max_ts.date() + timedelta(days=1), datetime.min.time()) if max_ts else datetime.utcnow()
+            if eval_start > eval_end:
+                eval_start = eval_end
+        else:
+            # Single latest day scope: 24-hour half-open window ending at next day midnight
+            eval_end = datetime.combine(max_ts.date() + timedelta(days=1), datetime.min.time())
+            eval_start = datetime.combine(max_ts.date(), datetime.min.time())
+            baseline_end = eval_start
+            baseline_start = eval_start - timedelta(days=int(lookback_days))
     else:
-        eval_start = eval_end - timedelta(days=1)
+        now = datetime.utcnow()
+        eval_end = datetime.combine(now.date() + timedelta(days=1), datetime.min.time())
+        eval_start = datetime.combine(now.date(), datetime.min.time())
         baseline_end = eval_start
         baseline_start = eval_start - timedelta(days=int(lookback_days))
 
@@ -213,7 +228,7 @@ def detect_energy_statistical_anomalies(
         SELECT DISTINCT plant_id, meter_id
         FROM fact_energy_meter_hourly
         WHERE timestamp >= :eval_start
-          AND timestamp <= :eval_end
+          AND timestamp < :eval_end
           {base_filter_clause}
         ORDER BY plant_id, meter_id
     """
@@ -341,7 +356,7 @@ def detect_energy_statistical_anomalies(
             FROM fact_energy_meter_hourly f
             JOIN baseline_stats s ON f.plant_id = s.plant_id AND f.meter_id = s.meter_id
             WHERE f.timestamp >= :eval_start
-              AND f.timestamp <= :eval_end
+              AND f.timestamp < :eval_end
               {outer_filter_clause}
               AND ABS((f.consumption_kwh - s.mean_kwh) / s.std_kwh) >= :threshold_z
             ORDER BY ABS((f.consumption_kwh - s.mean_kwh) / s.std_kwh) DESC, f.timestamp DESC
@@ -498,23 +513,34 @@ def detect_rolling_baseline_anomalies(
         if bounds_row:
             max_ts, min_ts = bounds_row[0], bounds_row[1]
 
-    if end_time is not None:
-        eval_end = end_time
-    elif max_ts is not None:
-        eval_end = max_ts
-    else:
-        eval_end = datetime.utcnow()
-
-    if start_time is not None:
+    if start_time is not None and end_time is not None:
         eval_start = start_time
-    elif evaluation_scope == "historical" and min_ts is not None:
-        eval_start = min_ts + timedelta(hours=w_size)
-        if eval_start > eval_end:
-            eval_start = eval_end
+        if end_time == start_time:
+            eval_end = start_time + timedelta(days=1)
+        elif end_time.hour == 23 and end_time.minute == 0 and end_time.second == 0:
+            eval_end = end_time + timedelta(hours=1)
+        else:
+            eval_end = end_time
+    elif start_time is not None:
+        eval_start = start_time
+        eval_end = start_time + timedelta(days=1)
+    elif end_time is not None:
+        eval_end = end_time
+        eval_start = eval_end - timedelta(days=1)
     elif max_ts is not None:
-        eval_start = eval_end - timedelta(days=1)
+        if evaluation_scope == "historical" and min_ts is not None:
+            eval_start = min_ts + timedelta(hours=w_size)
+            eval_end = datetime.combine(max_ts.date() + timedelta(days=1), datetime.min.time()) if max_ts else datetime.utcnow()
+            if eval_start > eval_end:
+                eval_start = eval_end
+        else:
+            # Single latest day scope: 24-hour half-open window ending at next day midnight
+            eval_end = datetime.combine(max_ts.date() + timedelta(days=1), datetime.min.time())
+            eval_start = datetime.combine(max_ts.date(), datetime.min.time())
     else:
-        eval_start = eval_end - timedelta(days=1)
+        now = datetime.utcnow()
+        eval_end = datetime.combine(now.date() + timedelta(days=1), datetime.min.time())
+        eval_start = datetime.combine(now.date(), datetime.min.time())
 
     if eval_start > eval_end:
         raise ValueError(f"start_time ({eval_start}) cannot be after end_time ({eval_end})")
@@ -585,7 +611,7 @@ def detect_rolling_baseline_anomalies(
         SELECT DISTINCT plant_id, meter_id
         FROM fact_energy_meter_hourly
         WHERE timestamp >= :eval_start
-          AND timestamp <= :eval_end
+          AND timestamp < :eval_end
           {base_filter_clause}
         ORDER BY plant_id, meter_id
     """
@@ -715,7 +741,7 @@ def detect_rolling_baseline_anomalies(
                     COUNT(consumption_kwh) OVER w as window_obs_count
                 FROM fact_energy_meter_hourly
                 WHERE timestamp >= :history_start
-                  AND timestamp <= :eval_end
+                  AND timestamp < :eval_end
                   {base_filter_clause}
                 WINDOW w AS (
                     PARTITION BY plant_id, meter_id
@@ -741,7 +767,7 @@ def detect_rolling_baseline_anomalies(
                     END AS eval_status
                 FROM rolling
                 WHERE timestamp >= :eval_start
-                  AND timestamp <= :eval_end
+                  AND timestamp < :eval_end
                   {outer_filter_clause}
                   {disqual_filter_clause}
             )
@@ -793,7 +819,7 @@ def detect_rolling_baseline_anomalies(
                     upload_id
                 FROM fact_energy_meter_hourly
                 WHERE timestamp >= :history_start
-                  AND timestamp <= :eval_end
+                  AND timestamp < :eval_end
                   {base_filter_clause}
                 WINDOW w AS (
                     PARTITION BY plant_id, meter_id
@@ -817,7 +843,7 @@ def detect_rolling_baseline_anomalies(
                 upload_id
             FROM rolling
             WHERE timestamp >= :eval_start
-              AND timestamp <= :eval_end
+              AND timestamp < :eval_end
               {outer_filter_clause}
               AND window_obs_count >= :min_obs
               AND rolling_std > 0
@@ -1031,8 +1057,16 @@ def detect_low_power_factor_anomalies(
         where_parts.append("timestamp >= :start_time")
         params["start_time"] = start_time
     if end_time:
-        where_parts.append("timestamp <= :end_time")
-        params["end_time"] = end_time
+        actual_end = end_time
+        if start_time and actual_end == start_time:
+            actual_end = start_time + timedelta(days=1)
+        elif actual_end.hour == 23 and actual_end.minute == 0 and actual_end.second == 0:
+            actual_end = actual_end + timedelta(hours=1)
+        where_parts.append("timestamp < :end_time")
+        params["end_time"] = actual_end
+    elif start_time:
+        where_parts.append("timestamp < :end_time")
+        params["end_time"] = start_time + timedelta(days=1)
 
     where_clause = "WHERE " + " AND ".join(where_parts)
 
@@ -1152,8 +1186,16 @@ def detect_zero_production_standby_anomalies(
         where_parts.append("p.event_ts >= :start_time")
         params["start_time"] = start_time
     if end_time:
-        where_parts.append("p.event_ts <= :end_time")
-        params["end_time"] = end_time
+        actual_end = end_time
+        if start_time and actual_end == start_time:
+            actual_end = start_time + timedelta(days=1)
+        elif actual_end.hour == 23 and actual_end.minute == 0 and actual_end.second == 0:
+            actual_end = actual_end + timedelta(hours=1)
+        where_parts.append("p.event_ts < :end_time")
+        params["end_time"] = actual_end
+    elif start_time:
+        where_parts.append("p.event_ts < :end_time")
+        params["end_time"] = start_time + timedelta(days=1)
 
     where_clause = "WHERE " + " AND ".join(where_parts)
 
