@@ -626,7 +626,7 @@ export default function RecommendationsActions() {
                                   title="View Evidence & Provenance in Findings Centre"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    navigate(`/findings?finding_id=${encodeURIComponent(rec.finding_id)}`);
+                                    navigate(`/investigation-actions?finding_id=${encodeURIComponent(rec.finding_id)}`);
                                   }}
                                 >
                                   {rec.finding_id} &rarr;

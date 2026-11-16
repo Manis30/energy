@@ -3,11 +3,17 @@ import { useLocation } from 'react-router-dom';
 
 const PATH_TITLES = {
   '/': 'Overview Dashboard',
+  '/daily-operations': 'Daily Operations',
+  '/daily-reports': 'Daily Operations',
   '/energy-analytics': 'Energy Analytics',
   '/production-analytics': 'Production Analytics',
-  '/anomalies': 'Anomaly Detection',
-  '/daily-analysis': 'Daily Energy Analysis',
+  '/investigation-actions': 'Investigation & Actions Centre',
+  '/findings': 'Investigation & Actions Centre',
+  '/recommendations-actions': 'Investigation & Actions Centre',
+  '/anomalies': 'Anomaly Surveillance',
+  '/data-connectors': 'Data Connectors',
   '/ai-assistant': 'Conversational AI Assistant',
+  '/platform-story': 'Platform Story & Architecture',
 };
 
 export default function Header({ theme, onToggleTheme, backendStatus }) {

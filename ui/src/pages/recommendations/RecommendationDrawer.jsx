@@ -41,7 +41,7 @@ export default function RecommendationDrawer({
     const targetFindingId = rec?.source_finding?.finding_id || rec?.finding_id;
     if (targetFindingId) {
       onClose();
-      navigate(`/findings?finding_id=${encodeURIComponent(targetFindingId)}`);
+      navigate(`/investigation-actions?finding_id=${encodeURIComponent(targetFindingId)}`);
     }
   }, [rec, onClose, navigate]);
 
