@@ -1272,6 +1272,13 @@ export default function InvestigationActionsCentre() {
                     </button>
                     <button
                       type="button"
+                      className={`iac-subnav-btn ${detailSubTab === 'provenance' ? 'active' : ''}`}
+                      onClick={() => setDetailSubTab('provenance')}
+                    >
+                      Source Provenance
+                    </button>
+                    <button
+                      type="button"
                       className={`iac-subnav-btn ${detailSubTab === 'occurrences' ? 'active' : ''}`}
                       onClick={() => setDetailSubTab('occurrences')}
                     >
@@ -1379,10 +1386,20 @@ export default function InvestigationActionsCentre() {
                               finding={findingDetail}
                               isPrimary={true}
                               title="Primary Event Provenance"
+                              onOpenProvenanceTab={() => setDetailSubTab('provenance')}
                             />
                           </div>
                         )}
                       </div>
+                    )}
+
+                    {/* SUB-TAB: SOURCE PROVENANCE DRILL-DOWN */}
+                    {detailSubTab === 'provenance' && (
+                      <ProvenanceDrillDownView
+                        findingId={findingDetail.finding_id}
+                        initialOccurrenceId={findingDetail.occurrences?.[0]?.occurrence_id}
+                        occurrences={findingDetail.occurrences || []}
+                      />
                     )}
 
                     {/* SUB-TAB 2: OCCURRENCE HISTORY */}
@@ -1432,10 +1449,10 @@ export default function InvestigationActionsCentre() {
 
                                 {isExpanded && (
                                   <div style={{ marginTop: '0.65rem' }}>
-                                    <EvidenceProvenanceCard
-                                      occurrence={occ}
-                                      finding={findingDetail}
-                                      title="Occurrence Source Provenance"
+                                    <ProvenanceDrillDownView
+                                      findingId={findingDetail.finding_id}
+                                      initialOccurrenceId={occ.occurrence_id}
+                                      occurrences={findingDetail.occurrences || []}
                                     />
                                   </div>
                                 )}
