@@ -458,8 +458,8 @@ export default function InvestigationActionsCentre() {
         error: action === 'RESOLVE'
           ? 'Resolution notes are required to resolve this finding.'
           : action === 'REOPEN'
-          ? 'An engineering justification reason is required to reopen this finding.'
-          : 'Diagnostic notes cannot be blank.',
+            ? 'An engineering justification reason is required to reopen this finding.'
+            : 'Diagnostic notes cannot be blank.',
       }));
       return;
     }
@@ -671,7 +671,7 @@ export default function InvestigationActionsCentre() {
             title="Refresh active queue and operational metrics"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+              <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
             </svg>
             Refresh
           </button>
@@ -691,7 +691,7 @@ export default function InvestigationActionsCentre() {
             ) : (
               <>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
                 </svg>
                 Sync Anomaly Signals
               </>
@@ -705,7 +705,7 @@ export default function InvestigationActionsCentre() {
             title="Generate actionable recommendations from an energy finding"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
             </svg>
             Generate Recommendations
           </button>
@@ -749,9 +749,9 @@ export default function InvestigationActionsCentre() {
             <span className="iac-kpi-label">Active Findings</span>
             <div className="iac-kpi-icon" style={{ background: 'rgba(99, 102, 241, 0.1)', color: 'var(--brand-purple, #6366f1)' }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="8" x2="12" y2="12"/>
-                <line x1="12" y1="16" x2="12.01" y2="16"/>
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
             </div>
           </div>
@@ -776,7 +776,7 @@ export default function InvestigationActionsCentre() {
             <span className="iac-kpi-label">Critical & High Priority</span>
             <div className="iac-kpi-icon" style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444' }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
               </svg>
             </div>
           </div>
@@ -803,8 +803,8 @@ export default function InvestigationActionsCentre() {
             <span className="iac-kpi-label">Awaiting Investigation</span>
             <div className="iac-kpi-icon" style={{ background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b' }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10"/>
-                <polyline points="12 6 12 12 16 14"/>
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
               </svg>
             </div>
           </div>
@@ -827,7 +827,7 @@ export default function InvestigationActionsCentre() {
             <span className="iac-kpi-label">Open Recommendations</span>
             <div className="iac-kpi-icon" style={{ background: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6' }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
               </svg>
             </div>
           </div>
@@ -849,10 +849,10 @@ export default function InvestigationActionsCentre() {
             <span className="iac-kpi-label">Corrective Actions</span>
             <div className="iac-kpi-icon" style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#10b981' }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect width="18" height="18" x="3" y="4" rx="2" ry="2"/>
-                <line x1="16" y1="2" x2="16" y2="6"/>
-                <line x1="8" y1="2" x2="8" y2="6"/>
-                <line x1="3" y1="10" x2="21" y2="10"/>
+                <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
+                <line x1="16" y1="2" x2="16" y2="6" />
+                <line x1="8" y1="2" x2="8" y2="6" />
+                <line x1="3" y1="10" x2="21" y2="10" />
               </svg>
             </div>
           </div>
@@ -876,10 +876,10 @@ export default function InvestigationActionsCentre() {
           onClick={() => setActiveTab('workspace')}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <rect width="7" height="9" x="3" y="3" rx="1"/>
-            <rect width="7" height="5" x="14" y="3" rx="1"/>
-            <rect width="7" height="9" x="14" y="12" rx="1"/>
-            <rect width="7" height="5" x="3" y="16" rx="1"/>
+            <rect width="7" height="9" x="3" y="3" rx="1" />
+            <rect width="7" height="5" x="14" y="3" rx="1" />
+            <rect width="7" height="9" x="14" y="12" rx="1" />
+            <rect width="7" height="5" x="3" y="16" rx="1" />
           </svg>
           Findings &amp; Investigation Workspace
           <span className="iac-tab-count">{findingsData.total}</span>
@@ -891,7 +891,7 @@ export default function InvestigationActionsCentre() {
           onClick={() => setActiveTab('recommendations')}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
           </svg>
           Recommendations Directory
           <span className="iac-tab-count">{kpis.openRecommendations}</span>
@@ -903,9 +903,9 @@ export default function InvestigationActionsCentre() {
           onClick={() => setActiveTab('actions')}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-            <path d="M15 2H9a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1Z"/>
-            <path d="m9 14 2 2 4-4"/>
+            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+            <path d="M15 2H9a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1Z" />
+            <path d="m9 14 2 2 4-4" />
           </svg>
           Corrective Actions Tracker
           <span className="iac-tab-count">{kpis.openActions}</span>
@@ -917,7 +917,7 @@ export default function InvestigationActionsCentre() {
           onClick={() => setActiveTab('surveillance')}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
           </svg>
           Live Anomaly Surveillance
           {anomalySuiteData && <span className="iac-tab-count">{surveillanceAlerts.length}</span>}
@@ -935,8 +935,8 @@ export default function InvestigationActionsCentre() {
             <div className="iac-filter-toolbar">
               <div className="iac-search-box">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="11" cy="11" r="8"/>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                  <circle cx="11" cy="11" r="8" />
+                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
                 </svg>
                 <input
                   type="text"
@@ -1361,9 +1361,9 @@ export default function InvestigationActionsCentre() {
                         {/* Evidence Limitations Banner */}
                         <div className="iac-limitation-box">
                           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <circle cx="12" cy="12" r="10"/>
-                            <line x1="12" y1="16" x2="12" y2="12"/>
-                            <line x1="12" y1="8" x2="12.01" y2="8"/>
+                            <circle cx="12" cy="12" r="10" />
+                            <line x1="12" y1="16" x2="12" y2="12" />
+                            <line x1="12" y1="8" x2="12.01" y2="8" />
                           </svg>
                           <div>
                             <strong>Evidence Integrity &amp; Surveillance Constraints:</strong>
@@ -1914,8 +1914,8 @@ export default function InvestigationActionsCentre() {
                   {lifecycleModal.action === 'RESOLVE'
                     ? 'Resolution Notes (Mandatory)'
                     : lifecycleModal.action === 'REOPEN'
-                    ? 'Engineering Reopening Justification (Mandatory)'
-                    : 'Notes / Comments'}
+                      ? 'Engineering Reopening Justification (Mandatory)'
+                      : 'Notes / Comments'}
                 </label>
                 <textarea
                   className="findings-form-textarea"
@@ -1955,13 +1955,12 @@ export default function InvestigationActionsCentre() {
               </button>
               <button
                 type="button"
-                className={`btn-findings ${
-                  lifecycleModal.action === 'RESOLVE'
+                className={`btn-findings ${lifecycleModal.action === 'RESOLVE'
                     ? 'btn-findings-success'
                     : lifecycleModal.action === 'REOPEN'
-                    ? 'btn-findings-danger'
-                    : 'btn-findings-primary'
-                }`}
+                      ? 'btn-findings-danger'
+                      : 'btn-findings-primary'
+                  }`}
                 onClick={handleExecuteLifecycleAction}
                 disabled={lifecycleModal.loading}
               >
