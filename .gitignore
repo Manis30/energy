@@ -52,3 +52,15 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Archives & Backups
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# Local Runtime Data & State
+backend/app/data/
+
+
