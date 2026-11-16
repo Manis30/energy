@@ -234,3 +234,89 @@ def download_template(
         },
     )
 
+
+# ---------------------------------------------------------------------------
+# Daily Operations End-to-End Intelligence Pipeline Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/pipeline-status",
+    summary="Get authoritative Daily Operations pipeline status",
+    description="Returns current execution state, status, timestamps, and summaries across all 8 pipeline stages for a reporting date.",
+)
+def get_pipeline_status_endpoint(
+    reporting_date: date = Query(..., description="Confirmed reporting date (YYYY-MM-DD)"),
+    plant_id: str = Query("IN-TN-01", description="Plant identifier"),
+    db: Session = Depends(get_db_session),
+):
+    from app.services.daily_pipeline_service import get_daily_pipeline_status
+    return get_daily_pipeline_status(session=db, reporting_date=reporting_date, plant_id=plant_id)
+
+
+@router.post(
+    "/pipeline/run-downstream",
+    summary="Execute downstream stages of Daily Operations pipeline",
+    description="Sequentially executes Reconciliation, Analytics, Intelligence Report, Anomaly Detection, and Investigation Handoff, persisting results.",
+)
+def run_downstream_pipeline_endpoint(
+    reporting_date: date = Query(..., description="Confirmed reporting date (YYYY-MM-DD)"),
+    plant_id: str = Query("IN-TN-01", description="Plant identifier"),
+    db: Session = Depends(get_db_session),
+):
+    from app.services.daily_pipeline_service import run_downstream_pipeline
+    return run_downstream_pipeline(session=db, reporting_date=reporting_date, plant_id=plant_id)
+
+
+@router.post(
+    "/pipeline-status",
+    summary="Persist or update Daily Operations pipeline stage status",
+    description="Records stage transition, status, and summary in persistent pipeline state with validation integrity checks.",
+)
+def update_pipeline_status_endpoint(
+    reporting_date: date = Form(..., description="Confirmed reporting date (YYYY-MM-DD)"),
+    stage_id: str = Form(..., description="Pipeline stage identifier"),
+    status: str = Form(..., description="'NOT_STARTED', 'IN_PROGRESS', 'COMPLETED', 'COMPLETED_WITH_WARNINGS', 'FAILED', 'BLOCKED'"),
+    summary: str = Form(..., description="Human-readable stage execution summary"),
+    db: Session = Depends(get_db_session),
+):
+    from app.services.daily_pipeline_service import record_pipeline_stage_state, get_daily_pipeline_status, STAGE_KEYS
+
+    if stage_id not in STAGE_KEYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid stage_id '{stage_id}'. Supported stages: {STAGE_KEYS}",
+        )
+
+    valid_statuses = {"NOT_STARTED", "IN_PROGRESS", "COMPLETED", "COMPLETED_WITH_WARNINGS", "FAILED", "BLOCKED"}
+    if status.upper() not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{status}'. Must be one of {valid_statuses}",
+        )
+
+    # Ingestion stage status must strictly reflect actual database records, not arbitrary client claims
+    if stage_id == "database_ingestion" and status.upper() in ("COMPLETED", "COMPLETED_WITH_WARNINGS"):
+        from app.models.source_data import FactEnergyMeterHourly, FactHourlyProduction
+        from sqlalchemy import func
+        energy_count = db.query(func.count(FactEnergyMeterHourly.meter_reading_id)).filter(
+            FactEnergyMeterHourly.date == reporting_date
+        ).scalar() or 0
+        prod_count = db.query(func.count(FactHourlyProduction.event_id)).filter(
+            FactHourlyProduction.event_date == reporting_date
+        ).scalar() or 0
+        if energy_count == 0 and prod_count == 0:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Cannot mark database_ingestion as COMPLETED: zero records exist in PostgreSQL for {reporting_date}.",
+            )
+
+    record_pipeline_stage_state(
+        reporting_date=reporting_date,
+        stage_id=stage_id,
+        status=status.upper(),
+        summary=summary,
+    )
+    return get_daily_pipeline_status(session=db, reporting_date=reporting_date)
+
+
+

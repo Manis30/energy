@@ -129,5 +129,53 @@ export const dailyReportsApi = {
     link.click();
     link.remove();
   },
+
+  /**
+   * Retrieve authoritative 8-stage Daily Operations pipeline status.
+   * @param {string} reportingDate - YYYY-MM-DD
+   * @param {string} [plantId='IN-TN-01']
+   * @returns {Promise<any>}
+   */
+  async getPipelineStatus(reportingDate, plantId = 'IN-TN-01') {
+    return apiRequest('/daily-reports/pipeline-status', {
+      params: { reporting_date: reportingDate, plant_id: plantId },
+    });
+  },
+
+  /**
+   * Execute downstream processing stages (Reconciliation, Analytics, Report, Anomalies, Handoff).
+   * @param {string} reportingDate - YYYY-MM-DD
+   * @param {string} [plantId='IN-TN-01']
+   * @returns {Promise<any>}
+   */
+  async runDownstreamPipeline(reportingDate, plantId = 'IN-TN-01') {
+    return apiRequest('/daily-reports/pipeline/run-downstream', {
+      params: { reporting_date: reportingDate, plant_id: plantId },
+      init: { method: 'POST' },
+    });
+  },
+
+  /**
+   * Update or record an individual pipeline stage status.
+   * @param {string} reportingDate - YYYY-MM-DD
+   * @param {string} stageId - Stage key
+   * @param {string} status - 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'COMPLETED_WITH_WARNINGS' | 'FAILED' | 'BLOCKED'
+   * @param {string} summary - Human-readable summary
+   * @returns {Promise<any>}
+   */
+  async updatePipelineStatus(reportingDate, stageId, status, summary) {
+    const formData = new FormData();
+    formData.append('reporting_date', reportingDate);
+    formData.append('stage_id', stageId);
+    formData.append('status', status);
+    formData.append('summary', summary);
+
+    return apiRequest('/daily-reports/pipeline-status', {
+      init: {
+        method: 'POST',
+        body: formData,
+      },
+    });
+  },
 };
 
