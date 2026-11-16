@@ -164,3 +164,59 @@ class SyncFindingsResponse(BaseModel):
     duplicates_ignored: int = 0
     conflicts_preserved: int = 0
     affected_finding_ids: List[str]
+
+
+class UploadMetadataResponse(BaseModel):
+    """Provenance upload batch audit metadata."""
+    upload_id: str
+    filename: str
+    file_format: str
+    sheet_name: Optional[str] = None
+    report_type: str
+    reporting_date: Optional[str] = None
+    uploaded_at: Optional[str] = None
+    file_size_bytes: int = 0
+    total_rows: int = 0
+    valid_rows: int = 0
+    rejected_rows: int = 0
+    duplicate_rows: int = 0
+    status: str
+    mode: str
+    is_available: bool = True
+
+
+class SourceRecordDrillDownResponse(BaseModel):
+    """Detailed ground-truth source record resolution for an occurrence."""
+    source_table: str = Field(..., description="PostgreSQL table name: fact_energy_meter_hourly or fact_hourly_production")
+    source_record_id: Optional[str] = Field(None, description="Primary key identifier of source observation (meter_reading_id or event_id)")
+    role: Optional[str] = Field(None, description="Domain semantic role (e.g. PRODUCTION_ZERO_OUTPUT_EVENT, PROCESS_ENERGY_MEASUREMENT)")
+    reporting_timestamp: Optional[str] = Field(None, description="Timestamp of the physical sensor or production observation")
+    plant_id: Optional[str] = Field(None, description="Plant identifier")
+    entity_id: Optional[str] = Field(None, description="Meter ID or Line ID")
+    entity_type: Optional[str] = Field(None, description="METER or LINE")
+    record_status: str = Field("FOUND", description="FOUND, MISSING, or UNSUPPORTED_TABLE")
+    raw_data: Optional[Dict[str, Any]] = Field(None, description="Full dictionary of source table columns and measured attributes")
+    upload: Optional[UploadMetadataResponse] = Field(None, description="Upload batch details if linked to an upload batch")
+    upload_status: str = Field("UNAVAILABLE", description="AVAILABLE, UNAVAILABLE_HISTORICAL, or UPLOAD_NOT_FOUND")
+    lineage_state: str = Field(..., description="Stream-level lineage: AVAILABLE, UPLOAD_UNAVAILABLE, or SOURCE_MISSING")
+    lineage_note: Optional[str] = Field(None, description="Auditable diagnostic note on this specific contributing stream")
+
+
+class OccurrenceProvenanceResponse(BaseModel):
+    """End-to-end provenance drill-down response for a specific finding occurrence."""
+    finding_id: str
+    occurrence_id: str
+    occurrence_ts: str
+    anomaly_type: str
+    severity: str
+    detector_name: Optional[str] = None
+    detector_version: Optional[str] = None
+    overall_lineage_state: str = Field(
+        ...,
+        description="Explicit lineage category: AVAILABLE, MULTI_SOURCE, LEGACY_UNLINKED, SOURCE_MISSING, or UPLOAD_UNAVAILABLE",
+    )
+    lineage_explanation: str = Field(..., description="Operational explanation of data lineage and traceability")
+    is_multi_source: bool = Field(False, description="True if anomaly combines multiple distinct telemetry streams")
+    source_records: List[SourceRecordDrillDownResponse] = Field(default_factory=list)
+    retrieved_at: str
+

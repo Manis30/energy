@@ -29,6 +29,19 @@ export const findingsApi = {
   getFindingDetail: (findingId) => apiRequest(`/api/findings/${encodeURIComponent(findingId)}`),
 
   /**
+   * Retrieve end-to-end read-only provenance drill-down for a finding occurrence.
+   * @param {string} findingId
+   * @param {string} [occurrenceId]
+   * @returns {Promise<any>}
+   */
+  getOccurrenceProvenance: (findingId, occurrenceId) => {
+    const url = occurrenceId
+      ? `/api/findings/${encodeURIComponent(findingId)}/occurrences/${encodeURIComponent(occurrenceId)}/provenance`
+      : `/api/findings/${encodeURIComponent(findingId)}/provenance`;
+    return apiRequest(url);
+  },
+
+  /**
    * Acknowledge an operational finding (NEW or REOPENED -> ACKNOWLEDGED).
    * @param {string} findingId
    * @param {object} data

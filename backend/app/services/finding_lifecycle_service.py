@@ -24,6 +24,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.findings import FindingAuditLog, FindingOccurrence, OperationalFinding
+from app.models.source_data import FactEnergyMeterHourly, FactHourlyProduction
+from app.models.upload_history import UploadHistory
 from app.services.anomaly_detection import detect_all_anomalies
 
 logger = logging.getLogger(__name__)
@@ -856,3 +858,354 @@ def get_finding_detail(
         )
     )
     return session.execute(stmt).scalar_one_or_none()
+
+
+def _serialize_energy_record(rec: FactEnergyMeterHourly) -> Dict[str, Any]:
+    """Serialize physical fact_energy_meter_hourly record for provenance inspection."""
+    return {
+        "meter_reading_id": rec.meter_reading_id,
+        "timestamp": rec.timestamp.isoformat() if rec.timestamp else None,
+        "date": rec.date.isoformat() if rec.date else None,
+        "plant_id": rec.plant_id,
+        "meter_id": rec.meter_id,
+        "area": rec.area,
+        "energy_source": rec.energy_source,
+        "consumption_kwh": float(rec.consumption_kwh) if rec.consumption_kwh is not None else None,
+        "demand_kw": float(rec.demand_kw) if rec.demand_kw is not None else None,
+        "power_factor": float(rec.power_factor) if rec.power_factor is not None else None,
+        "tariff_inr_per_kwh": float(rec.tariff_inr_per_kwh) if rec.tariff_inr_per_kwh is not None else None,
+        "cost_inr": float(rec.cost_inr) if rec.cost_inr is not None else None,
+        "co2e_kg": float(rec.co2e_kg) if rec.co2e_kg is not None else None,
+        "reading_quality": rec.reading_quality,
+        "upload_id": rec.upload_id,
+        "ingested_at": rec.ingested_at.isoformat() if rec.ingested_at else None,
+    }
+
+
+def _serialize_production_record(rec: FactHourlyProduction) -> Dict[str, Any]:
+    """Serialize physical fact_hourly_production record for provenance inspection."""
+    return {
+        "event_id": rec.event_id,
+        "event_ts": rec.event_ts.isoformat() if rec.event_ts else None,
+        "event_date": rec.event_date.isoformat() if rec.event_date else None,
+        "year": rec.year,
+        "month": rec.month,
+        "week": rec.week,
+        "day": rec.day,
+        "hour": rec.hour,
+        "plant_id": rec.plant_id,
+        "line_id": rec.line_id,
+        "shift_id": rec.shift_id,
+        "product_id": rec.product_id,
+        "production_order_id": rec.production_order_id,
+        "target_qty": rec.target_qty,
+        "actual_qty": rec.actual_qty,
+        "good_qty": rec.good_qty,
+        "reject_qty": rec.reject_qty,
+        "rework_qty": rec.rework_qty,
+        "downtime_min": rec.downtime_min,
+        "downtime_reason": rec.downtime_reason,
+        "operator_team": rec.operator_team,
+        "source_system": rec.source_system,
+        "data_quality": rec.data_quality,
+        "upload_id": rec.upload_id,
+        "ingested_at": rec.ingested_at.isoformat() if rec.ingested_at else None,
+    }
+
+
+def _serialize_upload_history(u: UploadHistory) -> Dict[str, Any]:
+    """Serialize upload batch audit trail record for provenance inspection."""
+    return {
+        "upload_id": u.upload_id,
+        "filename": u.filename,
+        "file_format": u.file_format,
+        "sheet_name": u.sheet_name,
+        "report_type": u.report_type,
+        "reporting_date": u.reporting_date.isoformat() if u.reporting_date else None,
+        "uploaded_at": u.uploaded_at.isoformat() if u.uploaded_at else None,
+        "file_size_bytes": u.file_size_bytes,
+        "total_rows": u.total_rows,
+        "valid_rows": u.valid_rows,
+        "rejected_rows": u.rejected_rows,
+        "duplicate_rows": u.duplicate_rows,
+        "status": u.status,
+        "mode": u.mode,
+        "is_available": True,
+    }
+
+
+def get_occurrence_provenance(
+    session: Session,
+    finding_id: str,
+    occurrence_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Retrieve end-to-end read-only provenance drill-down for a finding occurrence.
+
+    Trace path:
+    Finding -> Occurrence -> Source Record(s) -> Upload History
+
+    Adheres strictly to constraints:
+    - Never accepts arbitrary table names or SQL; strictly allowlists fact_energy_meter_hourly and fact_hourly_production.
+    - Resolves source records using actual primary key identifiers (meter_reading_id, event_id).
+    - Batch queries database tables to avoid N+1 queries.
+    - Explicitly categorizes lineage states: AVAILABLE, MULTI_SOURCE, LEGACY_UNLINKED, SOURCE_MISSING, UPLOAD_UNAVAILABLE.
+    - Preserves and exposes semantic roles for composite multi-source occurrences.
+    """
+    stmt = (
+        select(OperationalFinding)
+        .where(OperationalFinding.finding_id == finding_id)
+        .options(selectinload(OperationalFinding.occurrences))
+    )
+    finding = session.execute(stmt).scalar_one_or_none()
+    if not finding:
+        raise KeyError(f"Finding '{finding_id}' not found.")
+
+    target_occ: Optional[FindingOccurrence] = None
+    if occurrence_id:
+        for occ in (finding.occurrences or []):
+            if occ.occurrence_id == occurrence_id:
+                target_occ = occ
+                break
+        if not target_occ:
+            other_occ = session.execute(
+                select(FindingOccurrence).where(FindingOccurrence.occurrence_id == occurrence_id)
+            ).scalar_one_or_none()
+            if other_occ:
+                raise ValueError(
+                    f"Occurrence '{occurrence_id}' belongs to finding '{other_occ.finding_id}', not '{finding_id}'."
+                )
+            raise ValueError(f"Occurrence '{occurrence_id}' not found for finding '{finding_id}'.")
+    else:
+        if finding.occurrences:
+            sorted_occs = sorted(
+                finding.occurrences,
+                key=lambda o: o.occurrence_ts or datetime.min,
+                reverse=True,
+            )
+            target_occ = sorted_occs[0]
+        else:
+            now_iso = datetime.utcnow().isoformat()
+            return {
+                "finding_id": finding.finding_id,
+                "occurrence_id": "NONE",
+                "occurrence_ts": finding.first_detected_at.isoformat() if finding.first_detected_at else now_iso,
+                "anomaly_type": finding.anomaly_type,
+                "severity": finding.severity,
+                "detector_name": finding.anomaly_type,
+                "detector_version": "1.0.0",
+                "overall_lineage_state": "LEGACY_UNLINKED",
+                "lineage_explanation": "Historical finding has no recorded occurrences or source telemetry links.",
+                "is_multi_source": False,
+                "source_records": [],
+                "retrieved_at": now_iso,
+            }
+
+    c_flags: Dict[str, Any] = {}
+    if target_occ.context_flags_json:
+        try:
+            c_flags = json.loads(target_occ.context_flags_json)
+        except Exception:
+            c_flags = {}
+
+    specs: List[Dict[str, Any]] = []
+    if c_flags.get("source_records") and isinstance(c_flags["source_records"], list):
+        specs = list(c_flags["source_records"])
+    elif target_occ.source_table and target_occ.source_record_id:
+        specs = [
+            {
+                "source_table": target_occ.source_table,
+                "source_record_id": target_occ.source_record_id,
+                "upload_id": target_occ.upload_id,
+                "role": "PRIMARY_OBSERVATION",
+            }
+        ]
+    else:
+        # Fallback to direct keys in context_flags if present
+        if c_flags.get("meter_reading_id"):
+            specs.append({
+                "source_table": "fact_energy_meter_hourly",
+                "source_record_id": str(c_flags["meter_reading_id"]),
+                "upload_id": c_flags.get("upload_id") or target_occ.upload_id,
+                "role": "PROCESS_ENERGY_MEASUREMENT",
+            })
+        if c_flags.get("event_id"):
+            specs.append({
+                "source_table": "fact_hourly_production",
+                "source_record_id": str(c_flags["event_id"]),
+                "upload_id": c_flags.get("upload_id") or target_occ.upload_id,
+                "role": "PRODUCTION_ZERO_OUTPUT_EVENT",
+            })
+
+    ALLOWLISTED_TABLES = {"fact_energy_meter_hourly", "fact_hourly_production"}
+
+    # Extract distinct IDs for batch queries to prevent N+1 overhead
+    energy_ids = [
+        str(s["source_record_id"]).strip()
+        for s in specs
+        if s.get("source_table") == "fact_energy_meter_hourly" and s.get("source_record_id")
+    ]
+    prod_ids = [
+        str(s["source_record_id"]).strip()
+        for s in specs
+        if s.get("source_table") == "fact_hourly_production" and s.get("source_record_id")
+    ]
+
+    energy_map: Dict[str, FactEnergyMeterHourly] = {}
+    if energy_ids:
+        e_stmt = select(FactEnergyMeterHourly).where(FactEnergyMeterHourly.meter_reading_id.in_(energy_ids))
+        for r in session.execute(e_stmt).scalars().all():
+            energy_map[r.meter_reading_id] = r
+
+    prod_map: Dict[str, FactHourlyProduction] = {}
+    if prod_ids:
+        p_stmt = select(FactHourlyProduction).where(FactHourlyProduction.event_id.in_(prod_ids))
+        for r in session.execute(p_stmt).scalars().all():
+            prod_map[r.event_id] = r
+
+    # Collect upload IDs for batch lookup in upload_history
+    upload_ids: Set[str] = set()
+    for s in specs:
+        up = s.get("upload_id")
+        if up and str(up).strip():
+            upload_ids.add(str(up).strip())
+    if target_occ.upload_id and str(target_occ.upload_id).strip():
+        upload_ids.add(str(target_occ.upload_id).strip())
+    for r in energy_map.values():
+        if r.upload_id and str(r.upload_id).strip():
+            upload_ids.add(str(r.upload_id).strip())
+    for r in prod_map.values():
+        if r.upload_id and str(r.upload_id).strip():
+            upload_ids.add(str(r.upload_id).strip())
+
+    upload_map: Dict[str, UploadHistory] = {}
+    if upload_ids:
+        u_stmt = select(UploadHistory).where(UploadHistory.upload_id.in_(list(upload_ids)))
+        for u in session.execute(u_stmt).scalars().all():
+            upload_map[u.upload_id] = u
+
+    resolved_records: List[Dict[str, Any]] = []
+
+    for spec in specs:
+        table_name = str(spec.get("source_table", "")).strip()
+        rec_id = str(spec.get("source_record_id", "")).strip() if spec.get("source_record_id") else None
+        role = spec.get("role")
+
+        if table_name not in ALLOWLISTED_TABLES:
+            resolved_records.append({
+                "source_table": table_name or "UNKNOWN",
+                "source_record_id": rec_id,
+                "role": role,
+                "reporting_timestamp": None,
+                "plant_id": finding.plant_id,
+                "entity_id": finding.meter_id or finding.line_id,
+                "entity_type": "METER" if finding.meter_id else ("LINE" if finding.line_id else None),
+                "record_status": "UNSUPPORTED_TABLE",
+                "raw_data": None,
+                "upload": None,
+                "upload_status": "UNAVAILABLE",
+                "lineage_state": "SOURCE_MISSING",
+                "lineage_note": f"Source table '{table_name}' is not in the allowlisted schema tables.",
+            })
+            continue
+
+        raw_obj: Optional[Dict[str, Any]] = None
+        reporting_ts: Optional[str] = None
+        plant_id = finding.plant_id
+        entity_id: Optional[str] = None
+        entity_type: Optional[str] = None
+        found_upload_id = spec.get("upload_id") or target_occ.upload_id
+
+        if table_name == "fact_energy_meter_hourly":
+            entity_type = "METER"
+            e_rec = energy_map.get(rec_id) if rec_id else None
+            if e_rec:
+                raw_obj = _serialize_energy_record(e_rec)
+                reporting_ts = e_rec.timestamp.isoformat() if e_rec.timestamp else None
+                plant_id = e_rec.plant_id
+                entity_id = e_rec.meter_id
+                if e_rec.upload_id:
+                    found_upload_id = e_rec.upload_id
+        elif table_name == "fact_hourly_production":
+            entity_type = "LINE"
+            p_rec = prod_map.get(rec_id) if rec_id else None
+            if p_rec:
+                raw_obj = _serialize_production_record(p_rec)
+                reporting_ts = p_rec.event_ts.isoformat() if p_rec.event_ts else None
+                plant_id = p_rec.plant_id
+                entity_id = p_rec.line_id
+                if p_rec.upload_id:
+                    found_upload_id = p_rec.upload_id
+
+        if raw_obj is not None:
+            record_status = "FOUND"
+            if found_upload_id and found_upload_id in upload_map:
+                up_info = _serialize_upload_history(upload_map[found_upload_id])
+                up_status = "AVAILABLE"
+                lineage_state = "AVAILABLE"
+                lineage_note = "Original source record and upload batch metadata are verified in the database."
+            else:
+                up_info = None
+                up_status = "UNAVAILABLE_HISTORICAL" if not found_upload_id else "UPLOAD_NOT_FOUND"
+                lineage_state = "UPLOAD_UNAVAILABLE"
+                lineage_note = (
+                    "Source record exists in database, but batch upload metadata is unavailable (record predates upload tracking)."
+                    if not found_upload_id
+                    else f"Upload batch ID '{found_upload_id}' was not found in upload history."
+                )
+        else:
+            record_status = "MISSING"
+            up_info = None
+            up_status = "UNAVAILABLE"
+            lineage_state = "SOURCE_MISSING"
+            lineage_note = f"Source record ID '{rec_id}' was not found in database table '{table_name}'."
+
+        resolved_records.append({
+            "source_table": table_name,
+            "source_record_id": rec_id,
+            "role": role,
+            "reporting_timestamp": reporting_ts,
+            "plant_id": plant_id,
+            "entity_id": entity_id or (finding.meter_id if entity_type == "METER" else finding.line_id),
+            "entity_type": entity_type,
+            "record_status": record_status,
+            "raw_data": raw_obj,
+            "upload": up_info,
+            "upload_status": up_status,
+            "lineage_state": lineage_state,
+            "lineage_note": lineage_note,
+        })
+
+    is_multi = len(resolved_records) > 1
+    if len(resolved_records) == 0:
+        overall_lineage = "LEGACY_UNLINKED"
+        lineage_explanation = "Historical finding has no stored source record identity. Ingested prior to telemetry tracking."
+    elif is_multi:
+        overall_lineage = "MULTI_SOURCE"
+        lineage_explanation = (
+            f"Composite anomaly cross-correlating {len(resolved_records)} discrete source telemetry records "
+            "across production and energy streams."
+        )
+    else:
+        single = resolved_records[0]
+        overall_lineage = single["lineage_state"]
+        lineage_explanation = single["lineage_note"] or "Single-source observation verified in database."
+
+    det_ver = target_occ.detector_version or c_flags.get("detector_version") or "1.0.0"
+    det_name = c_flags.get("detector_name") or finding.anomaly_type
+
+    return {
+        "finding_id": finding.finding_id,
+        "occurrence_id": target_occ.occurrence_id,
+        "occurrence_ts": target_occ.occurrence_ts.isoformat() if target_occ.occurrence_ts else "",
+        "anomaly_type": finding.anomaly_type,
+        "severity": target_occ.severity or finding.severity,
+        "detector_name": det_name,
+        "detector_version": det_ver,
+        "overall_lineage_state": overall_lineage,
+        "lineage_explanation": lineage_explanation,
+        "is_multi_source": is_multi,
+        "source_records": resolved_records,
+        "retrieved_at": datetime.utcnow().isoformat(),
+    }
+

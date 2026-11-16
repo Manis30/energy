@@ -9,6 +9,7 @@ import { formatDateTime, formatNumber } from '../utils/formatters';
 import {
   EvidenceProvenanceCard,
   LineageStatusBadge,
+  ProvenanceDrillDownView,
 } from './findings/ProvenanceExplorer';
 
 // Shared Recommendation & Action Modals / Components

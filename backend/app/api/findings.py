@@ -14,6 +14,7 @@ from app.schemas.findings import (
     FindingDetailResponse,
     FindingListResponse,
     FindingSummary,
+    OccurrenceProvenanceResponse,
     ReopenFindingRequest,
     ResolveFindingRequest,
     StartInvestigationRequest,
@@ -24,6 +25,7 @@ from app.services.finding_lifecycle_service import (
     acknowledge_finding,
     add_investigation_notes,
     get_finding_detail,
+    get_occurrence_provenance,
     list_findings,
     reopen_finding,
     resolve_finding,
@@ -231,6 +233,56 @@ def read_finding_detail(
             detail=f"Finding '{finding_id}' not found.",
         )
     return FindingDetailResponse(**_to_detail_dict(finding))
+
+
+@router.get(
+    "/{finding_id}/occurrences/{occurrence_id}/provenance",
+    response_model=OccurrenceProvenanceResponse,
+    summary="Get source record provenance for a specific occurrence",
+    description="Retrieve end-to-end read-only provenance drill-down from finding occurrence down to physical source rows and batch upload audit records.",
+)
+def read_occurrence_provenance(
+    finding_id: str,
+    occurrence_id: str,
+    db: Session = Depends(get_db_session),
+) -> OccurrenceProvenanceResponse:
+    try:
+        prov = get_occurrence_provenance(session=db, finding_id=finding_id, occurrence_id=occurrence_id)
+        return OccurrenceProvenanceResponse(**prov)
+    except KeyError as ke:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ke))
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve occurrence provenance: {str(e)}",
+        )
+
+
+@router.get(
+    "/{finding_id}/provenance",
+    response_model=OccurrenceProvenanceResponse,
+    summary="Get source record provenance for finding (latest or specified occurrence)",
+    description="Retrieve end-to-end read-only provenance drill-down defaulting to the latest occurrence if occurrence_id is omitted.",
+)
+def read_finding_provenance(
+    finding_id: str,
+    occurrence_id: Optional[str] = Query(None, description="Optional occurrence ID to inspect. If omitted, defaults to latest occurrence."),
+    db: Session = Depends(get_db_session),
+) -> OccurrenceProvenanceResponse:
+    try:
+        prov = get_occurrence_provenance(session=db, finding_id=finding_id, occurrence_id=occurrence_id)
+        return OccurrenceProvenanceResponse(**prov)
+    except KeyError as ke:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ke))
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve finding provenance: {str(e)}",
+        )
 
 
 @router.post(

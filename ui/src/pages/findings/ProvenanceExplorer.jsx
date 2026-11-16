@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { formatDateTime } from '../../utils/formatters';
+import React, { useState, useEffect } from 'react';
+import { formatDateTime, formatNumber } from '../../utils/formatters';
+import { findingsApi } from '../../services/findingsApi';
 
 /**
  * Copy to clipboard button with tactile visual feedback.
@@ -60,10 +61,15 @@ export function CopyButton({ text, label = 'Copy', title = 'Copy to clipboard', 
 
 /**
  * Determine deterministic lineage category from occurrence or context fields.
- * Returns: 'AVAILABLE' | 'MULTI_SOURCE' | 'LEGACY' | 'UNAVAILABLE'
+ * Returns: 'AVAILABLE' | 'MULTI_SOURCE' | 'UPLOAD_UNAVAILABLE' | 'SOURCE_MISSING' | 'LEGACY_UNLINKED' | 'LEGACY' | 'UNAVAILABLE'
  */
 export function getLineageStatus(occ) {
   if (!occ) return 'UNAVAILABLE';
+
+  // Explicit status from backend occurrence provenance response
+  if (occ.overall_lineage_state) {
+    return occ.overall_lineage_state;
+  }
 
   // Explicit multi-source from backend schema or composite source records list
   if (
@@ -78,23 +84,27 @@ export function getLineageStatus(occ) {
   const hasUploadId = Boolean(occ.upload_id);
 
   if (hasSourceRecord) {
-    // If source table and record ID are present but upload_id is null, it's historical/legacy
-    return hasUploadId ? 'AVAILABLE' : 'LEGACY';
+    // If source table and record ID are present but upload_id is null, it's historical/upload unavailable
+    return hasUploadId ? 'AVAILABLE' : 'UPLOAD_UNAVAILABLE';
   }
 
   // Check single item in source_records array
   if (Array.isArray(occ.source_records) && occ.source_records.length === 1) {
     const single = occ.source_records[0];
     if (single.source_table && single.source_record_id) {
-      return single.upload_id ? 'AVAILABLE' : 'LEGACY';
+      return single.upload_id ? 'AVAILABLE' : 'UPLOAD_UNAVAILABLE';
     }
   }
 
   if (occ.lineage_status === 'AVAILABLE') {
-    return hasUploadId ? 'AVAILABLE' : 'LEGACY';
+    return hasUploadId ? 'AVAILABLE' : 'UPLOAD_UNAVAILABLE';
   }
 
-  return 'UNAVAILABLE';
+  if (occ.lineage_status === 'LEGACY' || occ.lineage_status === 'LEGACY_UNLINKED') {
+    return occ.lineage_status;
+  }
+
+  return 'LEGACY_UNLINKED';
 }
 
 /**
@@ -111,6 +121,8 @@ export function formatRoleLabel(role) {
       return 'Main Incomer Grid Telemetry';
     case 'SUBMETER_ENERGY':
       return 'Submeter Energy Telemetry';
+    case 'PRIMARY_OBSERVATION':
+      return 'Primary Physical Sensor Observation';
     default:
       return role.replace(/_/g, ' ');
   }
@@ -118,13 +130,15 @@ export function formatRoleLabel(role) {
 
 /**
  * Badge indicating deterministic lineage status.
+ * Supports all 5 explicit states: AVAILABLE, MULTI_SOURCE, UPLOAD_UNAVAILABLE, SOURCE_MISSING, LEGACY_UNLINKED
  */
-export function LineageStatusBadge({ status, streamCount = 0, isCompact = false }) {
+export function LineageStatusBadge({ status, streamCount = 0, isCompact = false, occurrence = null }) {
+  const resolvedStatus = status || (occurrence ? getLineageStatus(occurrence) : 'UNAVAILABLE');
   let badgeClass = 'badge-lineage badge-lineage-unavailable';
   let label = 'Lineage Unavailable';
   let title = 'Source record identity could not be resolved from telemetry records';
 
-  switch (status) {
+  switch (resolvedStatus) {
     case 'AVAILABLE':
       badgeClass = 'badge-lineage badge-lineage-available';
       label = isCompact ? 'Single-Source' : 'Single-Source Lineage';
@@ -137,10 +151,25 @@ export function LineageStatusBadge({ status, streamCount = 0, isCompact = false 
         : `Multi-Source Lineage (${streamCount || 2} streams)`;
       title = 'Composite anomaly derived by cross-correlating production execution events and electrical meter readings';
       break;
+    case 'UPLOAD_UNAVAILABLE':
+      badgeClass = 'badge-lineage badge-lineage-upload-unavailable';
+      label = isCompact ? 'Upload Unlinked' : 'Upload Metadata Unavailable';
+      title = 'Source telemetry record exists in database, but batch upload metadata is unavailable or record predates upload tracking';
+      break;
+    case 'SOURCE_MISSING':
+      badgeClass = 'badge-lineage badge-lineage-source-missing';
+      label = isCompact ? 'Source Missing' : 'Source Record Missing';
+      title = 'Stored source record identifier exists, but original record could not be retrieved from the database';
+      break;
+    case 'LEGACY_UNLINKED':
+      badgeClass = 'badge-lineage badge-lineage-legacy-unlinked';
+      label = isCompact ? 'Legacy Unlinked' : 'Legacy Unlinked Finding';
+      title = 'Historical finding has no stored source record identity; recorded prior to telemetry tracking';
+      break;
     case 'LEGACY':
       badgeClass = 'badge-lineage badge-lineage-legacy';
       label = isCompact ? 'Legacy Upload' : 'Legacy Record (Unattributed Upload)';
-      title = 'Historical sensor record; row ID resolved, but batch upload metadata was not tracked prior to Phase 10';
+      title = 'Historical sensor record; row ID resolved, but batch upload metadata was not tracked prior to provenance tracking';
       break;
     case 'UNAVAILABLE':
     default:
@@ -242,6 +271,7 @@ export function EvidenceProvenanceCard({
   finding,
   isPrimary = false,
   title = 'Evidence & Data Provenance',
+  onOpenProvenanceTab = null,
 }) {
   if (!occurrence) return null;
 
@@ -275,6 +305,17 @@ export function EvidenceProvenanceCard({
             <span className="provenance-detector-pill" title="Deterministic detector version">
               Detector: {occurrence.detector_version}
             </span>
+          )}
+          {onOpenProvenanceTab && (
+            <button
+              type="button"
+              className="btn-findings-link-compact"
+              style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
+              onClick={onOpenProvenanceTab}
+              title="Open full interactive provenance drill-down"
+            >
+              Deep Lineage Trace &rarr;
+            </button>
           )}
         </div>
       </div>
@@ -415,6 +456,478 @@ export function CompactProvenanceSummary({
             Source record identification is unavailable for this recommendation evidence context.
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Interactive end-to-end Source Record Provenance Drill-Down Component.
+ * Supports single-source and multi-source occurrences, allowlisted tables (energy & production),
+ * upload history metadata inspection, and expandable raw database record viewers.
+ */
+export function ProvenanceDrillDownView({
+  findingId,
+  initialOccurrenceId = null,
+  occurrences = [],
+  onSelectOccurrence = null,
+}) {
+  const [selectedOccId, setSelectedOccId] = useState(
+    initialOccurrenceId || (occurrences.length > 0 ? occurrences[0].occurrence_id : null)
+  );
+  const [drillData, setDrillData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [expandedStreams, setExpandedStreams] = useState({});
+  const [viewModes, setViewModes] = useState({});
+
+  useEffect(() => {
+    if (initialOccurrenceId) {
+      setSelectedOccId(initialOccurrenceId);
+    } else if (!selectedOccId && occurrences.length > 0) {
+      setSelectedOccId(occurrences[0].occurrence_id);
+    }
+  }, [initialOccurrenceId, occurrences]);
+
+  useEffect(() => {
+    if (!findingId) return;
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    findingsApi
+      .getOccurrenceProvenance(findingId, selectedOccId)
+      .then((res) => {
+        if (!cancelled) {
+          setDrillData(res);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err?.message || 'Failed to load provenance drill-down.');
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [findingId, selectedOccId]);
+
+  const handleToggleStream = (idx) => {
+    setExpandedStreams((prev) => ({
+      ...prev,
+      [idx]: !prev[idx],
+    }));
+  };
+
+  const handleSetViewMode = (idx, mode) => {
+    setViewModes((prev) => ({
+      ...prev,
+      [idx]: mode,
+    }));
+  };
+
+  const handleOccurrenceChange = (newOccId) => {
+    setSelectedOccId(newOccId);
+    if (onSelectOccurrence) {
+      onSelectOccurrence(newOccId);
+    }
+  };
+
+  if (loading && !drillData) {
+    return (
+      <div className="provenance-drilldown-wrapper" style={{ padding: '2rem', textAlign: 'center' }}>
+        <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+          Loading end-to-end source telemetry provenance...
+        </div>
+      </div>
+    );
+  }
+
+  if (error && !drillData) {
+    return (
+      <div className="provenance-drilldown-wrapper">
+        <div className="provenance-callout unavailable">
+          <strong>Provenance Resolution Error:</strong> {error}
+        </div>
+      </div>
+    );
+  }
+
+  const data = drillData || {};
+  const overallState = data.overall_lineage_state || 'UNAVAILABLE';
+  const streams = data.source_records || [];
+  const currentOccId = data.occurrence_id || selectedOccId || 'N/A';
+
+  return (
+    <div className="provenance-drilldown-wrapper">
+      {/* 1. Header Toolbar with Occurrence Switcher */}
+      <div className="provenance-toolbar">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+              Source Record Provenance Drill-Down
+            </span>
+            <LineageStatusBadge status={overallState} streamCount={streams.length} />
+          </div>
+          <span className="provenance-breadcrumb">
+            Trace: Finding {findingId} &rarr; Occurrence {currentOccId}
+          </span>
+        </div>
+
+        {occurrences && occurrences.length > 1 && (
+          <div className="provenance-occurrence-select-wrap">
+            <label htmlFor="provenance-occ-select" style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+              Select Occurrence:
+            </label>
+            <select
+              id="provenance-occ-select"
+              className="provenance-occurrence-select"
+              value={selectedOccId || ''}
+              onChange={(e) => handleOccurrenceChange(e.target.value)}
+            >
+              {occurrences.map((occ, idx) => (
+                <option key={occ.occurrence_id} value={occ.occurrence_id}>
+                  #{occurrences.length - idx}: {formatDateTime(occ.occurrence_ts || occ.detected_at)} ({occ.occurrence_id.slice(-6)})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
+      {/* 2. Visual End-to-End Trace Stepper */}
+      <div className="provenance-trace-stepper">
+        <div className="provenance-trace-node">
+          <span className="provenance-trace-step-num">Step 1 &bull; Entity</span>
+          <span className="provenance-trace-label">Operational Finding</span>
+          <span className="provenance-trace-val" title={findingId}>{findingId}</span>
+        </div>
+
+        <span className="provenance-trace-arrow">&rarr;</span>
+
+        <div className="provenance-trace-node active">
+          <span className="provenance-trace-step-num">Step 2 &bull; Evidence</span>
+          <span className="provenance-trace-label">Occurrence Record</span>
+          <span className="provenance-trace-val" title={currentOccId}>{currentOccId}</span>
+        </div>
+
+        <span className="provenance-trace-arrow">&rarr;</span>
+
+        <div className="provenance-trace-node">
+          <span className="provenance-trace-step-num">Step 3 &bull; Source Data</span>
+          <span className="provenance-trace-label">
+            {streams.length > 1 ? `${streams.length} Source Streams` : (streams[0]?.source_table || 'Telemetry Row')}
+          </span>
+          <span className="provenance-trace-val" title={streams[0]?.source_record_id || 'ID'}>
+            {streams.length > 1 ? 'Multi-Source Correlation' : (streams[0]?.source_record_id || 'ID Unavailable')}
+          </span>
+        </div>
+
+        <span className="provenance-trace-arrow">&rarr;</span>
+
+        <div className="provenance-trace-node">
+          <span className="provenance-trace-step-num">Step 4 &bull; Provenance</span>
+          <span className="provenance-trace-label">Upload Batch Audit</span>
+          <span className="provenance-trace-val" title={streams[0]?.upload?.upload_id || 'Batch ID'}>
+            {streams.some((s) => s.upload?.upload_id)
+              ? (streams.find((s) => s.upload?.upload_id)?.upload?.upload_id || 'Linked')
+              : 'Historical / Unlinked'}
+          </span>
+        </div>
+      </div>
+
+      {/* 3. Explanatory Callout Banner based on Lineage State */}
+      {overallState === 'MULTI_SOURCE' && (
+        <div className="provenance-callout multi">
+          <strong>Multi-Source Composite Telemetry:</strong> {data.lineage_explanation || 'This anomaly is derived by cross-correlating manufacturing production output and discrete electrical submetering. Each stream is grounded independently in PostgreSQL.'}
+        </div>
+      )}
+
+      {overallState === 'AVAILABLE' && (
+        <div className="provenance-callout available">
+          <strong>Single-Source Grounded Lineage:</strong> {data.lineage_explanation || 'Originating physical sensor record and its batch ingestion audit trail are verified in the database.'}
+        </div>
+      )}
+
+      {overallState === 'UPLOAD_UNAVAILABLE' && (
+        <div className="provenance-callout upload_unavailable">
+          <strong>Source Record Grounded (Batch Ingestion Unlinked):</strong> {data.lineage_explanation || 'Originating sensor observation is verified in PostgreSQL, but batch upload metadata is unavailable (historical baseline data).'}
+        </div>
+      )}
+
+      {overallState === 'SOURCE_MISSING' && (
+        <div className="provenance-callout source_missing">
+          <strong>Source Record Not Found:</strong> {data.lineage_explanation || 'The occurrence references a primary key identifier that could not be retrieved from the database.'}
+        </div>
+      )}
+
+      {overallState === 'LEGACY_UNLINKED' && (
+        <div className="provenance-callout legacy_unlinked">
+          <strong>Legacy Unlinked Finding:</strong> {data.lineage_explanation || 'Historical finding with no recorded occurrences or source telemetry links.'}
+        </div>
+      )}
+
+      {/* 4. Contributing Source Streams */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <h4 style={{ margin: 0, fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+            Contributing Source Observations ({streams.length})
+          </h4>
+          {data.detector_name && (
+            <span className="provenance-detector-pill" title="Detector name and version">
+              Detector: <code>{data.detector_name}</code> (v{data.detector_version || '1.0'})
+            </span>
+          )}
+        </div>
+
+        {streams.length === 0 ? (
+          <div className="provenance-empty-box" style={{ padding: '1.5rem', textAlign: 'center' }}>
+            No source records are linked to this occurrence.
+          </div>
+        ) : (
+          streams.map((stream, idx) => {
+            const roleName = stream.role || 'PRIMARY_OBSERVATION';
+            const isProd = roleName === 'PRODUCTION_ZERO_OUTPUT_EVENT' || stream.source_table?.includes('production');
+            const isEnergy = roleName === 'PROCESS_ENERGY_MEASUREMENT' || stream.source_table?.includes('energy');
+            const cardClass = isProd ? 'role-prod' : (isEnergy ? 'role-energy' : '');
+            const isExpanded = Boolean(expandedStreams[idx]);
+            const viewMode = viewModes[idx] || 'table';
+
+            return (
+              <div key={`${stream.source_table}-${stream.source_record_id || idx}`} className={`provenance-stream-detail-card ${cardClass}`}>
+                {/* Stream Header */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {streams.length > 1 && (
+                      <span className="provenance-stream-index">Stream #{idx + 1}</span>
+                    )}
+                    <span className="provenance-role-badge">
+                      {formatRoleLabel(roleName)}
+                    </span>
+                    <span className="provenance-table-badge" title="Underlying physical table">
+                      <code>{stream.source_table}</code>
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span className={`badge-db-status ${stream.record_status === 'FOUND' ? 'found' : 'missing'}`}>
+                      DB: {stream.record_status}
+                    </span>
+                    <LineageStatusBadge status={stream.lineage_state} isCompact />
+                  </div>
+                </div>
+
+                {/* Metadata Grid */}
+                <div className="provenance-stream-meta-grid">
+                  <div className="provenance-meta-item">
+                    <span className="provenance-meta-label">Primary Key Record ID</span>
+                    <div className="provenance-meta-value">
+                      {stream.source_record_id ? (
+                        <>
+                          <span><code>{stream.source_record_id}</code></span>
+                          <CopyButton text={stream.source_record_id} label="Copy" className="btn-copy-mini" />
+                        </>
+                      ) : (
+                        <span className="provenance-val-unavailable">Unavailable</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="provenance-meta-item">
+                    <span className="provenance-meta-label">Observation Timestamp</span>
+                    <span className="provenance-meta-value">
+                      {formatDateTime(stream.reporting_timestamp) || 'Unavailable'}
+                    </span>
+                  </div>
+
+                  <div className="provenance-meta-item">
+                    <span className="provenance-meta-label">Plant Facility</span>
+                    <span className="provenance-meta-value">
+                      {stream.plant_id || 'N/A'}
+                    </span>
+                  </div>
+
+                  <div className="provenance-meta-item">
+                    <span className="provenance-meta-label">{stream.entity_type === 'METER' ? 'Submeter Entity' : 'Production Line'}</span>
+                    <span className="provenance-meta-value">
+                      {stream.entity_id ? <code>{stream.entity_id}</code> : 'N/A'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Upload History Provenance Block */}
+                <div className="provenance-upload-box">
+                  <div className="provenance-upload-box-header">
+                    <span style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase' }}>
+                      Batch Ingestion Provenance (upload_history)
+                    </span>
+                    {stream.upload ? (
+                      <span className="badge-lineage badge-lineage-available" style={{ fontSize: '0.65rem' }}>
+                        Batch Verified
+                      </span>
+                    ) : (
+                      <span className="badge-lineage badge-lineage-upload-unavailable" style={{ fontSize: '0.65rem' }}>
+                        Historical / Unlinked
+                      </span>
+                    )}
+                  </div>
+
+                  {stream.upload ? (
+                    <div className="provenance-upload-grid">
+                      <div className="provenance-meta-item">
+                        <span className="provenance-meta-label">Upload Batch ID</span>
+                        <div className="provenance-meta-value">
+                          <span><code>{stream.upload.upload_id}</code></span>
+                          <CopyButton text={stream.upload.upload_id} label="Copy" className="btn-copy-mini" />
+                        </div>
+                      </div>
+
+                      <div className="provenance-meta-item">
+                        <span className="provenance-meta-label">Source Filename</span>
+                        <span className="provenance-meta-value" title={stream.upload.filename}>
+                          <code>{stream.upload.filename}</code>
+                        </span>
+                      </div>
+
+                      <div className="provenance-meta-item">
+                        <span className="provenance-meta-label">Report Type &amp; Format</span>
+                        <span className="provenance-meta-value">
+                          {stream.upload.report_type} ({stream.upload.file_format})
+                        </span>
+                      </div>
+
+                      <div className="provenance-meta-item">
+                        <span className="provenance-meta-label">Ingestion Mode &amp; Status</span>
+                        <span className="provenance-meta-value">
+                          {stream.upload.mode} &bull; {stream.upload.status}
+                        </span>
+                      </div>
+
+                      <div className="provenance-meta-item">
+                        <span className="provenance-meta-label">Uploaded At</span>
+                        <span className="provenance-meta-value">
+                          {formatDateTime(stream.upload.uploaded_at)}
+                        </span>
+                      </div>
+
+                      <div className="provenance-meta-item">
+                        <span className="provenance-meta-label">Batch Rows (Valid / Total)</span>
+                        <span className="provenance-meta-value">
+                          {formatNumber(stream.upload.valid_rows)} / {formatNumber(stream.upload.total_rows)}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                      {stream.lineage_note || 'Batch upload metadata is unavailable because this physical record predates upload tracking or was seeded prior to batch audit.'}
+                    </div>
+                  )}
+                </div>
+
+                {/* Expandable Raw Record Viewer */}
+                {stream.raw_data && (
+                  <div>
+                    <button
+                      type="button"
+                      className="provenance-raw-toggle-btn"
+                      onClick={() => handleToggleStream(idx)}
+                    >
+                      <span>{isExpanded ? '▲ Hide Raw Database Row' : '▼ Inspect Raw Database Row'}</span>
+                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                        ({Object.keys(stream.raw_data).length} attributes)
+                      </span>
+                    </button>
+
+                    {isExpanded && (
+                      <div className="provenance-raw-drawer">
+                        <div className="provenance-raw-drawer-header">
+                          <span style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            Physical PostgreSQL Row: <code>{stream.source_table}</code> ({stream.source_record_id})
+                          </span>
+
+                          <div className="provenance-view-mode-pills">
+                            <button
+                              type="button"
+                              className={`provenance-mode-pill ${viewMode === 'table' ? 'active' : ''}`}
+                              onClick={() => handleSetViewMode(idx, 'table')}
+                            >
+                              Table View
+                            </button>
+                            <button
+                              type="button"
+                              className={`provenance-mode-pill ${viewMode === 'json' ? 'active' : ''}`}
+                              onClick={() => handleSetViewMode(idx, 'json')}
+                            >
+                              JSON View
+                            </button>
+                            <CopyButton
+                              text={JSON.stringify(stream.raw_data, null, 2)}
+                              label="Copy JSON"
+                              className="btn-copy-mini"
+                            />
+                          </div>
+                        </div>
+
+                        {viewMode === 'table' ? (
+                          <div className="provenance-raw-table-wrap">
+                            <table className="provenance-raw-table">
+                              <thead>
+                                <tr>
+                                  <th>Column / Attribute</th>
+                                  <th>Database Value</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {Object.entries(stream.raw_data).map(([key, val]) => (
+                                  <tr key={key}>
+                                    <td className="col-name">{key}</td>
+                                    <td className="col-val">
+                                      {val === null || val === undefined ? (
+                                        <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>null</span>
+                                      ) : typeof val === 'boolean' ? (
+                                        val ? 'true' : 'false'
+                                      ) : (
+                                        String(val)
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <pre className="provenance-raw-pre">
+                            {JSON.stringify(stream.raw_data, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* 5. Footer Metadata: Audit & Storage Details */}
+      <div className="provenance-footer-meta">
+        <div>
+          <label>Audit Persistence:</label>
+          <span>Neon PostgreSQL (Append-Only)</span>
+        </div>
+        <div>
+          <label>Query Mechanism:</label>
+          <span>Indexed Primary-Key Direct Resolution (No N+1)</span>
+        </div>
+        <div>
+          <label>Retrieved Timestamp:</label>
+          <span>{formatDateTime(data.retrieved_at)}</span>
+        </div>
       </div>
     </div>
   );
