@@ -12,7 +12,7 @@ Deterministic operational finding lifecycle state machine:
 5. Actor Attribution: Clearly distinguishes unverified caller-supplied attribution from authenticated identity.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
 import json
@@ -985,7 +985,7 @@ def get_occurrence_provenance(
             )
             target_occ = sorted_occs[0]
         else:
-            now_iso = datetime.utcnow().isoformat()
+            now_iso = datetime.now(timezone.utc).isoformat()
             return {
                 "finding_id": finding.finding_id,
                 "occurrence_id": "NONE",
@@ -1040,16 +1040,20 @@ def get_occurrence_provenance(
     ALLOWLISTED_TABLES = {"fact_energy_meter_hourly", "fact_hourly_production"}
 
     # Extract distinct IDs for batch queries to prevent N+1 overhead
-    energy_ids = [
+    energy_ids = list({
         str(s["source_record_id"]).strip()
         for s in specs
-        if s.get("source_table") == "fact_energy_meter_hourly" and s.get("source_record_id")
-    ]
-    prod_ids = [
+        if s.get("source_table") == "fact_energy_meter_hourly"
+        and s.get("source_record_id")
+        and str(s.get("source_record_id")).strip()
+    })
+    prod_ids = list({
         str(s["source_record_id"]).strip()
         for s in specs
-        if s.get("source_table") == "fact_hourly_production" and s.get("source_record_id")
-    ]
+        if s.get("source_table") == "fact_hourly_production"
+        and s.get("source_record_id")
+        and str(s.get("source_record_id")).strip()
+    })
 
     energy_map: Dict[str, FactEnergyMeterHourly] = {}
     if energy_ids:
@@ -1206,6 +1210,6 @@ def get_occurrence_provenance(
         "lineage_explanation": lineage_explanation,
         "is_multi_source": is_multi,
         "source_records": resolved_records,
-        "retrieved_at": datetime.utcnow().isoformat(),
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }
 

@@ -250,9 +250,11 @@ def read_occurrence_provenance(
         prov = get_occurrence_provenance(session=db, finding_id=finding_id, occurrence_id=occurrence_id)
         return OccurrenceProvenanceResponse(**prov)
     except KeyError as ke:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ke))
+        err_msg = ke.args[0] if ke.args else str(ke)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err_msg)
     except ValueError as ve:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+        err_msg = ve.args[0] if ve.args else str(ve)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err_msg)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -275,9 +277,11 @@ def read_finding_provenance(
         prov = get_occurrence_provenance(session=db, finding_id=finding_id, occurrence_id=occurrence_id)
         return OccurrenceProvenanceResponse(**prov)
     except KeyError as ke:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ke))
+        err_msg = ke.args[0] if ke.args else str(ke)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err_msg)
     except ValueError as ve:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+        err_msg = ve.args[0] if ve.args else str(ve)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err_msg)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
