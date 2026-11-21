@@ -144,15 +144,15 @@ export default function DailyOperationsPipeline({
       case 'COMPLETED':
         return <span className="daily-ops-status-badge completed">Completed</span>;
       case 'COMPLETED_WITH_WARNINGS':
-        return <span className="daily-ops-status-badge warning">Completed (Warnings)</span>;
+        return <span className="daily-ops-status-badge warning">Completed with warnings</span>;
       case 'IN_PROGRESS':
-        return <span className="daily-ops-status-badge in-progress">In Progress</span>;
+        return <span className="daily-ops-status-badge in-progress">In progress</span>;
       case 'FAILED':
         return <span className="daily-ops-status-badge failed">Failed</span>;
       case 'BLOCKED':
         return <span className="daily-ops-status-badge blocked">Blocked</span>;
       default:
-        return <span className="daily-ops-status-badge not-started">Not Started</span>;
+        return <span className="daily-ops-status-badge not-started">Not started</span>;
     }
   };
 
@@ -327,21 +327,21 @@ export default function DailyOperationsPipeline({
       >
         <div className="daily-ops-detail-header">
           <div className="daily-ops-detail-header-left">
-            <div className="daily-ops-detail-badge-row">
+            <div className="daily-ops-detail-title-row">
               <span className="daily-ops-phase-chip">Stage {selectedIndex + 1} of 8</span>
+              <h3 className="daily-ops-detail-title">{`${selectedIndex + 1}. ${STAGE_TITLES[selectedStageKey]}`}</h3>
               {getStatusBadge(selectedStageObj.status)}
               {pipelineState?.current_stage === selectedStageKey && (
-                <span className="daily-ops-active-chip">Active Pipeline Stage</span>
+                <span className="daily-ops-active-chip">Active</span>
               )}
             </div>
-            <h3 className="daily-ops-detail-title">{`${selectedIndex + 1}. ${STAGE_TITLES[selectedStageKey]}`}</h3>
             <p className="daily-ops-detail-summary">{selectedStageObj.summary || 'Pending stage execution'}</p>
           </div>
 
           <div className="daily-ops-detail-header-right">
             {selectedStageObj.timestamp && (
               <span className="daily-ops-detail-timestamp">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                   <circle cx="12" cy="12" r="10" />
                   <polyline points="12 6 12 12 16 14" />
                 </svg>
@@ -356,7 +356,7 @@ export default function DailyOperationsPipeline({
                 disabled={selectedIndex === 0}
                 aria-label="Previous Stage"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                   <polyline points="15 18 9 12 15 6" />
                 </svg>
                 <span>Previous Stage</span>
@@ -369,7 +369,7 @@ export default function DailyOperationsPipeline({
                 aria-label="Next Stage"
               >
                 <span>Next Stage</span>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                   <polyline points="9 18 15 12 9 6" />
                 </svg>
               </button>
@@ -509,7 +509,16 @@ export default function DailyOperationsPipeline({
                       </svg>
                       Energy Telemetry File
                     </h4>
-                    <label className="daily-ops-dropzone">
+                    <label
+                      className="daily-ops-dropzone"
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (e.dataTransfer?.files?.[0]) {
+                          handleEnergyFileSelect(e.dataTransfer.files[0]);
+                        }
+                      }}
+                    >
                       <input
                         type="file"
                         accept=".csv,.xlsx,.xls"
@@ -517,7 +526,7 @@ export default function DailyOperationsPipeline({
                         onChange={(e) => handleEnergyFileSelect(e.target.files[0])}
                       />
                       <div className="daily-ops-dropzone-icon">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                           <polyline points="17 8 12 3 7 8" />
                           <line x1="12" y1="3" x2="12" y2="15" />
@@ -553,7 +562,16 @@ export default function DailyOperationsPipeline({
                       </svg>
                       Production Output File
                     </h4>
-                    <label className="daily-ops-dropzone">
+                    <label
+                      className="daily-ops-dropzone"
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (e.dataTransfer?.files?.[0]) {
+                          handleProductionFileSelect(e.dataTransfer.files[0]);
+                        }
+                      }}
+                    >
                       <input
                         type="file"
                         accept=".csv,.xlsx,.xls"
@@ -561,7 +579,7 @@ export default function DailyOperationsPipeline({
                         onChange={(e) => handleProductionFileSelect(e.target.files[0])}
                       />
                       <div className="daily-ops-dropzone-icon">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                           <polyline points="17 8 12 3 7 8" />
                           <line x1="12" y1="3" x2="12" y2="15" />
@@ -1121,29 +1139,16 @@ export default function DailyOperationsPipeline({
       </div>
 
       {/* OPPORTUNITIES TO REVIEW */}
-      <div
-        className="daily-ops-opportunities-section"
-        style={{
-          marginTop: '2rem',
-          padding: '1.5rem',
-          background: 'var(--card-bg, #ffffff)',
-          borderRadius: '12px',
-          border: '1px solid var(--border-color, #e2e8f0)',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+      <div className="daily-ops-opportunities-section">
+        <div className="daily-ops-opportunities-header">
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+            <div className="daily-ops-opportunities-title-row">
+              <h3 className="daily-ops-opportunities-title">
                 Opportunities to Review
               </h3>
               <span
+                className="daily-ops-opportunities-badge"
                 style={{
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  padding: '0.2rem 0.6rem',
-                  borderRadius: '9999px',
                   background: opportunities.length > 0 ? 'rgba(59, 130, 246, 0.15)' : 'rgba(100, 116, 139, 0.15)',
                   color: opportunities.length > 0 ? '#2563eb' : '#64748b',
                 }}
@@ -1151,14 +1156,14 @@ export default function DailyOperationsPipeline({
                 {opportunities.length} Surfaced
               </span>
             </div>
-            <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            <p className="daily-ops-opportunities-subtitle">
               Deterministic ranking based on recurrence, consumption during comparable stoppages, data coverage, and load controllability.
             </p>
           </div>
           <button
             type="button"
             className="daily-ops-btn daily-ops-btn-secondary"
-            style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
+            style={{ fontSize: '13px', padding: '0.35rem 0.8rem' }}
             onClick={() => navigate(`/investigation-actions?plant_id=${encodeURIComponent(plantId)}`)}
           >
             Open All in Investigation Centre →
@@ -1166,7 +1171,7 @@ export default function DailyOperationsPipeline({
         </div>
 
         {loadingOpportunities ? (
-          <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
             Scanning pipeline findings for trial and evidence opportunities...
           </div>
         ) : opportunities.length === 0 ? (
@@ -1174,7 +1179,7 @@ export default function DailyOperationsPipeline({
             <span>No recurring standby or load opportunities requiring review for plant {plantId} on {reportingDate}.</span>
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
+          <div className="daily-ops-opp-grid">
             {opportunities.map((opp) => {
               const isTrial = opp.opportunity_type === 'TRIAL_CANDIDATE';
               const isEvidence = opp.opportunity_type === 'EVIDENCE_GATHERING';
@@ -1194,16 +1199,7 @@ export default function DailyOperationsPipeline({
               return (
                 <div
                   key={opp.opportunity_id}
-                  style={{
-                    padding: '1.25rem',
-                    borderRadius: '8px',
-                    border: '1px solid var(--border-color, #e2e8f0)',
-                    background: 'var(--bg-primary, #ffffff)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    gap: '1rem',
-                  }}
+                  className="daily-ops-opp-card"
                 >
                   <div>
                     {/* Header Badges */}
