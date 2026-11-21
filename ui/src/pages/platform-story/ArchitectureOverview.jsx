@@ -537,7 +537,7 @@ export default function ArchitectureOverview({
             type="button"
             className="ps-ref-btn-active"
             aria-current="page"
-            title="Application Architecture (Active Overview)"
+            title="Application Architecture & Operations Command (Active Overview)"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <rect x="3" y="3" width="7" height="7" rx="1" />
@@ -545,7 +545,7 @@ export default function ArchitectureOverview({
               <rect x="14" y="14" width="7" height="7" rx="1" />
               <rect x="3" y="14" width="7" height="7" rx="1" />
             </svg>
-            <span>Application Architecture</span>
+            <span>Application Architecture &amp; Operations Command</span>
           </button>
 
           <button
@@ -559,29 +559,25 @@ export default function ArchitectureOverview({
               <polyline points="2 17 12 22 22 17" />
               <polyline points="2 12 12 17 22 12" />
             </svg>
-            <span>Detailed Workflow</span>
+            <span>Executive Overview &amp; Analytics</span>
           </button>
         </div>
 
         <div className="ps-ref-control-status">
-          <span className="ps-ref-status-source">Data source · Uploaded factory reports</span>
+          <span className="ps-ref-status-source">Database Grounding:</span>
           {backendHealth.connected && (
-            <>
-              <span className="ps-ref-status-divider">•</span>
-              <span className="ps-ref-status-db is-connected">
-                <span className="ps-ref-status-dot" aria-hidden="true" />
-                <span>Neon PostgreSQL 16 Star Schema · Connected{backendHealth.version ? ` (v${backendHealth.version})` : ''}</span>
-              </span>
-            </>
+            <span className="ps-ref-status-db is-connected">
+              <span className="ps-ref-status-val">Neon PostgreSQL 16 Star Schema</span>
+              <span className="ps-ref-status-dot" aria-hidden="true" />
+              <span>Connected{backendHealth.version ? ` (v${backendHealth.version})` : ''}</span>
+            </span>
           )}
           {!backendHealth.connected && !backendHealth.loading && (
-            <>
-              <span className="ps-ref-status-divider">•</span>
-              <span className="ps-ref-status-db is-disconnected">
-                <span className="ps-ref-status-dot" aria-hidden="true" />
-                <span>Backend Offline</span>
-              </span>
-            </>
+            <span className="ps-ref-status-db is-disconnected">
+              <span className="ps-ref-status-val">Neon PostgreSQL 16 Star Schema</span>
+              <span className="ps-ref-status-dot" aria-hidden="true" />
+              <span>Backend Offline</span>
+            </span>
           )}
         </div>
       </div>
@@ -672,6 +668,7 @@ export default function ArchitectureOverview({
               </div>
               <h2 id="problems-heading" className="ps-ref-card-title">Problems Solved by the Agent</h2>
             </div>
+            <span className="ps-badge-counter">5 CORE PROBLEMS</span>
           </div>
 
           <div className="ps-problems-list-container">
@@ -720,10 +717,12 @@ export default function ArchitectureOverview({
               <span className="ps-stage-num-badge" style={{ background: currentStage.headerColor }}>
                 {currentStage.number}
               </span>
-              <h3 className="ps-inspector-card-title">{currentStage.title}</h3>
+              <h3 className="ps-inspector-card-title">
+                {currentStage.number}. {currentStage.title.replace(/^\d+\.\s*/, '')}
+              </h3>
             </div>
             <span className="ps-badge-stage-tag" style={{ color: currentStage.headerColor, borderColor: `${currentStage.headerColor}40` }}>
-              Stage {currentStage.id} of {SYSTEM_STAGES.length}
+              STAGE {currentStage.id} OF {SYSTEM_STAGES.length}
             </span>
           </div>
 
