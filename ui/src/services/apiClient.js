@@ -52,8 +52,9 @@ export async function apiRequest(endpoint, { params = {}, init = {} } = {}) {
     ? endpoint
     : `/api${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
 
+  const apiBaseUrl = (import.meta.env?.VITE_API_BASE_URL || import.meta.env?.VITE_BACKEND_URL || '').replace(/\/+$/, '');
   const queryString = buildQueryString(params);
-  const url = `${normalizedEndpoint}${queryString}`;
+  const url = `${apiBaseUrl}${normalizedEndpoint}${queryString}`;
 
   let response;
   try {
