@@ -125,11 +125,11 @@ export default function ExecutiveChartsRow({
       <div className="chart-card executive-chart-card">
         <div className="chart-card-header executive-chart-header">
           <div className="chart-title-wrap">
-            <h3 className="chart-card-title">Daily Energy Consumption</h3>
+            <h3 className="chart-card-title">Daily energy consumption</h3>
           </div>
           <div className="chart-header-right">
             <Link to="/energy-analytics" className="chart-header-action" title="Open Energy Analytics">
-              <span>Energy Analytics</span>
+              <span>Energy analytics</span>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="9 18 15 12 9 6" />
               </svg>
@@ -149,8 +149,8 @@ export default function ExecutiveChartsRow({
                 : `No energy records returned for ${rangeLabel}.`}
             </div>
           ) : (
-            <ResponsiveContainer width="100%" height={260}>
-              <AreaChart data={energyData} margin={{ top: 10, right: 14, left: -10, bottom: 0 }}>
+            <ResponsiveContainer width="100%" height={215}>
+              <AreaChart data={energyData} margin={{ top: 8, right: 14, left: -10, bottom: 0 }}>
                 <defs>
                   <linearGradient id="execEnergyGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="var(--brand-purple, #6f3dba)" stopOpacity={0.32} />
@@ -193,7 +193,7 @@ export default function ExecutiveChartsRow({
       <div className="chart-card executive-chart-card">
         <div className="chart-card-header executive-chart-header">
           <div className="chart-title-wrap">
-            <h3 className="chart-card-title">Daily Production Output</h3>
+            <h3 className="chart-card-title">Daily production output</h3>
           </div>
           <div className="chart-header-right">
             <div className="chart-legend-compact" aria-hidden="true">
@@ -207,7 +207,7 @@ export default function ExecutiveChartsRow({
               </span>
             </div>
             <Link to="/production-analytics" className="chart-header-action" title="Open Production Analytics">
-              <span>Production Analytics</span>
+              <span>Production analytics</span>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="9 18 15 12 9 6" />
               </svg>
@@ -227,8 +227,8 @@ export default function ExecutiveChartsRow({
                 : `No production records returned for ${rangeLabel}.`}
             </div>
           ) : (
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={prodData} margin={{ top: 10, right: 14, left: -10, bottom: 0 }}>
+            <ResponsiveContainer width="100%" height={215}>
+              <BarChart data={prodData} margin={{ top: 8, right: 14, left: -10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid, rgba(0,0,0,0.06))" vertical={false} />
                 <XAxis
                   dataKey="displayDate"

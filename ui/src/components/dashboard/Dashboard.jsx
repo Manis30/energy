@@ -325,7 +325,7 @@ export default function Dashboard() {
   const isDataLoading = loading || refreshing;
 
   return (
-    <div className="dashboard-container">
+    <div className="dashboard-container dashboard-view">
       {/* 1. Integrated Header & Modern Filter Toolbar (Month + Date selectors) */}
       <DashboardHeader
         selectedMonth={selectedMonth}

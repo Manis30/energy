@@ -245,28 +245,15 @@ export default function KpiOverview({
   return (
     <div className="kpi-overview-container">
       {/* Management Headline Banner & Coverage */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '-0.25rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span style={{ fontSize: '0.78rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary, #94a3b8)' }}>
-            Management Energy Intelligence • Denominator: Good Finished Units (FAL gate)
-          </span>
+      <div className="kpi-section-header">
+        <div className="kpi-section-title-group">
+          <h2 className="kpi-section-heading">Management energy intelligence</h2>
+          <span className="kpi-section-subtitle">Good finished units (FAL gate)</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.25rem',
-              padding: '0.15rem 0.5rem',
-              borderRadius: '9999px',
-              fontSize: '0.72rem',
-              fontWeight: 600,
-              backgroundColor: coverageStatus === 'FULL' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)',
-              color: coverageStatus === 'FULL' ? '#22c55e' : '#eab308',
-              border: `1px solid ${coverageStatus === 'FULL' ? 'rgba(34, 197, 94, 0.3)' : 'rgba(234, 179, 8, 0.3)'}`,
-            }}
-          >
-            ● Coverage: {coverageStatus} ({coveragePct}% • {completeHours}/{expectedHours} plant-hrs)
+        <div className="kpi-coverage-badge-wrap">
+          <span className={`kpi-coverage-badge ${coverageStatus === 'FULL' ? 'is-full' : 'is-partial'}`}>
+            <span className="coverage-dot" aria-hidden="true" />
+            <span>Coverage: {coverageStatus} ({coveragePct}% • {completeHours}/{expectedHours} plant-hrs)</span>
           </span>
         </div>
       </div>
@@ -289,10 +276,11 @@ export default function KpiOverview({
       </KpiGrid>
 
       {/* Sub-header for Full Scope Totals */}
-      <div style={{ display: 'flex', alignItems: 'center', marginTop: '0.25rem', marginBottom: '-0.25rem' }}>
-        <span style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-tertiary, #64748b)' }}>
-          Factory Full-Scope Totals (All Telemetry Observations)
-        </span>
+      <div className="kpi-section-header totals-header">
+        <div className="kpi-section-title-group">
+          <h2 className="kpi-section-heading">Factory full-scope totals</h2>
+          <span className="kpi-section-subtitle">All telemetry observations</span>
+        </div>
       </div>
 
       {/* 2. Full Scope Totals Cards */}

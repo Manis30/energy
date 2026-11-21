@@ -58,7 +58,7 @@ export default function OperationalAttentionSection({
         <div className="section-title-group">
           <div className="section-title-row">
             <span className="attention-indicator-dot" aria-hidden="true" />
-            <h2 className="section-title">Operational Attention Required</h2>
+            <h2 className="section-title">Operational attention required</h2>
           </div>
           <p className="section-subtitle">
             Active high-priority anomalies, equipment deviations, and power factor alerts.
@@ -69,7 +69,7 @@ export default function OperationalAttentionSection({
           className="section-header-link"
           title="Open Investigation &amp; Actions Centre"
         >
-          <span>View All Findings {totalActiveCount > 0 ? `(${totalActiveCount})` : ''}</span>
+          <span>View all findings {totalActiveCount > 0 ? `(${totalActiveCount})` : ''}</span>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <polyline points="9 18 15 12 9 6" />
           </svg>
