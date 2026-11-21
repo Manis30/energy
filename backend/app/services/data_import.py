@@ -1,10 +1,12 @@
 """Controlled CSV data ingestion service for Industrial Energy Intelligence Platform."""
 
 import csv
+import io
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List
+import zipfile
 
 from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
@@ -15,6 +17,12 @@ from app.models.source_data import (
     DimProductionLine,
     FactEnergyMeterHourly,
     FactHourlyProduction,
+    DimMachine,
+    DimShiftCalendar,
+    FactMachineTelemetryHourly,
+    FactUtilityTelemetryHourly,
+    FactDowntimeEvent,
+    FactMaintenanceWorkOrder,
 )
 
 DATASETS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "datasets"
@@ -188,6 +196,278 @@ def import_csv_in_batches(
     return count
 
 
+def import_csv_from_reader(
+    session: Session,
+    model: Any,
+    reader: csv.DictReader,
+    row_parser: Any,
+    batch_size: int = 2500,
+) -> int:
+    """Stream and insert records from an open DictReader in transactional batches."""
+    count = 0
+    batch = []
+    for row in reader:
+        batch.append(row_parser(row))
+        count += 1
+        if len(batch) >= batch_size:
+            session.bulk_insert_mappings(model, batch)
+            batch.clear()
+
+    if batch:
+        session.bulk_insert_mappings(model, batch)
+        batch.clear()
+
+    return count
+
+
+def parse_dim_machine_row(row: Dict[str, str]) -> Dict[str, Any]:
+    """Parse a single dim_machine CSV row into typed model mapping."""
+    return {
+        "machine_id": row["machine_id"].strip(),
+        "machine_name": row["machine_name"].strip(),
+        "machine_type": row["machine_type"].strip(),
+        "line_id": row["line_id"].strip(),
+        "plant_id": row["plant_id"].strip(),
+        "criticality": row["criticality"].strip(),
+        "commissioned_date": date.fromisoformat(row["commissioned_date"].strip()),
+        "planned_maintenance_interval_days": int(row["planned_maintenance_interval_days"]),
+    }
+
+
+def parse_dim_shift_calendar_row(row: Dict[str, str]) -> Dict[str, Any]:
+    """Parse a single dim_shift_calendar CSV row into typed model mapping."""
+    return {
+        "calendar_date": date.fromisoformat(row["calendar_date"].strip()),
+        "shift_id": row["shift_id"].strip(),
+        "shift_start": datetime.fromisoformat(row["shift_start"].strip()),
+        "shift_end": datetime.fromisoformat(row["shift_end"].strip()),
+        "planned_minutes": int(row["planned_minutes"]),
+        "break_minutes": int(row["break_minutes"]),
+        "is_working_day": row["is_working_day"].strip().lower() in ("true", "1", "t"),
+    }
+
+
+def parse_machine_telemetry_row(row: Dict[str, str]) -> Dict[str, Any]:
+    """Parse a single fact_machine_telemetry_hourly CSV row into typed model mapping."""
+    temp_val = row.get("temperature_c", "").strip()
+    vib_val = row.get("vibration_mm_s", "").strip()
+    cur_val = row.get("motor_current_a", "").strip()
+    pres_val = row.get("pressure_bar", "").strip()
+    rpm_val = row.get("rpm", "").strip()
+
+    return {
+        "telemetry_id": row["telemetry_id"].strip(),
+        "timestamp": datetime.fromisoformat(row["timestamp"].strip()),
+        "date": date.fromisoformat(row["date"].strip()),
+        "machine_id": row["machine_id"].strip(),
+        "plant_id": row["plant_id"].strip(),
+        "line_id": row["line_id"].strip(),
+        "shift_id": row["shift_id"].strip(),
+        "temperature_c": Decimal(temp_val) if temp_val else None,
+        "vibration_mm_s": Decimal(vib_val) if vib_val else None,
+        "motor_current_a": Decimal(cur_val) if cur_val else None,
+        "pressure_bar": Decimal(pres_val) if pres_val else None,
+        "rpm": Decimal(rpm_val) if rpm_val else None,
+        "machine_state": row["machine_state"].strip(),
+        "alarm_code": row["alarm_code"].strip(),
+        "sensor_health": row["sensor_health"].strip(),
+        "is_anomaly": row["is_anomaly"].strip().lower() in ("true", "1", "t"),
+    }
+
+
+def parse_utility_telemetry_row(row: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Parse a single fact_utility_telemetry_hourly CSV row into typed model mapping.
+    Preserves raw consumption_unit (e.g. 'm3', 'L', 'kWh') without assuming it defines
+    the unit or time basis of flow_rate.
+    """
+    flow_val = row.get("flow_rate", "").strip()
+    pres_val = row.get("pressure_bar", "").strip()
+    temp_val = row.get("temperature_c", "").strip()
+
+    return {
+        "utility_reading_id": row["utility_reading_id"].strip(),
+        "timestamp": datetime.fromisoformat(row["timestamp"].strip()),
+        "plant_id": row["plant_id"].strip(),
+        "utility_type": row["utility_type"].strip(),
+        "zone": row["zone"].strip(),
+        "flow_rate": Decimal(flow_val) if flow_val else None,
+        "pressure_bar": Decimal(pres_val) if pres_val else None,
+        "temperature_c": Decimal(temp_val) if temp_val else None,
+        "consumption_unit": row["consumption_unit"].strip(),
+        "equipment_id": row["equipment_id"].strip(),
+        "operating_status": row["operating_status"].strip(),
+        "alarm_code": row["alarm_code"].strip(),
+        "upload_id": "UPLOAD_DATASET_INITIAL",
+        "source_revision_id": f"REV_{row['utility_reading_id'].strip()}_V1",
+        "is_corrected": False,
+        "created_at": datetime.utcnow(),
+    }
+
+
+def parse_downtime_event_row(row: Dict[str, str]) -> Dict[str, Any]:
+    """Parse a single fact_downtime_event CSV row into typed model mapping."""
+    impact_val = row.get("impact_units", "").strip()
+    return {
+        "downtime_id": row["downtime_id"].strip(),
+        "machine_id": row["machine_id"].strip(),
+        "plant_id": row["plant_id"].strip(),
+        "line_id": row["line_id"].strip(),
+        "start_ts": datetime.fromisoformat(row["start_ts"].strip()),
+        "duration_min": int(row["duration_min"].strip()),
+        "reason_code": row["reason_code"].strip(),
+        "impact_units": int(impact_val) if impact_val else None,
+        "maintenance_required": row["maintenance_required"].strip().lower() in ("true", "1", "t"),
+        "acknowledged_by": row.get("acknowledged_by", "").strip() or None,
+        "closure_status": row["closure_status"].strip(),
+        "upload_id": "UPLOAD_DATASET_INITIAL",
+    }
+
+
+def parse_maintenance_work_order_row(row: Dict[str, str]) -> Dict[str, Any]:
+    """Parse a single fact_maintenance_work_order CSV row into typed model mapping."""
+    p_start = row.get("planned_start", "").strip()
+    a_start = row.get("actual_start", "").strip()
+    avoid_val = row.get("downtime_avoided_estimate_min", "").strip()
+    return {
+        "work_order_id": row["work_order_id"].strip(),
+        "machine_id": row["machine_id"].strip(),
+        "plant_id": row["plant_id"].strip(),
+        "created_ts": datetime.fromisoformat(row["created_ts"].strip()),
+        "maintenance_type": row["maintenance_type"].strip(),
+        "failure_mode": row.get("failure_mode", "").strip() or None,
+        "priority": row["priority"].strip(),
+        "planned_start": datetime.fromisoformat(p_start) if p_start else None,
+        "actual_start": datetime.fromisoformat(a_start) if a_start else None,
+        "downtime_avoided_estimate_min": int(avoid_val) if avoid_val else None,
+        "status": row["status"].strip(),
+        "technician_id": row.get("technician_id", "").strip() or None,
+        "upload_id": "UPLOAD_DATASET_INITIAL",
+    }
+
+
+def import_operating_context_datasets() -> Dict[str, Any]:
+    """
+    Import optional operating context datasets (dim_machine, dim_shift_calendar,
+    fact_machine_telemetry_hourly, fact_utility_telemetry_hourly, fact_downtime_event,
+    fact_maintenance_work_order) from datasets/data.zip idempotently.
+    """
+    engine = get_engine()
+    if engine is None:
+        raise RuntimeError("DATABASE_URL is not configured.")
+
+    zip_path = DATASETS_DIR / "data.zip"
+    if not zip_path.exists():
+        raise FileNotFoundError(f"data.zip not found at {zip_path}")
+
+    with engine.connect() as conn:
+        m_count = conn.execute(text("SELECT COUNT(*) FROM dim_machine")).scalar()
+        s_count = conn.execute(text("SELECT COUNT(*) FROM dim_shift_calendar")).scalar()
+        t_count = conn.execute(text("SELECT COUNT(*) FROM fact_machine_telemetry_hourly")).scalar()
+        u_count = conn.execute(text("SELECT COUNT(*) FROM fact_utility_telemetry_hourly")).scalar()
+        dt_count = conn.execute(text("SELECT COUNT(*) FROM fact_downtime_event")).scalar()
+        mwo_count = conn.execute(text("SELECT COUNT(*) FROM fact_maintenance_work_order")).scalar()
+
+        if (
+            m_count >= 15
+            and s_count >= 276
+            and t_count >= 33120
+            and u_count >= 22080
+            and dt_count >= 1000
+            and mwo_count >= 400
+        ):
+            return {
+                "status": "already_imported",
+                "counts": {
+                    "dim_machine": m_count,
+                    "dim_shift_calendar": s_count,
+                    "fact_machine_telemetry_hourly": t_count,
+                    "fact_utility_telemetry_hourly": u_count,
+                    "fact_downtime_event": dt_count,
+                    "fact_maintenance_work_order": mwo_count,
+                },
+            }
+
+    session_factory = get_session_factory()
+    counts = {}
+
+    with zipfile.ZipFile(zip_path, "r") as z:
+        with session_factory() as session:
+            try:
+                # 1. dim_machine
+                if m_count == 0:
+                    with z.open("data/dim_machine.csv") as f:
+                        reader = csv.DictReader(io.TextIOWrapper(f, encoding="utf-8"))
+                        m_imported = import_csv_from_reader(
+                            session, DimMachine, reader, parse_dim_machine_row, batch_size=100
+                        )
+                        counts["dim_machine"] = m_imported
+                else:
+                    counts["dim_machine"] = m_count
+
+                # 2. dim_shift_calendar
+                if s_count == 0:
+                    with z.open("data/dim_shift_calendar.csv") as f:
+                        reader = csv.DictReader(io.TextIOWrapper(f, encoding="utf-8"))
+                        s_imported = import_csv_from_reader(
+                            session, DimShiftCalendar, reader, parse_dim_shift_calendar_row, batch_size=500
+                        )
+                        counts["dim_shift_calendar"] = s_imported
+                else:
+                    counts["dim_shift_calendar"] = s_count
+
+                # 3. fact_machine_telemetry_hourly
+                if t_count == 0:
+                    with z.open("data/fact_machine_telemetry_hourly.csv") as f:
+                        reader = csv.DictReader(io.TextIOWrapper(f, encoding="utf-8"))
+                        t_imported = import_csv_from_reader(
+                            session, FactMachineTelemetryHourly, reader, parse_machine_telemetry_row, batch_size=2500
+                        )
+                        counts["fact_machine_telemetry_hourly"] = t_imported
+                else:
+                    counts["fact_machine_telemetry_hourly"] = t_count
+
+                # 4. fact_utility_telemetry_hourly
+                if u_count == 0:
+                    with z.open("data/fact_utility_telemetry_hourly.csv") as f:
+                        reader = csv.DictReader(io.TextIOWrapper(f, encoding="utf-8"))
+                        u_imported = import_csv_from_reader(
+                            session, FactUtilityTelemetryHourly, reader, parse_utility_telemetry_row, batch_size=2500
+                        )
+                        counts["fact_utility_telemetry_hourly"] = u_imported
+                else:
+                    counts["fact_utility_telemetry_hourly"] = u_count
+
+                # 5. fact_downtime_event
+                if dt_count == 0:
+                    with z.open("data/fact_downtime_event.csv") as f:
+                        reader = csv.DictReader(io.TextIOWrapper(f, encoding="utf-8"))
+                        dt_imported = import_csv_from_reader(
+                            session, FactDowntimeEvent, reader, parse_downtime_event_row, batch_size=1000
+                        )
+                        counts["fact_downtime_event"] = dt_imported
+                else:
+                    counts["fact_downtime_event"] = dt_count
+
+                # 6. fact_maintenance_work_order
+                if mwo_count == 0:
+                    with z.open("data/fact_maintenance_work_order.csv") as f:
+                        reader = csv.DictReader(io.TextIOWrapper(f, encoding="utf-8"))
+                        mwo_imported = import_csv_from_reader(
+                            session, FactMaintenanceWorkOrder, reader, parse_maintenance_work_order_row, batch_size=500
+                        )
+                        counts["fact_maintenance_work_order"] = mwo_imported
+                else:
+                    counts["fact_maintenance_work_order"] = mwo_count
+
+                session.commit()
+            except Exception as exc:
+                session.rollback()
+                raise RuntimeError(f"Operating context import failed, rolled back: {exc}") from exc
+
+    return {"status": "success", "counts": counts}
+
+
 def execute_full_import() -> Dict[str, Any]:
     """Execute complete controlled import of the 4 CSV files into Neon."""
     engine = get_engine()
@@ -347,7 +627,9 @@ def run_post_import_validation(engine, import_counts: Dict[str, int]) -> Dict[st
 
         validation["database_aggregates"] = {
             "total_consumption_kwh": str(e_agg[0]),
-            "total_demand_kw": str(e_agg[1]),
+            "total_demand_kw": str(e_agg[1]),  # DEPRECATED: summing kW across hours is physically derived/meaningless
+            "total_demand_kw_deprecated": str(e_agg[1]),
+            "demand_kw_note": "Deprecated diagnostic: summing instantaneous demand kW across time intervals does not represent total or peak demand. In the supplied dataset, demand_kw tracks 0.92 x consumption_kwh.",
             "total_cost_inr": str(e_agg[2]),
             "total_co2e_kg": str(e_agg[3]),
             "total_target_qty": int(p_agg[0]),

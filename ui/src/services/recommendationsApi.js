@@ -167,5 +167,154 @@ export const recommendationsApi = {
    */
   getActionAudit: (actionId, params = {}) =>
     apiRequest(`/api/v1/actions/${encodeURIComponent(actionId)}/audit`, { params }),
+
+  /**
+   * Review action proposal (Approve or Reject with reason).
+   * @param {string} actionId
+   * @param {object} data
+   * @param {string} data.decision - 'APPROVE' or 'REJECT'
+   * @param {string} data.reason - Justification reason
+   * @param {string} data.reviewer - Reviewer name and title
+   * @param {string} [data.caller_attribution]
+   * @returns {Promise<any>}
+   */
+  reviewAction: (actionId, data) =>
+    apiRequest(`/api/actions/${encodeURIComponent(actionId)}/review`, {
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      },
+    }),
+
+  /**
+   * Record physical implementation of operational change.
+   * Enforces implementation timestamp before outcome evaluation.
+   * @param {string} actionId
+   * @param {object} data
+   * @param {string} data.implemented_at - ISO timestamp
+   * @param {string} data.implemented_by - Team/engineer
+   * @param {string} data.implementation_notes
+   * @param {string} [data.caller_attribution]
+   * @returns {Promise<any>}
+   */
+  recordImplementation: (actionId, data) =>
+    apiRequest(`/api/actions/${encodeURIComponent(actionId)}/implement`, {
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      },
+    }),
+
+  /**
+   * Request outcome verification assessment for an implemented action.
+   * @param {string} actionId
+   * @param {object} data
+   * @param {string} data.requested_by
+   * @param {string} [data.notes]
+   * @returns {Promise<any>}
+   */
+  requestAssessment: (actionId, data) =>
+    apiRequest(`/api/actions/${encodeURIComponent(actionId)}/request-assessment`, {
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      },
+    }),
+
+  /**
+   * Retrieve M&V measurement plan linked to a corrective action.
+   * @param {string} actionId
+   * @returns {Promise<any>}
+   */
+  getMeasurementPlan: (actionId) =>
+    apiRequest(`/api/actions/${encodeURIComponent(actionId)}/plan`),
+
+  /**
+   * Create a new M&V measurement plan before implementing change.
+   * @param {string} actionId
+   * @param {object} data
+   * @returns {Promise<any>}
+   */
+  createMeasurementPlan: (actionId, data) =>
+    apiRequest(`/api/actions/${encodeURIComponent(actionId)}/plan`, {
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      },
+    }),
+
+  /**
+   * Amend an existing M&V plan. Increments version and records reason.
+   * @param {string} actionId
+   * @param {object} data
+   * @returns {Promise<any>}
+   */
+  amendMeasurementPlan: (actionId, data) =>
+    apiRequest(`/api/actions/${encodeURIComponent(actionId)}/plan`, {
+      init: {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      },
+    }),
+
+  /**
+   * Approve and freeze a measurement plan prior to physical implementation.
+   * @param {string} actionId
+   * @param {object} data
+   * @param {string} data.reviewer
+   * @param {string} [data.approval_notes]
+   * @returns {Promise<any>}
+   */
+  approveMeasurementPlan: (actionId, data) =>
+    apiRequest(`/api/actions/${encodeURIComponent(actionId)}/plan/approve`, {
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      },
+    }),
+
+  /**
+   * Evaluate before/after outcome verification assessment.
+   * @param {string} actionId
+   * @returns {Promise<any>}
+   */
+  getAssessment: (actionId) =>
+    apiRequest(`/api/actions/${encodeURIComponent(actionId)}/assessment`),
+
+  /**
+   * Reviewer decision and formal sign-off on an assessment.
+   * @param {string} actionId
+   * @param {object} data
+   * @param {string} data.reviewer
+   * @param {string} data.decision - 'APPROVED_VERIFIED', 'REJECTED', 'REQUEST_REANALYSIS'
+   * @param {string} [data.notes]
+   * @returns {Promise<any>}
+   */
+  signOffAssessment: (actionId, data) =>
+    apiRequest(`/api/actions/${encodeURIComponent(actionId)}/assessment/sign-off`, {
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      },
+    }),
+
+  /**
+   * List persistent M&V intervention assessments from the savings ledger.
+   * @param {object} [params]
+   * @param {string} [params.plant_id]
+   * @param {string} [params.status] - 'VERIFIED', 'NOT_VERIFIED', 'INCONCLUSIVE', 'PENDING_REVIEW'
+   * @param {number} [params.limit=50]
+   * @param {number} [params.offset=0]
+   * @returns {Promise<{items: Array<any>, total_count: number, verified_count: number, not_verified_count: number, inconclusive_count: number, total_verified_avoided_kwh: number, total_verified_avoided_cost_inr: number}>}
+   */
+  listSavingsLedger: (params = {}) =>
+    apiRequest('/api/actions/savings-ledger', { params }),
 };
 

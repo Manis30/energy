@@ -21,6 +21,16 @@ class OccurrenceResponse(BaseModel):
     source_record_id: Optional[str] = Field(None, description="Primary key identifier of the originating source record")
     upload_id: Optional[str] = Field(None, description="Upload batch identifier that introduced the originating record")
     detector_version: Optional[str] = Field(None, description="Deterministic detector algorithm version that identified the anomaly")
+    revision_id: Optional[str] = Field(None, description="Immutable source revision ID pinned at detection")
+    qualification_status: Optional[str] = Field(None, description="QUALIFIED, UNQUALIFIED, or PARTIAL")
+    trust_level: Optional[str] = Field(None, description="TRUSTED, TENTATIVE, INCONCLUSIVE, or DISQUALIFIED")
+    evidence_classification: Optional[str] = Field(
+        None,
+        description="Central evidence classification: TRUSTED, TENTATIVE, INCONCLUSIVE, or DISQUALIFIED"
+    )
+    confidence: Optional[str] = Field(None, description="Confidence level separate from severity")
+    reason_codes: List[str] = Field(default_factory=list, description="Qualification and detection reason codes")
+    comparison_window: Optional[str] = Field(None, description="Baseline comparison window used")
     lineage_status: str = Field(default="UNAVAILABLE", description="Source lineage resolution status: AVAILABLE, MULTI_SOURCE, or UNAVAILABLE")
     source_records: List[Dict[str, Any]] = Field(default_factory=list, description="Structured lineage references for multi-row or composite anomalies")
 
@@ -72,6 +82,13 @@ class FindingSummary(BaseModel):
     latest_upload_id: Optional[str] = Field(None, description="Upload batch ID of the latest detection occurrence")
     latest_detector_version: Optional[str] = Field(None, description="Detector algorithm version of the latest detection occurrence")
     latest_lineage_status: Optional[str] = Field(None, description="Lineage availability status of the latest detection occurrence")
+    latest_qualification_status: Optional[str] = Field(None, description="Baseline qualification status of latest detection")
+    latest_trust_level: Optional[str] = Field(None, description="Evidence trust level: TRUSTED, TENTATIVE, INCONCLUSIVE, or DISQUALIFIED")
+    evidence_classification: Optional[str] = Field(
+        None,
+        description="Central evidence classification: TRUSTED, TENTATIVE, INCONCLUSIVE, or DISQUALIFIED"
+    )
+    latest_confidence: Optional[str] = Field(None, description="Confidence level separate from severity")
 
 
 class FindingDetailResponse(FindingSummary):
@@ -189,6 +206,7 @@ class SourceRecordDrillDownResponse(BaseModel):
     """Detailed ground-truth source record resolution for an occurrence."""
     source_table: str = Field(..., description="PostgreSQL table name: fact_energy_meter_hourly or fact_hourly_production")
     source_record_id: Optional[str] = Field(None, description="Primary key identifier of source observation (meter_reading_id or event_id)")
+    upload_id: Optional[str] = Field(None, description="Upload batch identifier referenced by the record or occurrence")
     role: Optional[str] = Field(None, description="Domain semantic role (e.g. PRODUCTION_ZERO_OUTPUT_EVENT, PROCESS_ENERGY_MEASUREMENT)")
     reporting_timestamp: Optional[str] = Field(None, description="Timestamp of the physical sensor or production observation")
     plant_id: Optional[str] = Field(None, description="Plant identifier")
@@ -198,8 +216,12 @@ class SourceRecordDrillDownResponse(BaseModel):
     raw_data: Optional[Dict[str, Any]] = Field(None, description="Full dictionary of source table columns and measured attributes")
     upload: Optional[UploadMetadataResponse] = Field(None, description="Upload batch details if linked to an upload batch")
     upload_status: str = Field("UNAVAILABLE", description="AVAILABLE, UNAVAILABLE_HISTORICAL, or UPLOAD_NOT_FOUND")
-    lineage_state: str = Field(..., description="Stream-level lineage: AVAILABLE, UPLOAD_UNAVAILABLE, or SOURCE_MISSING")
+    lineage_state: str = Field(..., description="Stream-level lineage: AVAILABLE, UPLOAD_UNAVAILABLE, SOURCE_MISSING, or ORIGINAL_REVISION_UNAVAILABLE")
     lineage_note: Optional[str] = Field(None, description="Auditable diagnostic note on this specific contributing stream")
+    revision_id: Optional[str] = Field(None, description="Pinned immutable source revision identifier")
+    revision_timestamp: Optional[str] = Field(None, description="Timestamp when this specific revision was committed")
+    has_newer_revision: bool = Field(False, description="True if a newer corrected revision exists in PostgreSQL")
+    current_corrected_reading: Optional[Dict[str, Any]] = Field(None, description="Current corrected fact reading if superseded")
 
 
 class OccurrenceProvenanceResponse(BaseModel):
@@ -213,10 +235,16 @@ class OccurrenceProvenanceResponse(BaseModel):
     detector_version: Optional[str] = None
     overall_lineage_state: str = Field(
         ...,
-        description="Explicit lineage category: AVAILABLE, MULTI_SOURCE, LEGACY_UNLINKED, SOURCE_MISSING, or UPLOAD_UNAVAILABLE",
+        description="Explicit lineage category: AVAILABLE, MULTI_SOURCE, LEGACY_UNLINKED, SOURCE_MISSING, UPLOAD_UNAVAILABLE, or ORIGINAL_REVISION_UNAVAILABLE",
     )
     lineage_explanation: str = Field(..., description="Operational explanation of data lineage and traceability")
     is_multi_source: bool = Field(False, description="True if anomaly combines multiple distinct telemetry streams")
+    qualification_status: Optional[str] = Field(None, description="Baseline qualification status: QUALIFIED, UNQUALIFIED, or PARTIAL")
+    trust_level: Optional[str] = Field(None, description="Evidence trust level: HIGH, MEDIUM, LOW, or TENTATIVE")
+    confidence: Optional[str] = Field(None, description="Confidence level separate from severity")
+    reason_codes: Optional[List[str]] = Field(default_factory=list, description="Qualification reason codes")
+    comparison_window: Optional[str] = Field(None, description="Baseline comparison window used")
+    has_newer_revision: bool = Field(False, description="True if one or more contributing source streams have been corrected")
     source_records: List[SourceRecordDrillDownResponse] = Field(default_factory=list)
     retrieved_at: str
 

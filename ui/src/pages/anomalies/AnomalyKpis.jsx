@@ -1,5 +1,6 @@
 import React from 'react';
 import { formatNumber } from '../../utils/formatters';
+import KpiCard, { KpiGrid } from '../../components/common/KpiCard';
 
 export default function AnomalyKpis({ data }) {
   const totalAnomalies = data ? data.total_anomalies_detected : null;
@@ -116,23 +117,20 @@ export default function AnomalyKpis({ data }) {
   ];
 
   return (
-    <div className="kpi-grid">
+    <KpiGrid className="kpi-grid">
       {kpis.map((card) => (
-        <div key={card.id} className={`kpi-card accent-${card.accent}`}>
-          <div className="kpi-card-inner">
-            <div className="kpi-header">
-              <span className="kpi-title">{card.title}</span>
-              <div className="kpi-icon-wrap">{card.icon}</div>
-            </div>
-            <div className="kpi-body">
-              <span className="kpi-value">{card.value}</span>
-              {card.unit && <span className="kpi-unit">{card.unit}</span>}
-            </div>
-            {card.sublabel && <div className="kpi-sublabel">{card.sublabel}</div>}
-          </div>
-        </div>
+        <KpiCard
+          key={card.id}
+          id={card.id}
+          title={card.title}
+          value={card.value}
+          unit={card.unit}
+          accent="purple"
+          icon={card.icon}
+          minimal={true}
+        />
       ))}
-    </div>
+    </KpiGrid>
   );
 }
 

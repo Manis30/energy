@@ -1,0 +1,692 @@
+/* ==========================================================================
+   Energy Analytics Compact Filter Toolbar
+   Modern single-row horizontal layout with glassmorphism styling
+   Exact order: Plant | Month | Date | Clear Filters
+   Height: 64–76px, Control height: 38–42px (40px)
+   ========================================================================== */
+
+.energy-filter-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 46px;
+  max-height: 52px;
+  padding: 0.45rem 0.85rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 246, 255, 0.92) 100%);
+  border: 1px solid var(--border-glass, rgba(226, 232, 240, 0.85));
+  border-radius: var(--radius-md, 8px);
+  box-shadow: 0 4px 18px -2px rgba(31, 47, 89, 0.04), 0 1px 3px rgba(0, 0, 0, 0.02);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.85rem;
+  position: relative;
+  z-index: 25;
+  flex-wrap: nowrap;
+}
+
+/* ==========================================================================
+   Filter Items & Proportions
+   ========================================================================== */
+
+.energy-filter-item {
+  position: relative;
+  min-width: 0;
+  display: flex;
+}
+
+.energy-filter-item.plant-item {
+  flex: 2 1 240px;
+  min-width: 170px;
+  max-width: 320px;
+}
+
+.energy-filter-item.month-item {
+  flex: 1.2 1 180px;
+  min-width: 150px;
+  max-width: 220px;
+}
+
+.energy-filter-item.date-item {
+  flex: 1.2 1 190px;
+  min-width: 155px;
+  max-width: 240px;
+}
+
+.energy-filter-item.clear-item {
+  flex: 0 0 auto;
+  min-width: 115px;
+  margin-left: auto;
+}
+
+/* When a popover is open, elevate stacking context */
+.energy-filter-item.is-open {
+  z-index: 100;
+}
+
+/* ==========================================================================
+   Trigger Buttons (34px control height)
+   ========================================================================== */
+
+.energy-filter-trigger {
+  width: 100%;
+  height: 34px;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  padding: 0 0.65rem;
+  background-color: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-secondary, #475569);
+  font-family: var(--font-family, 'Montserrat', sans-serif);
+  font-size: 0.76rem;
+  font-weight: 550;
+  cursor: pointer;
+  outline: none;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  transition: all 0.15s ease;
+}
+
+.energy-filter-trigger:hover {
+  border-color: #cbd5e1;
+  background-color: #ffffff;
+  color: var(--text-primary, #0f172a);
+}
+
+.energy-filter-trigger:focus,
+.energy-filter-trigger.is-active {
+  border-color: var(--brand-purple, #6f3dba);
+  background-color: #ffffff;
+  box-shadow: 0 0 0 3px rgba(111, 61, 186, 0.12);
+  color: var(--text-primary, #0f172a);
+}
+
+/* Filter Active (non-default selection) */
+.energy-filter-trigger.has-filter {
+  background-color: rgba(111, 61, 186, 0.05);
+  border-color: rgba(111, 61, 186, 0.35);
+  color: var(--brand-purple, #6f3dba);
+  font-weight: 600;
+}
+
+.energy-filter-trigger.has-filter:hover {
+  border-color: var(--brand-purple, #6f3dba);
+  background-color: rgba(111, 61, 186, 0.08);
+}
+
+.energy-filter-trigger .trigger-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  flex-shrink: 0;
+  transition: color 0.15s ease;
+}
+
+.energy-filter-trigger.has-filter .trigger-icon,
+.energy-filter-trigger.is-active .trigger-icon {
+  color: var(--brand-purple, #6f3dba);
+}
+
+.energy-filter-trigger .trigger-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-family, 'Montserrat', sans-serif);
+  font-size: 0.78rem;
+}
+
+.energy-filter-trigger .trigger-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  flex-shrink: 0;
+  transition: transform 0.2s ease, color 0.15s ease;
+}
+
+.energy-filter-trigger.is-active .trigger-chevron {
+  transform: rotate(180deg);
+  color: var(--brand-purple, #6f3dba);
+}
+
+/* ==========================================================================
+   Clear Filters Button (34px control height)
+   ========================================================================== */
+
+.energy-clear-btn {
+  height: 34px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0 0.85rem;
+  background-color: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: var(--radius-sm, 6px);
+  color: #475569;
+  font-family: var(--font-family, 'Montserrat', sans-serif);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  transition: all 0.15s ease;
+}
+
+.energy-clear-btn:hover {
+  background-color: #f8fafc;
+  color: #0f172a;
+  border-color: #94a3b8;
+}
+
+.energy-clear-btn:active {
+  transform: translateY(1px);
+}
+
+.energy-clear-btn .clear-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Dropdown Popovers (Plant, Month)
+   ========================================================================== */
+
+.energy-dropdown-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 200px;
+  max-width: 320px;
+  background: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 10px;
+  box-shadow: 0 10px 25px -4px rgba(31, 47, 89, 0.12), 0 4px 10px -2px rgba(31, 47, 89, 0.06);
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 200;
+  animation: energyFadeInDown 0.15s ease-out;
+}
+
+@keyframes energyFadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.energy-dropdown-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-family: var(--font-family, 'Montserrat', sans-serif);
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-secondary, #475569);
+  cursor: pointer;
+  transition: all 0.12s ease;
+  user-select: none;
+}
+
+.energy-dropdown-option:hover {
+  background-color: rgba(111, 61, 186, 0.06);
+  color: var(--brand-purple, #6f3dba);
+}
+
+.energy-dropdown-option.is-selected {
+  background-color: rgba(111, 61, 186, 0.1);
+  color: var(--brand-purple, #6f3dba);
+  font-weight: 600;
+}
+
+.energy-dropdown-option .option-check {
+  color: var(--brand-purple, #6f3dba);
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Month & Year Popover
+   ========================================================================== */
+
+.energy-month-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 250px;
+  background: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 12px;
+  box-shadow: 0 10px 25px -4px rgba(31, 47, 89, 0.12), 0 4px 10px -2px rgba(31, 47, 89, 0.06);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  z-index: 200;
+  animation: energyFadeInDown 0.15s ease-out;
+}
+
+.energy-year-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.energy-year-btn {
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  font-family: var(--font-family, 'Montserrat', sans-serif);
+  font-size: 0.74rem;
+  font-weight: 600;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  background: #ffffff;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.energy-year-btn:hover {
+  border-color: #cbd5e1;
+  color: #1e293b;
+}
+
+.energy-year-btn.is-active {
+  background: var(--brand-purple, #6f3dba);
+  border-color: var(--brand-purple, #6f3dba);
+  color: #ffffff;
+}
+
+.energy-months-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.energy-month-btn {
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #475569;
+  font-family: var(--font-family, 'Montserrat', sans-serif);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.energy-month-btn:hover {
+  background: rgba(111, 61, 186, 0.08);
+  color: var(--brand-purple, #6f3dba);
+}
+
+.energy-month-btn.is-selected {
+  background: rgba(111, 61, 186, 0.12);
+  border-color: rgba(111, 61, 186, 0.3);
+  color: var(--brand-purple, #6f3dba);
+  font-weight: 650;
+}
+
+/* ==========================================================================
+   Calendar Popover (Date Picker)
+   ========================================================================== */
+
+.energy-calendar-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 270px;
+  background: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 12px;
+  box-shadow: 0 10px 25px -4px rgba(31, 47, 89, 0.14), 0 4px 10px -2px rgba(31, 47, 89, 0.06);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  z-index: 200;
+  animation: energyFadeInDown 0.15s ease-out;
+}
+
+.energy-cal-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.energy-cal-all-btn {
+  width: 100%;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0 0.65rem;
+  background-color: #f8fafc;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 6px;
+  color: #475569;
+  font-family: var(--font-family, 'Montserrat', sans-serif);
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.12s ease;
+}
+
+.energy-cal-all-btn:hover {
+  background-color: rgba(111, 61, 186, 0.06);
+  color: var(--brand-purple, #6f3dba);
+  border-color: rgba(111, 61, 186, 0.25);
+}
+
+.energy-cal-all-btn.is-active {
+  background-color: rgba(111, 61, 186, 0.12);
+  border-color: rgba(111, 61, 186, 0.35);
+  color: var(--brand-purple, #6f3dba);
+}
+
+.energy-cal-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.15rem 0.25rem 0;
+}
+
+.energy-cal-title {
+  font-family: var(--font-family, 'Montserrat', sans-serif);
+  font-size: 0.76rem;
+  font-weight: 650;
+  color: #1e293b;
+}
+
+.energy-cal-hint {
+  font-size: 0.66rem;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.energy-cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  text-align: center;
+}
+
+.energy-cal-weekday {
+  font-family: var(--font-family, 'Montserrat', sans-serif);
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: #94a3b8;
+  padding: 0.15rem 0;
+  text-transform: uppercase;
+}
+
+.energy-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+
+.energy-cal-empty {
+  height: 30px;
+}
+
+.energy-cal-day {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #334155;
+  font-family: var(--font-family, 'Montserrat', sans-serif);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.12s ease;
+}
+
+.energy-cal-day:hover {
+  background-color: rgba(111, 61, 186, 0.08);
+  color: var(--brand-purple, #6f3dba);
+}
+
+.energy-cal-day.is-selected {
+  background: linear-gradient(135deg, #7c3aed 0%, #6f3dba 100%);
+  color: #ffffff;
+  font-weight: 650;
+  box-shadow: 0 2px 6px -1px rgba(111, 61, 186, 0.4);
+}
+
+/* ==========================================================================
+   Responsive Breakpoints
+   ========================================================================== */
+
+@media (max-width: 860px) {
+  .energy-filter-toolbar {
+    flex-wrap: wrap;
+    min-height: auto;
+    max-height: none;
+    padding: 0.75rem;
+    gap: 0.6rem;
+  }
+
+  .energy-filter-item.plant-item,
+  .energy-filter-item.month-item,
+  .energy-filter-item.date-item {
+    flex: 1 1 calc(50% - 0.3rem);
+    max-width: none;
+  }
+
+  .energy-filter-item.clear-item {
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .energy-filter-item.plant-item,
+  .energy-filter-item.month-item,
+  .energy-filter-item.date-item {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}
+
+/* Dark Mode Overrides */
+[data-theme="dark"] .energy-filter-toolbar {
+  background: linear-gradient(135deg, rgba(20, 28, 48, 0.95) 0%, rgba(15, 23, 42, 0.92) 100%);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="dark"] .energy-filter-trigger {
+  background-color: #1a243b;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #f1f5fd;
+}
+
+[data-theme="dark"] .energy-filter-trigger:hover {
+  background-color: #22304e;
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+[data-theme="dark"] .energy-filter-trigger:focus,
+[data-theme="dark"] .energy-filter-trigger.is-active {
+  background-color: #1a243b;
+  border-color: var(--brand-purple, #a684ee);
+  box-shadow: 0 0 0 3px rgba(166, 132, 238, 0.22);
+  color: #ffffff;
+}
+
+[data-theme="dark"] .energy-filter-trigger.has-filter {
+  background-color: rgba(166, 132, 238, 0.14);
+  border-color: rgba(166, 132, 238, 0.4);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .energy-filter-trigger.has-filter:hover {
+  background-color: rgba(166, 132, 238, 0.2);
+  border-color: rgba(166, 132, 238, 0.5);
+  color: #ffffff;
+}
+
+[data-theme="dark"] .energy-filter-trigger .trigger-icon,
+[data-theme="dark"] .energy-filter-trigger .trigger-chevron {
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .energy-filter-trigger.has-filter .trigger-icon,
+[data-theme="dark"] .energy-filter-trigger.is-active .trigger-icon {
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .energy-dropdown-popover,
+[data-theme="dark"] .energy-month-popover,
+[data-theme="dark"] .energy-calendar-popover {
+  background: #141c2e;
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="dark"] .energy-dropdown-option {
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .energy-dropdown-option:hover {
+  background-color: rgba(167, 139, 250, 0.12);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .energy-dropdown-option.is-selected {
+  background-color: rgba(166, 132, 238, 0.18);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .energy-dropdown-option .option-check {
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .energy-year-nav {
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] .energy-year-btn {
+  background: #1a243b;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .energy-year-btn:hover {
+  background: #22304e;
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}
+
+[data-theme="dark"] .energy-year-btn.is-active {
+  background: #8b5cf6;
+  border-color: #8b5cf6;
+  color: #ffffff;
+}
+
+[data-theme="dark"] .energy-month-btn {
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .energy-month-btn:hover {
+  background-color: rgba(166, 132, 238, 0.15);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .energy-month-btn.is-selected {
+  background-color: #8b5cf6;
+  border-color: #8b5cf6;
+  color: #ffffff;
+}
+
+[data-theme="dark"] .energy-cal-title {
+  color: #f1f5fd;
+}
+
+[data-theme="dark"] .energy-cal-hint {
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .energy-cal-weekday {
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .energy-cal-all-btn {
+  background-color: rgba(166, 132, 238, 0.12);
+  border-color: rgba(166, 132, 238, 0.3);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .energy-cal-all-btn:hover {
+  background-color: rgba(166, 132, 238, 0.2);
+  border-color: rgba(166, 132, 238, 0.45);
+  color: #ffffff;
+}
+
+[data-theme="dark"] .energy-cal-all-btn.is-active {
+  background-color: #8b5cf6;
+  border-color: #8b5cf6;
+  color: #ffffff;
+}
+
+[data-theme="dark"] .energy-cal-day {
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .energy-cal-day:hover {
+  background-color: rgba(166, 132, 238, 0.15);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .energy-cal-day.is-selected {
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  color: #ffffff;
+}
+
+[data-theme="dark"] .energy-clear-btn {
+  background-color: #1a243b;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .energy-clear-btn:hover {
+  background-color: #22304e;
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}

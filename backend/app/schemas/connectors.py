@@ -15,8 +15,33 @@ from pydantic import BaseModel, Field
 class ConnectorType(str, Enum):
     """Approved connector types."""
     NEON_POSTGRES = "neon_postgres"
+    POSTGRESQL = "postgresql"
+    FILE_UPLOAD = "file_upload"
     MONGODB = "mongodb"
     SHAREPOINT = "sharepoint"
+    REST_API = "rest_api"
+    SIEMENS_OPCENTER = "siemens_opcenter"
+    SAP_ERP = "sap_erp"
+    SAP_HANA = "sap_hana"
+    ORACLE = "oracle"
+    SNOWFLAKE = "snowflake"
+    MS_TEAMS = "ms_teams"
+
+
+class ConnectorMode(str, Enum):
+    """Architectural connector execution mode."""
+    LIVE_CAPABLE = "live_capable"
+    FILE_BASED = "file_based"
+    SIMULATED = "simulated"
+    PLANNED = "planned"
+
+
+class ConnectionState(str, Enum):
+    """Active runtime connection state."""
+    UNCONFIGURED = "unconfigured"
+    CONFIGURED_UNVERIFIED = "configured_unverified"
+    REACHABLE = "reachable"
+    FAILED = "failed"
 
 
 class ConnectorStatus(str, Enum):
@@ -25,6 +50,7 @@ class ConnectorStatus(str, Enum):
     DISCONNECTED = "disconnected"
     ERROR = "error"
     CONFIGURING = "configuring"
+    SIMULATED = "simulated"
 
 
 class ConnectorRole(str, Enum):
@@ -54,11 +80,19 @@ class ConnectorSummary(BaseModel):
     role: ConnectorRole = Field(..., description="Role in data architecture")
     description: str = Field(..., description="Connector purpose and details")
     status: ConnectorStatus = Field(..., description="Current connection status")
+    mode: ConnectorMode = Field(ConnectorMode.PLANNED, description="Connector architectural mode: live_capable, file_based, simulated, planned")
+    connection_state: ConnectionState = Field(ConnectionState.UNCONFIGURED, description="Runtime connection state: unconfigured, configured_unverified, reachable, failed")
+    status_label: Optional[str] = Field(None, description="Truthful human-readable status badge")
     is_primary: bool = Field(False, description="True if this is the primary platform database")
     is_predefined: bool = Field(False, description="True if managed by platform configuration")
+    is_simulation: bool = Field(False, description="True if mock fixture or sandbox simulation")
+    is_operational_intake: bool = Field(False, description="True if actively used for platform operational intake")
     created_at: datetime = Field(..., description="Registration timestamp")
     last_tested_at: Optional[datetime] = Field(None, description="Last connectivity check timestamp")
     last_sync_at: Optional[datetime] = Field(None, description="Last sync or discovery timestamp")
+    last_connectivity_check_at: Optional[datetime] = Field(None, description="Timestamp of most recent connectivity probe")
+    last_successful_ingestion_at: Optional[datetime] = Field(None, description="Timestamp of most recent verified operational data ingestion")
+    provider_details: Optional[Dict[str, Any]] = Field(None, description="Observed server provider, TLS, and version details")
     connection_info: Dict[str, Any] = Field(
         default_factory=dict,
         description="Public connection parameters with credentials strictly masked"
@@ -116,8 +150,15 @@ class ConnectionTestResult(BaseModel):
     connector_type: ConnectorType
     success: bool
     status: ConnectorStatus
+    mode: Optional[ConnectorMode] = None
+    connection_state: Optional[ConnectionState] = None
+    is_simulation: bool = False
+    is_operational_intake: bool = False
     latency_ms: float = Field(..., description="Round-trip handshake latency in milliseconds")
     message: str = Field(..., description="Summary status message")
+    last_connectivity_check_at: Optional[datetime] = None
+    last_successful_ingestion_at: Optional[datetime] = None
+    provider_details: Optional[Dict[str, Any]] = None
     diagnostics: Dict[str, Any] = Field(
         default_factory=dict,
         description="Detailed diagnostic metrics (DNS, TLS, Ping, Auth, Version)"

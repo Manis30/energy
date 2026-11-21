@@ -7,6 +7,7 @@ import StatusModal from './recommendations/StatusModal';
 import ActionModal from './recommendations/ActionModal';
 import GenerateModal from './recommendations/GenerateModal';
 import ActionsTrackerTable from './recommendations/ActionsTrackerTable';
+import InterventionWorkflowModal from './recommendations/InterventionWorkflowModal';
 import './recommendations/recommendations.css';
 
 const REC_STATUSES = ['ALL', 'OPEN', 'IN_PROGRESS', 'IMPLEMENTED', 'DISMISSED'];
@@ -19,6 +20,32 @@ const CATEGORIES = [
   { value: 'OPERATIONAL_TUNING', label: 'Operational Tuning (SEC)' },
   { value: 'MAINTENANCE_INSPECTION', label: 'Maintenance & Electrical Inspection' },
 ];
+
+function formatDateClean(ts) {
+  if (!ts) return '—';
+  try {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return ts;
+    const day = d.getDate();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = months[d.getMonth()];
+    const year = d.getFullYear();
+    return `${day} ${month} ${year}`;
+  } catch {
+    return ts;
+  }
+}
+
+function formatTimeClean(ts) {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
 
 export default function RecommendationsActions() {
   const navigate = useNavigate();
@@ -81,6 +108,7 @@ export default function RecommendationsActions() {
     loading: false,
     error: null,
   });
+  const [workflowModalAction, setWorkflowModalAction] = useState(null);
   const [generateModal, setGenerateModal] = useState({
     open: Boolean(urlGenFindingId),
     prefillFindingId: urlGenFindingId || '',
@@ -646,6 +674,10 @@ export default function RecommendationsActions() {
                             </td>
                             <td>
                               <span style={{ fontSize: '0.78rem' }}>{formatDateTime(rec.created_at)}</span>
+                              <div className="rec-date-cell">
+                                <span className="rec-date-primary">{formatDateClean(rec.created_at)}</span>
+                                <span className="rec-date-time">{formatTimeClean(rec.created_at)}</span>
+                              </div>
                             </td>
                             <td>
                               <button
@@ -704,7 +736,18 @@ export default function RecommendationsActions() {
           onOpenRecommendation={(id) => {
             setDrawerRecId(id);
           }}
+          onOpenWorkflowModal={(act) => setWorkflowModalAction(act)}
           refreshTrigger={refreshTrigger}
+        />
+      )}
+
+      {/* Operator Workflow Modal for Energy-Saving Trials */}
+      {workflowModalAction && (
+        <InterventionWorkflowModal
+          action={workflowModalAction}
+          isOpen={Boolean(workflowModalAction)}
+          onClose={() => setWorkflowModalAction(null)}
+          onActionUpdated={handleRefresh}
         />
       )}
 

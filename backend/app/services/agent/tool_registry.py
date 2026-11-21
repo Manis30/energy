@@ -12,7 +12,7 @@ No calculations are simulated or hallucinated inside the LLM.
 """
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date as dt_date, datetime as dt_datetime, date, datetime
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional, Type
 
@@ -36,6 +36,7 @@ from app.services.energy_analytics import (
     get_power_factor_summary,
 )
 from app.services.energy_intensity import (
+    get_energy_intensity_trends,
     get_factory_energy_analytics,
     get_process_energy_analytics,
     get_product_process_energy,
@@ -150,7 +151,14 @@ class ProcessEnergyIntensityInput(BaseDateRangeInput):
 
 
 class FactoryEnergyIntensityInput(BaseDateRangeInput):
-    pass
+    line_id: Optional[str] = Field(None, description="Optional line filter (note: factory-wide intensity requires plant scope)")
+    product_id: Optional[str] = Field(None, description="Optional product SKU filter")
+    shift_id: Optional[str] = Field(None, description="Optional shift filter")
+
+
+class EnergyIntensityTrendsInput(BaseDateRangeInput):
+    grain: Optional[str] = Field("daily", description="Time aggregation grain: 'daily' or 'monthly'")
+    group_by_plant: Optional[bool] = Field(False, description="When true, breaks out each plant separately in addition to combined total")
 
 
 class ProductProcessEnergyInput(BaseDateRangeInput):
@@ -195,6 +203,21 @@ class UnifiedAnomalyDetectionInput(BaseTimeRangeInput):
     rolling_window_hours: int = Field(default=24, ge=2, le=720, description="Elapsed-time window for rolling baseline (default 24)")
     pf_threshold: Decimal = Field(default=Decimal("0.90"), description="Power factor threshold (default 0.90)")
     limit: Optional[int] = Field(None, ge=1, le=5000, description="Optional maximum number of anomalies to return")
+
+
+class ExplainOperatingStoppageInput(BaseModel):
+    """Input parameters for explain_operating_stoppage tool."""
+    plant_id: Optional[str] = Field(None, description="Optional plant filter: 'IN-TN-01' or 'IN-KA-01'")
+    line_id: Optional[str] = Field(None, description="Production line identifier, e.g. 'FAL-L2' or 'SMT-L1'")
+    date: Optional[dt_date] = Field(None, description="Date of the stoppage episode (YYYY-MM-DD)")
+    hour: Optional[int] = Field(None, ge=0, le=23, description="Hour of the stoppage episode (0-23)")
+    episode_id: Optional[str] = Field(None, description="Optional explicit episode ID, e.g. 'STP-IN-KA-01-FAL-L2-2026110402'")
+
+
+class ExplainInterventionAssessmentInput(BaseModel):
+    """Input parameters for explain_intervention_assessment tool."""
+    action_id: Optional[str] = Field(None, description="Corrective action identifier, e.g. 'ACT-...'")
+    plan_id: Optional[str] = Field(None, description="Measurement plan identifier, e.g. 'PLAN-...'")
 
 
 # ---------------------------------------------------------------------------
@@ -422,13 +445,26 @@ register_tool(
 register_tool(
     name="factory_energy_intensity",
     description=(
-        "Calculate plant-wide Factory SEC (Total plant kWh across all 5 meters divided by Final Assembly "
-        "finished goods output). Reports facility infrastructure utilities (HVAC, Compressor, Chiller) "
-        "separately to preserve technical boundaries."
+        "Calculate plant-wide energy intensity per good finished unit (Total eligible plant kWh across all 5 meters, "
+        "estimated cost in INR, and CO2e emissions divided by Final Assembly good output). Reports telemetry coverage "
+        "(expected vs matched hours), production quality context (yield, rejects, downtime), and facility "
+        "infrastructure utilities (HVAC, Compressor, Chiller) separately to preserve technical boundaries."
     ),
     category="energy_intensity",
     args_schema=FactoryEnergyIntensityInput,
     func=get_factory_energy_analytics,
+)
+
+register_tool(
+    name="energy_intensity_trends",
+    description=(
+        "Calculate time-series trends of electricity intensity (kWh/good unit), cost intensity (₹/good unit), "
+        "and emissions intensity (kg CO2e/good unit) grouped by day or month. Strictly sums numerators and "
+        "denominators within each bucket before dividing (ratio of sums). Delivers coverage and production context."
+    ),
+    category="energy_intensity",
+    args_schema=EnergyIntensityTrendsInput,
+    func=get_energy_intensity_trends,
 )
 
 register_tool(
@@ -541,6 +577,305 @@ register_tool(
     category="sql",
     args_schema=ReadOnlySQLQueryInput,
     func=_run_sql_query_tool,
+)
+
+
+# ===========================================================================
+# 6. Operating Context & Stoppage Analysis Tools
+# ===========================================================================
+
+def _explain_operating_stoppage_tool(
+    session: Session,
+    plant_id: Optional[str] = None,
+    line_id: Optional[str] = None,
+    date: Optional[date] = None,
+    hour: Optional[int] = None,
+    episode_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    from app.services.operating_context import (
+        detect_stoppage_episodes,
+        get_operating_context_observations,
+        get_stoppage_episode_detail,
+    )
+
+    if episode_id:
+        detail = get_stoppage_episode_detail(session=session, episode_id=episode_id)
+        if detail:
+            kwh_rate = round(detail.episode.process_kwh / detail.episode.observed_duration_hours, 4) if (detail.episode.process_kwh and detail.episode.observed_duration_hours > 0) else None
+            return {
+                "episode_id": detail.episode.episode_id,
+                "plant_id": detail.episode.plant_id,
+                "line_id": detail.episode.line_id,
+                "process": detail.episode.process,
+                "interval_window": detail.episode.interval_window,
+                "first_interval": detail.episode.first_interval.isoformat(),
+                "last_interval": detail.episode.last_interval.isoformat(),
+                "observed_duration_hours": detail.episode.observed_duration_hours,
+                "stoppage_output": {
+                    "target_qty_lost": detail.episode.target_qty_lost,
+                    "target_shortfall": detail.episode.target_shortfall,
+                    "target_shortfall_label": "Target shortfall during observed hours",
+                    "actual_qty": detail.episode.actual_qty,
+                    "good_qty": detail.episode.good_qty,
+                    "recorded_downtime_minutes": detail.episode.recorded_downtime_minutes,
+                    "downtime_reasons": detail.episode.downtime_reasons,
+                    "downtime_reasons_display": detail.episode.downtime_reasons_display,
+                },
+                "stoppage_energy": {
+                    "process_kwh": detail.episode.process_kwh,
+                    "process_electricity_label": detail.episode.process_electricity_label,
+                    "kwh_per_hour": kwh_rate,
+                    "process_cost_inr": detail.episode.process_cost_inr,
+                    "cost_label": detail.episode.cost_label,
+                    "energy_coverage_pct": detail.episode.energy_coverage_pct,
+                },
+                "prior_productive_interval": detail.episode.prior_productive_interval.model_dump() if detail.episode.prior_productive_interval else None,
+                "restart_behavior": detail.episode.next_restart_interval.model_dump() if detail.episode.next_restart_interval else None,
+                "machine_context": {
+                    "machine_states": detail.episode.machine_states,
+                    "alarm_codes": detail.episode.alarm_codes,
+                    "has_machine_telemetry": detail.episode.has_machine_telemetry,
+                },
+                "historical_comparison": detail.similar_periods.model_dump(),
+                "actionable_investigation": detail.actionable_investigation.model_dump() if detail.actionable_investigation else None,
+                "source_provenance": {
+                    "source_record_ids": detail.episode.source_record_ids,
+                    "source_revision_ids": detail.episode.source_revision_ids,
+                },
+            }
+
+    # If episode_id not provided, look up by line_id, plant_id, date, hour
+    obs = get_operating_context_observations(
+        session=session,
+        plant_id=plant_id,
+        line_id=line_id,
+        start_date=date,
+        end_date=date,
+        limit=1000,
+    )
+    episodes = detect_stoppage_episodes(obs, min_duration_hours=1)
+
+    matched_ep = None
+    if hour is not None:
+        for ep in episodes:
+            if ep.first_interval.hour <= hour <= ep.last_interval.hour:
+                matched_ep = ep
+                break
+    elif episodes:
+        matched_ep = episodes[0]
+
+    if matched_ep:
+        return _explain_operating_stoppage_tool(
+            session=session,
+            episode_id=matched_ep.episode_id,
+        )
+
+    return {
+        "status": "NO_STOPPAGE_FOUND",
+        "message": f"No stoppage episode found matching plant={plant_id}, line={line_id}, date={date}, hour={hour}.",
+        "searched_scope": {
+            "plant_id": plant_id,
+            "line_id": line_id,
+            "date": str(date) if date else None,
+            "hour": hour,
+        },
+    }
+
+
+register_tool(
+    name="explain_operating_stoppage",
+    description=(
+        "Explain an operational stoppage episode on a manufacturing line: returns lost target output, "
+        "observed zero production, process electricity consumed during the stoppage, dataset-derived cost, "
+        "machine alarms/states, restart behavior in the following hour, descriptive comparison against "
+        "similar historical stoppages on that line, and linked source record/revision IDs."
+    ),
+    category="operating_context",
+    args_schema=ExplainOperatingStoppageInput,
+    func=_explain_operating_stoppage_tool,
+)
+
+
+def _explain_intervention_assessment_tool(
+    session: Session,
+    action_id: Optional[str] = None,
+    plan_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    from app.services.intervention_service import (
+        get_corrective_action,
+        get_measurement_plan_for_action,
+        evaluate_and_record_assessment,
+    )
+    from app.models.recommendations import InterventionPlan, InterventionAssessment
+    from sqlalchemy import select
+
+    target_action_id = action_id
+    if not target_action_id and plan_id:
+        stmt = select(InterventionPlan.action_id).where(InterventionPlan.plan_id == plan_id).limit(1)
+        target_action_id = session.execute(stmt).scalar_one_or_none()
+
+    if not target_action_id:
+        return {
+            "error": "No action_id or plan_id provided.",
+            "status": "UNAVAILABLE",
+        }
+
+    action = get_corrective_action(session, target_action_id)
+    if not action:
+        return {
+            "error": f"Corrective action '{target_action_id}' not found.",
+            "status": "UNAVAILABLE",
+        }
+
+    plan = get_measurement_plan_for_action(session, target_action_id)
+    if not plan:
+        return {
+            "action_id": target_action_id,
+            "status": "NO_MEASUREMENT_PLAN",
+            "message": "A measurement & verification plan has not yet been defined for this action.",
+            "review_status": action.review_status,
+            "implemented_at": action.implemented_at.isoformat() if action.implemented_at else None,
+        }
+
+    try:
+        comp, asm = evaluate_and_record_assessment(session, target_action_id)
+        return {
+            "action_id": target_action_id,
+            "plan_id": plan.plan_id,
+            "plan_version": plan.version,
+            "is_frozen": plan.is_frozen,
+            "is_retrospective": plan.is_retrospective,
+            "boundary": comp.measurement_boundary,
+            "baseline_metrics": {
+                "kwh": comp.baseline.kwh,
+                "cost_inr": comp.baseline.cost_inr,
+                "actual_units": comp.baseline.actual_units,
+                "good_units": comp.baseline.good_units,
+                "reject_units": comp.baseline.reject_units,
+                "downtime_minutes": comp.baseline.downtime_minutes,
+                "coverage_pct": comp.baseline.coverage_pct,
+                "kwh_per_good_unit": comp.baseline.kwh_per_good_unit,
+                "cost_per_good_unit": comp.baseline.cost_per_good_unit,
+            },
+            "post_metrics": {
+                "kwh": comp.post.kwh,
+                "cost_inr": comp.post.cost_inr,
+                "actual_units": comp.post.actual_units,
+                "good_units": comp.post.good_units,
+                "reject_units": comp.post.reject_units,
+                "downtime_minutes": comp.post.downtime_minutes,
+                "coverage_pct": comp.post.coverage_pct,
+                "kwh_per_good_unit": comp.post.kwh_per_good_unit,
+                "cost_per_good_unit": comp.post.cost_per_good_unit,
+            },
+            "comparison_changes": {
+                "kwh_change_abs": comp.kwh_change_abs,
+                "kwh_change_pct": comp.kwh_change_pct,
+                "intensity_change_pct": comp.intensity_change_pct,
+                "cost_intensity_change_pct": comp.cost_intensity_change_pct,
+                "sign_convention": comp.sign_convention,
+            },
+            "common_rate_comparison": {
+                "baseline_cost_inr": comp.common_rate_baseline_cost_inr,
+                "post_cost_inr": comp.common_rate_post_cost_inr,
+                "cost_change_inr": comp.common_rate_cost_change_inr,
+                "tariff_inr_per_kwh": comp.common_rate_factor_inr_per_kwh,
+                "tariff_version": comp.common_rate_factor_version,
+            },
+            "guardrails": [g.dict() for g in comp.guardrails],
+            "guardrails_passed": comp.guardrails_passed,
+            "production_protection_status": comp.production_protection_status,
+            "objective_outcome": comp.objective_outcome,
+            "management_outcome": comp.management_outcome,
+            "management_outcome_detail": comp.management_outcome_detail,
+            "next_step": comp.next_step,
+            "is_awaiting_data": comp.is_awaiting_data,
+            "remaining_time_minutes": comp.remaining_time_minutes,
+            "comparison_method": comp.comparison_method,
+            "work_order_link": comp.work_order_link,
+            "downtime_event_link": comp.downtime_event_link,
+            "electricity_savings_kwh": comp.electricity_savings_kwh,
+            "monetary_savings_basis": comp.monetary_savings_basis,
+            "avoided_cost_inr": comp.avoided_cost_inr,
+            "savings_claim_status": comp.savings_claim_status,
+            "status_reason": comp.status_reason,
+            "overlap_flag": comp.overlap_flag,
+            "overlap_details": comp.overlap_details,
+            "three_separate_answers": comp.three_separate_answers,
+            "human_governance": {
+                "review_status": action.review_status,
+                "reviewed_by": action.reviewed_by,
+                "implemented_at": action.implemented_at.isoformat() if action.implemented_at else None,
+                "implemented_by": action.implemented_by,
+                "signed_off_by": asm.signed_off_by if asm else None,
+                "signed_off_at": asm.signed_off_at.isoformat() if asm and asm.signed_off_at else None,
+                "review_decision": asm.review_decision if asm else None,
+            },
+        }
+    except Exception as e:
+        return {
+            "action_id": target_action_id,
+            "error": str(e),
+            "status": "EVALUATION_ERROR",
+        }
+
+
+register_tool(
+    name="explain_intervention_assessment",
+    description=(
+        "Explain an operational intervention savings verification assessment: returns deterministic before/after "
+        "energy and production metrics, guardrail outcomes (output, quality yield, downtime), objective business outcome, "
+        "avoided electricity quantity (if defensibly quantified), monetary savings basis, and authorized human governance sign-off status."
+    ),
+    category="interventions",
+    args_schema=ExplainInterventionAssessmentInput,
+    func=_explain_intervention_assessment_tool,
+)
+
+
+class UtilityTelemetryObservationsInput(BaseModel):
+    """Input parameters for utility_telemetry_observations tool."""
+    plant_id: str = Field("IN-TN-01", description="Plant identifier, e.g. 'IN-TN-01' or 'IN-KA-01'")
+    utility_type: Optional[str] = Field(None, description="Utility type, e.g. 'COMPRESSED_AIR', 'CHILLED_WATER', 'HVAC', 'NITROGEN', 'PROCESS_WATER'")
+    start_time: Optional[datetime] = Field(None, description="Start timestamp")
+    end_time: Optional[datetime] = Field(None, description="End timestamp")
+    equipment_id: Optional[str] = Field(None, description="Specific utility equipment ID, e.g. 'UTL-01'")
+    limit: int = Field(50, description="Max observations to return")
+
+
+def _utility_telemetry_observations_tool(
+    session: Session,
+    plant_id: str = "IN-TN-01",
+    utility_type: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+    equipment_id: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    from app.services.operating_context import get_utility_telemetry_observations
+    return get_utility_telemetry_observations(
+        session=session,
+        plant_id=plant_id,
+        utility_type=utility_type,
+        start_time=start_time,
+        end_time=end_time,
+        equipment_id=equipment_id,
+        limit=limit,
+    )
+
+
+register_tool(
+    name="utility_telemetry_observations",
+    description=(
+        "Query utility telemetry observations (compressed air, chilled water, HVAC, nitrogen, process water). "
+        "Distinguishes compressor electrical consumption ('Compressor electricity consumption (kWh)' at meter MTR-COMPRESSOR in fact_energy_meter_hourly) "
+        "from compressed air delivery (flow and pressure in fact_utility_telemetry_hourly). "
+        "Preserves raw flow readings with 'Flow-rate unit unverified', keeps derived volume, leak rate, and monetary savings null with reasons, "
+        "and generates ultrasonic acoustic inspection leak-check recommendations when qualified alarm or pressure evidence warrants investigation."
+    ),
+    category="operating_context",
+    args_schema=UtilityTelemetryObservationsInput,
+    func=_utility_telemetry_observations_tool,
 )
 
 

@@ -11,6 +11,7 @@ from app.api.daily_reports import router as daily_reports_router
 from app.api.energy import router as energy_router
 from app.api.energy_intensity import router as energy_intensity_router
 from app.api.findings import router as findings_router
+from app.api.operating_context import router as operating_context_router
 from app.api.production import router as production_router
 from app.api.reconciliation import router as reconciliation_router
 from app.api.connectors import router as connectors_router
@@ -60,10 +61,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS configuration for React + Vite frontend
+# CORS configuration for React + Vite frontend loaded dynamically from environment
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -110,3 +111,4 @@ app.include_router(actions_router, prefix="/api/actions", tags=["Corrective Acti
 app.include_router(actions_router, prefix="/api/v1/actions", tags=["Corrective Actions"])
 app.include_router(reconciliation_router, prefix="/api/reconciliation", tags=["Cross-Source Data Reconciliation"])
 app.include_router(connectors_router, prefix="/api/connectors", tags=["Data Connectors"])
+app.include_router(operating_context_router, prefix="/api/operating-context", tags=["Operating Context"])

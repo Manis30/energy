@@ -162,7 +162,7 @@ class VerificationResponse:
 
 # Peak Energy (DEF-04): separated from cumulative energy
 PEAK_ENERGY_KEYS = {
-    "peak_kwh", "peak_hourly_kwh", "peak_consumption_kwh", "peak_demand_kw",
+    "peak_kwh", "peak_hourly_kwh", "peak_consumption_kwh", "peak_hourly_consumption_kwh",
 }
 
 # Cumulative Energy (DEF-04): total/sum consumption
@@ -187,8 +187,8 @@ PRODUCTION_REWORK_KEYS = {"rework_qty", "total_rework_qty"}
 DOWNTIME_KEYS = {"downtime_min", "total_downtime_min"}
 
 # Specific Rate Categories (DEF-03): separated to prevent cross-rate matching
-GOOD_RATE_KEYS = {"good_rate", "yield_rate", "quality_rate"}
-REJECT_RATE_KEYS = {"reject_rate", "scrap_rate"}
+GOOD_RATE_KEYS = {"good_rate", "yield_rate", "quality_rate", "good_output_yield", "fal_yield_pct"}
+REJECT_RATE_KEYS = {"reject_rate", "scrap_rate", "fal_reject_rate_pct"}
 REWORK_RATE_KEYS = {"rework_rate", "repair_rate"}
 ACHIEVEMENT_RATE_KEYS = {"achievement_rate", "target_achievement_rate"}
 PERCENTAGE_OF_TOTAL_KEYS = {
@@ -242,9 +242,17 @@ EXCLUDED_KEY_PATTERNS = {
 # Unit compatibility mapping
 UNIT_NORMALIZATION = {
     "kwh": "kWh", "kwh/board": "kWh/board", "kwh/phone": "kWh/phone",
-    "kwh/unit": "kWh/unit", "inr": "INR", "rs": "INR", "rs.": "INR",
-    "rupees": "INR", "₹": "INR", "kg co2e": "kg CO2e", "kg": "kg CO2e",
-    "co2e": "kg CO2e", "%": "%", "percent": "%", "percentage": "%",
+    "kwh/unit": "kWh/unit", "kwh/good unit": "kWh/good unit", "kwh/good finished unit": "kWh/good unit",
+    "kwh/good": "kWh/good unit",
+    "inr": "INR", "rs": "INR", "rs.": "INR",
+    "rupees": "INR", "₹": "INR", "inr/good unit": "INR/good unit",
+    "inr/good finished unit": "INR/good unit", "₹/good unit": "INR/good unit",
+    "₹/good finished unit": "INR/good unit", "rs/good unit": "INR/good unit",
+    "inr/unit": "INR/unit", "₹/unit": "INR/unit",
+    "kg co2e": "kg CO2e", "kg": "kg CO2e", "co2e": "kg CO2e",
+    "kg co2e/good unit": "kg CO2e/good unit", "kg co2e/good finished unit": "kg CO2e/good unit",
+    "kg co2e/unit": "kg CO2e/unit",
+    "%": "%", "percent": "%", "percentage": "%",
     "minutes": "minutes", "min": "minutes", "mins": "minutes",
     "hours": "hours", "hrs": "hours", "units": "units", "boards": "boards",
     "phones": "phones", "anomalies": "anomalies", "readings": "readings",
@@ -327,15 +335,32 @@ def _classify_metric_key(key: str) -> Tuple[str, Optional[str]]:
     """
     k = key.lower().strip()
 
-    # SEC metrics (kWh per product unit)
+    # Cost Intensity (₹ / good finished unit)
+    if "cost_intensity" in k or ("cost" in k and "per" in k and "good" in k):
+        return "cost_intensity", "INR/good unit"
+
+    # Savings and Avoided Energy / Cost
+    if "savings" in k or "avoided" in k:
+        if "kwh" in k or "energy" in k:
+            return "energy", "kWh"
+        if "cost" in k or "inr" in k:
+            return "cost", "INR"
+
+    # Emissions Intensity (kg CO2e / good finished unit)
+    if "emissions_intensity" in k or ("co2" in k and "per" in k and "good" in k) or ("emission" in k and "per" in k and "good" in k):
+        return "emissions_intensity", "kg CO2e/good unit"
+
+    # SEC and Electricity Intensity metrics (kWh per product unit)
     if "per_board" in k:
         return "sec", "kWh/board"
-    elif "per_phone" in k:
+    elif "per_phone" in k or "per_assembly" in k:
         return "sec", "kWh/phone"
-    elif "per_unit" in k:
+    elif "per_good_unit" in k or "good_kwh_per" in k:
+        return "sec", "kWh/good unit"
+    elif "per_unit" in k or "per_finished_unit" in k:
         return "sec", "kWh/unit"
     elif k in SEC_KEYS or "intensity" in k:
-        return "sec", "kWh/unit"
+        return "sec", "kWh/good unit"
 
     # Peak Energy (DEF-04): strictly separate from cumulative energy
     if k in PEAK_ENERGY_KEYS or ("peak" in k and ("kwh" in k or "consumption" in k or "hourly" in k or "energy" in k)):
@@ -379,11 +404,15 @@ def _classify_metric_key(key: str) -> Tuple[str, Optional[str]]:
         return "percentage_below_threshold", "%"
     if k in PERCENTAGE_OF_DOWNTIME_KEYS or "percentage_of_downtime" in k or "downtime_percentage" in k:
         return "percentage_of_downtime", "%"
+    # Energy consumption rate (kWh/h)
+    if "kwh_per_hour" in k or "kwh_per_hr" in k or ("rate" in k and "kwh" in k):
+        return "energy_rate", "kWh/h"
+
     if "rate" in k or "percentage" in k or "pct" in k:
         return "generic_rate", "%"
 
     # Production Quantities (units)
-    if k in PRODUCTION_TARGET_KEYS or "target_qty" in k:
+    if "shortfall" in k or k in PRODUCTION_TARGET_KEYS or "target_qty" in k:
         return "target_quantity", "units"
     if k in PRODUCTION_ACTUAL_KEYS or "actual_qty" in k or "finished_goods" in k:
         return "actual_quantity", "units"
@@ -676,15 +705,32 @@ def _infer_unit_from_context(sentence: str, match_start: int, match_end: int) ->
     # Check leading text (up to 15 chars)
     leading = sentence[max(0, match_start - 15):match_start].strip()
 
-    # Leading currency symbol
-    if any(c in leading for c in ("₹", "Rs", "INR", "Rs.")):
+    # Leading currency symbol (with trailing unit check)
+    if any(c in leading for c in ("₹", "Rs", "INR", "Rs.")) or any(c in tok for c in ("₹", "INR", "Rs")):
+        if (
+            t_lower.startswith("/good")
+            or t_lower.startswith("/ good")
+            or "per good" in t_lower[:15]
+            or "per good unit" in t_lower[:20]
+        ):
+            return "INR/good unit"
+        if t_lower.startswith("/unit") or t_lower.startswith("/ unit") or "per unit" in t_lower[:15]:
+            return "INR/unit"
         return "INR"
 
     # Trailing unit checks
     t_lower = trailing.lower()
+    if t_lower.startswith("kwh/good") or t_lower.startswith("kwh / good") or t_lower.startswith("kwh per good"):
+        return "kWh/good unit"
+    if t_lower.startswith("inr/good") or t_lower.startswith("₹/good") or t_lower.startswith("rs/good") or t_lower.startswith("inr per good"):
+        return "INR/good unit"
+    if t_lower.startswith("kg co2e/good") or t_lower.startswith("kg co2e / good") or t_lower.startswith("kg/good") or t_lower.startswith("kg co2e per good"):
+        return "kg CO2e/good unit"
+    if t_lower.startswith("kg co2e/unit") or t_lower.startswith("kg co2e / unit") or t_lower.startswith("kg/unit"):
+        return "kg CO2e/unit"
     if t_lower.startswith("kwh/board"):
         return "kWh/board"
-    if t_lower.startswith("kwh/phone"):
+    if t_lower.startswith("kwh/phone") or t_lower.startswith("kwh/assembly"):
         return "kWh/phone"
     if t_lower.startswith("kwh/unit"):
         return "kWh/unit"
@@ -730,16 +776,26 @@ def _infer_metric_from_sentence(
     else:
         local_window = s_lower
 
-    # 1. SEC metrics (kWh per unit/board/phone)
-    if unit in ("kWh/board", "kWh/phone", "kWh/unit"):
+    # 1. Cost intensity claims
+    if unit in ("INR/good unit", "INR/unit") or "cost intensity" in local_window:
+        return "cost_intensity"
+
+    # 2. Emissions intensity claims
+    if unit in ("kg CO2e/good unit", "kg CO2e/unit") or "emissions intensity" in local_window:
+        return "emissions_intensity"
+
+    # 3. SEC / Electricity intensity metrics (kWh per unit/board/phone/good unit)
+    if unit in ("kWh/board", "kWh/phone", "kWh/unit", "kWh/good unit"):
         return "sec"
     if "per_board" in local_window or "kwh/board" in local_window:
         return "sec"
-    if "per_phone" in local_window or "kwh/phone" in local_window:
+    if "per_phone" in local_window or "kwh/phone" in local_window or "per_assembly" in local_window:
+        return "sec"
+    if "per_good_unit" in local_window or "kwh/good" in local_window:
         return "sec"
     if "per_unit" in local_window or "kwh/unit" in local_window:
         return "sec"
-    if any(w in local_window for w in ("sec", "specific energy")):
+    if any(w in local_window for w in ("sec", "specific energy", "electricity intensity")):
         return "sec"
 
     # 2. Rate / Percentage claims (DEF-03)
@@ -1051,6 +1107,18 @@ def _categories_compatible(cat1: str, cat2: str) -> bool:
 
     # Cumulative energy and peak energy must NEVER match each other (DEF-04)
     if {cat1, cat2} & {"energy", "peak_energy"}:
+        return False
+
+    # Incompatible intensity and total categories must NEVER match each other
+    if {cat1, cat2} & {"cost", "cost_intensity"} and cat1 != cat2:
+        return False
+    if {cat1, cat2} & {"emissions", "emissions_intensity"} and cat1 != cat2:
+        return False
+    if {cat1, cat2} & {"energy", "sec"} and cat1 != cat2:
+        return False
+    if {cat1, cat2} & {"cost_intensity", "sec"} and cat1 != cat2:
+        return False
+    if {cat1, cat2} & {"emissions_intensity", "sec"} and cat1 != cat2:
         return False
 
     # Production quantity grouping

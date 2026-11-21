@@ -1,6 +1,7 @@
 """Service for daily energy and production report parsing, validation, and database ingestion."""
 
 import csv
+import hashlib
 import io
 import json
 import math
@@ -17,11 +18,14 @@ from sqlalchemy import delete, func, inspect, select, text, tuple_
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.models.pipeline_runs import DailyPipelineRun
 from app.models.source_data import (
+    DatasetFactorAssumption,
     DimProduct,
     DimProductionLine,
     FactEnergyMeterHourly,
     FactHourlyProduction,
+    FactSourceRevision,
 )
 from app.models.upload_history import UploadHistory
 from app.schemas.daily_reports import (
@@ -40,6 +44,8 @@ MAX_ROW_COUNT = getattr(_settings, "MAX_UPLOAD_ROWS", 50000)
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 
 # Approved Schema Column Specifications
+STAGING_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "staged_uploads")
+
 ENERGY_REQUIRED_COLUMNS = [
     "timestamp",
     "date",
@@ -1821,6 +1827,9 @@ def validate_report_file(
         summary.coverage_status = "PARTIAL"
         summary.limitations = ["Report rejected due to source schema mismatches."]
 
+    if detected_dates and summary:
+        summary.detected_date = detected_dates[0]
+
     return {
         "filename": filename,
         "file_format": file_format,
@@ -1835,6 +1844,169 @@ def validate_report_file(
     }
 
 
+def _serialize_row_values(record: Any) -> Dict[str, Any]:
+    """Serialize fact record or dictionary into exact representation without precision loss."""
+    if isinstance(record, dict):
+        d = dict(record)
+    else:
+        cols = [c.name for c in inspect(record.__class__).columns]
+        d = {col: getattr(record, col) for col in cols}
+
+    out = {}
+    for k, v in d.items():
+        if isinstance(v, Decimal):
+            out[k] = str(v)
+        elif isinstance(v, (datetime, date, time)):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return out
+
+
+def stage_validated_report(
+    reporting_date: date,
+    report_type: str,
+    filename: str,
+    file_bytes: bytes,
+    upload_id: str,
+    summary: Any,
+) -> Dict[str, Any]:
+    """
+    Persist validated file bytes and metadata to local staging for subsequent confirmation.
+    Binds staged files specifically to upload_id and content hash to prevent cross-upload collisions.
+    """
+    os.makedirs(STAGING_DIR, exist_ok=True)
+    date_str = reporting_date.isoformat()
+    r_type = report_type.upper()
+    content_hash = hashlib.sha256(file_bytes).hexdigest()
+
+    # Upload-bound paths
+    bound_bin_path = os.path.join(STAGING_DIR, f"{date_str}_{r_type}_{upload_id}.bin")
+    bound_meta_path = os.path.join(STAGING_DIR, f"{date_str}_{r_type}_{upload_id}.meta.json")
+
+    # Legacy pointer paths
+    legacy_bin_path = os.path.join(STAGING_DIR, f"{date_str}_{r_type}.bin")
+    legacy_meta_path = os.path.join(STAGING_DIR, f"{date_str}_{r_type}.meta.json")
+
+    for bp in (bound_bin_path, legacy_bin_path):
+        with open(bp, "wb") as f:
+            f.write(file_bytes)
+
+    valid_rows = summary.valid_rows if hasattr(summary, "valid_rows") else getattr(summary, "get", lambda k, d: d)("valid_rows", 0)
+    rejected_rows = summary.rejected_rows if hasattr(summary, "rejected_rows") else getattr(summary, "get", lambda k, d: d)("rejected_rows", 0)
+    duplicate_rows = summary.duplicate_rows if hasattr(summary, "duplicate_rows") else getattr(summary, "get", lambda k, d: d)("duplicate_rows", 0)
+
+    meta = {
+        "upload_id": upload_id,
+        "filename": os.path.basename(filename),
+        "report_type": r_type,
+        "reporting_date": date_str,
+        "file_size_bytes": len(file_bytes),
+        "content_hash": content_hash,
+        "valid_rows": valid_rows,
+        "rejected_rows": rejected_rows,
+        "duplicate_rows": duplicate_rows,
+        "staged_at": datetime.utcnow().isoformat(),
+        "status": "VALIDATED",
+    }
+    for mp in (bound_meta_path, legacy_meta_path):
+        with open(mp, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+    return meta
+
+
+def get_staged_report(
+    reporting_date: date,
+    report_type: str,
+    upload_id: Optional[str] = None,
+) -> Optional[Tuple[bytes, Dict[str, Any]]]:
+    """
+    Retrieve staged file bytes and metadata if previously validated.
+    Binds strictly to upload_id when provided, preventing collisions across multiple validations.
+    """
+    date_str = reporting_date.isoformat()
+    r_type = report_type.upper()
+
+    # 1. Try upload-bound file first if upload_id supplied
+    if upload_id and str(upload_id).strip():
+        bound_bin = os.path.join(STAGING_DIR, f"{date_str}_{r_type}_{upload_id}.bin")
+        bound_meta = os.path.join(STAGING_DIR, f"{date_str}_{r_type}_{upload_id}.meta.json")
+        if os.path.exists(bound_bin) and os.path.exists(bound_meta):
+            try:
+                with open(bound_bin, "rb") as f:
+                    content = f.read()
+                with open(bound_meta, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                return content, meta
+            except Exception:
+                pass
+
+    # 2. Fall back to date-type staging path
+    legacy_bin = os.path.join(STAGING_DIR, f"{date_str}_{r_type}.bin")
+    legacy_meta = os.path.join(STAGING_DIR, f"{date_str}_{r_type}.meta.json")
+    if os.path.exists(legacy_bin) and os.path.exists(legacy_meta):
+        try:
+            with open(legacy_bin, "rb") as f:
+                content = f.read()
+            with open(legacy_meta, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            return content, meta
+        except Exception:
+            return None
+    return None
+
+
+def clear_staged_report(
+    reporting_date: date,
+    report_type: str,
+    upload_id: Optional[str] = None,
+) -> None:
+    """Safely remove staged files after successful transactional ingestion."""
+    date_str = reporting_date.isoformat()
+    r_type = report_type.upper()
+
+    paths_to_remove = []
+    if upload_id and str(upload_id).strip():
+        paths_to_remove.extend([
+            os.path.join(STAGING_DIR, f"{date_str}_{r_type}_{upload_id}.bin"),
+            os.path.join(STAGING_DIR, f"{date_str}_{r_type}_{upload_id}.meta.json"),
+        ])
+    paths_to_remove.extend([
+        os.path.join(STAGING_DIR, f"{date_str}_{r_type}.bin"),
+        os.path.join(STAGING_DIR, f"{date_str}_{r_type}.meta.json"),
+    ])
+
+    for p in paths_to_remove:
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+
+
+def list_staged_reports_for_date(reporting_date: date) -> List[Dict[str, Any]]:
+    """List all staged reports available for a given reporting date."""
+    date_str = reporting_date.isoformat()
+    staged = []
+    if not os.path.exists(STAGING_DIR):
+        return staged
+
+    seen_uploads = set()
+    for fname in os.listdir(STAGING_DIR):
+        if fname.startswith(date_str) and fname.endswith(".meta.json"):
+            meta_path = os.path.join(STAGING_DIR, fname)
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                uid = meta.get("upload_id")
+                if uid and uid not in seen_uploads:
+                    seen_uploads.add(uid)
+                    staged.append(meta)
+            except Exception:
+                pass
+    return staged
+
+
 def ingest_validated_report(
     session: Session,
     filename: str,
@@ -1843,10 +2015,13 @@ def ingest_validated_report(
     reporting_date: date,
     mode: str = "INCREMENTAL",
     sheet_name: Optional[str] = None,
+    upload_id: Optional[str] = None,
+    plant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Ingest approved daily report into fact tables transactionally and update audit log.
-    Supports INCREMENTAL (skip existing duplicates) and OVERWRITE_CORRECTION (replace existing for date).
+    Preserves immutable source revisions before modifying current facts on overwrite correction.
+    Returns clean no-change result on valid duplicate incremental uploads.
     """
     if mode not in {"INCREMENTAL", "OVERWRITE_CORRECTION"}:
         raise ValueError(f"Invalid ingestion mode: '{mode}'. Must be INCREMENTAL or OVERWRITE_CORRECTION.")
@@ -1866,9 +2041,69 @@ def ingest_validated_report(
     summary: ValidationSummary = val_result["summary"]
 
     if not valid_records:
+        if mode == "INCREMENTAL" and summary.duplicate_rows > 0:
+            clean_upload_id = upload_id or f"UPL-{reporting_date.strftime('%Y%m%d')}-DUP-{uuid.uuid4().hex[:6].upper()}"
+            audit_dict = {
+                "upload_id": clean_upload_id,
+                "ingested_at": datetime.utcnow().isoformat(),
+                "imported_records": 0,
+                "duplicate_records": summary.duplicate_rows,
+                "rejected_count": summary.rejected_rows,
+                "mode": mode,
+                "is_duplicate_no_change": True,
+            }
+            history_entry = UploadHistory(
+                upload_id=clean_upload_id,
+                uploaded_at=datetime.utcnow(),
+                report_type=report_type,
+                filename=os.path.basename(filename),
+                file_format=val_result.get("file_format", "CSV"),
+                sheet_name=sheet_name,
+                reporting_date=reporting_date,
+                file_size_bytes=len(file_bytes),
+                total_rows=summary.total_rows,
+                valid_rows=0,
+                rejected_rows=summary.rejected_rows,
+                duplicate_rows=summary.duplicate_rows,
+                status="COMPLETED",
+                mode=mode,
+                audit_details=json.dumps(audit_dict),
+            )
+            session.add(history_entry)
+            session.commit()
+
+            # Clean no-change result: all rows exist already; do not fail or trigger downstream
+            return {
+                "upload_id": clean_upload_id,
+                "status": "COMPLETED",
+                "report_type": report_type,
+                "reporting_date": reporting_date,
+                "total_rows": summary.total_rows,
+                "imported_rows": 0,
+                "duplicate_rows": summary.duplicate_rows,
+                "rejected_rows": summary.rejected_rows,
+                "mode": mode,
+                "message": (
+                    f"Valid incremental report processed: all {summary.duplicate_rows} records already exist "
+                    f"in PostgreSQL; skipped as duplicates without modifying existing facts."
+                ),
+                "replaced_rows": 0,
+                "affected_scope": {
+                    "report_type": report_type,
+                    "reporting_date": reporting_date.isoformat(),
+                    "plants": summary.plants_found,
+                    "meters": summary.meters_found if hasattr(summary, "meters_found") else [],
+                    "lines": summary.lines_found if hasattr(summary, "lines_found") else [],
+                    "overwritten_records": 0,
+                    "duplicate_records": summary.duplicate_rows,
+                    "coverage_status": summary.coverage_status,
+                    "upload_id": clean_upload_id,
+                },
+            }
         raise ValueError("Cannot ingest report: 0 valid records found to import.")
 
-    upload_id = f"UPL-{reporting_date.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+    if not upload_id:
+        upload_id = f"UPL-{reporting_date.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
     file_format = val_result["file_format"]
     imported_count = len(valid_records)
     overwritten_count = 0
@@ -1903,8 +2138,9 @@ def ingest_validated_report(
 
         energy_superseded: Dict[str, int] = {}
         prod_superseded: Dict[str, int] = {}
+        revisions_to_add: List[FactSourceRevision] = []
 
-        # Atomic database transaction with strictly scoped key deletion for historical corrections
+        # Atomic database transaction with strictly scoped key preservation for historical corrections
         if report_type == "ENERGY":
             if mode == "OVERWRITE_CORRECTION":
                 # Replacement scope strictly restricted to incoming (timestamp, plant_id, meter_id) keys
@@ -1917,6 +2153,51 @@ def ingest_validated_report(
                     chunk_size = 500
                     for i in range(0, len(replacement_keys), chunk_size):
                         chunk = replacement_keys[i : i + chunk_size]
+
+                        # 1. Fetch outgoing current facts to preserve their revisions BEFORE deletion
+                        existing_q = select(FactEnergyMeterHourly).where(
+                            FactEnergyMeterHourly.date == reporting_date,
+                            tuple_(
+                                FactEnergyMeterHourly.timestamp,
+                                FactEnergyMeterHourly.plant_id,
+                                FactEnergyMeterHourly.meter_id,
+                            ).in_(chunk),
+                        )
+                        existing_rows = session.execute(existing_q).scalars().all()
+
+                        for row in existing_rows:
+                            bkey = f"{row.plant_id}:{row.meter_id}:{row.timestamp.isoformat()}"
+                            # Check if active revision already exists
+                            curr_rev = session.execute(
+                                select(FactSourceRevision).where(
+                                    FactSourceRevision.source_table == "fact_energy_meter_hourly",
+                                    FactSourceRevision.business_key == bkey,
+                                    FactSourceRevision.is_current == True,
+                                )
+                            ).scalars().first()
+
+                            if curr_rev:
+                                curr_rev.is_current = False
+                            else:
+                                # Snapshot outgoing revision before change
+                                outgoing_rev = FactSourceRevision(
+                                    revision_id=f"REV-ENG-HIST-{uuid.uuid4().hex[:12].upper()}",
+                                    source_table="fact_energy_meter_hourly",
+                                    source_record_id=row.meter_reading_id,
+                                    business_key=bkey,
+                                    plant_id=row.plant_id,
+                                    upload_id=row.upload_id,
+                                    revision_timestamp=row.ingested_at or ingested_at,
+                                    source_values_json=json.dumps(_serialize_row_values(row)),
+                                    factor_version_id="FAC-TARIFF-DATASET-8.25",
+                                    is_current=False,
+                                )
+                                revisions_to_add.append(outgoing_rev)
+
+                            key = row.upload_id if row.upload_id is not None else "__LEGACY__"
+                            energy_superseded[key] = energy_superseded.get(key, 0) + 1
+
+                        # Delete current facts matching the keys
                         del_stmt = (
                             delete(FactEnergyMeterHourly)
                             .where(
@@ -1927,13 +2208,31 @@ def ingest_validated_report(
                                     FactEnergyMeterHourly.meter_id,
                                 ).in_(chunk),
                             )
-                            .returning(FactEnergyMeterHourly.upload_id)
                         )
-                        del_rows = session.execute(del_stmt).scalars().all()
-                        overwritten_count += len(del_rows)
-                        for orig_uid in del_rows:
-                            key = orig_uid if orig_uid is not None else "__LEGACY__"
-                            energy_superseded[key] = energy_superseded.get(key, 0) + 1
+                        session.execute(del_stmt)
+                        overwritten_count += len(existing_rows)
+
+            # Create immutable source revision for each incoming energy fact
+            for r in valid_records:
+                ts_iso = r["timestamp"].isoformat() if hasattr(r["timestamp"], "isoformat") else str(r["timestamp"])
+                bkey = f"{r['plant_id']}:{r['meter_id']}:{ts_iso}"
+                incoming_rev = FactSourceRevision(
+                    revision_id=f"REV-ENG-{uuid.uuid4().hex[:12].upper()}",
+                    source_table="fact_energy_meter_hourly",
+                    source_record_id=r["meter_reading_id"],
+                    business_key=bkey,
+                    plant_id=r["plant_id"],
+                    upload_id=upload_id,
+                    revision_timestamp=ingested_at,
+                    source_values_json=json.dumps(_serialize_row_values(r)),
+                    factor_version_id="FAC-TARIFF-DATASET-8.25",
+                    is_current=True,
+                )
+                revisions_to_add.append(incoming_rev)
+
+            if revisions_to_add:
+                session.add_all(revisions_to_add)
+                session.flush()
 
             # Bulk insert valid mappings
             session.bulk_insert_mappings(FactEnergyMeterHourly, valid_records)
@@ -1950,6 +2249,49 @@ def ingest_validated_report(
                     chunk_size = 500
                     for i in range(0, len(replacement_keys), chunk_size):
                         chunk = replacement_keys[i : i + chunk_size]
+
+                        # 1. Fetch outgoing current facts to preserve their revisions BEFORE deletion
+                        existing_q = select(FactHourlyProduction).where(
+                            FactHourlyProduction.event_date == reporting_date,
+                            tuple_(
+                                FactHourlyProduction.event_ts,
+                                FactHourlyProduction.plant_id,
+                                FactHourlyProduction.line_id,
+                            ).in_(chunk),
+                        )
+                        existing_rows = session.execute(existing_q).scalars().all()
+
+                        for row in existing_rows:
+                            ts_iso = row.event_ts.isoformat() if hasattr(row.event_ts, "isoformat") else str(row.event_ts)
+                            bkey = f"{row.plant_id}:{row.line_id}:{ts_iso}"
+                            curr_rev = session.execute(
+                                select(FactSourceRevision).where(
+                                    FactSourceRevision.source_table == "fact_hourly_production",
+                                    FactSourceRevision.business_key == bkey,
+                                    FactSourceRevision.is_current == True,
+                                )
+                            ).scalars().first()
+
+                            if curr_rev:
+                                curr_rev.is_current = False
+                            else:
+                                outgoing_rev = FactSourceRevision(
+                                    revision_id=f"REV-PRD-HIST-{uuid.uuid4().hex[:12].upper()}",
+                                    source_table="fact_hourly_production",
+                                    source_record_id=row.event_id,
+                                    business_key=bkey,
+                                    plant_id=row.plant_id,
+                                    upload_id=row.upload_id,
+                                    revision_timestamp=row.ingested_at or ingested_at,
+                                    source_values_json=json.dumps(_serialize_row_values(row)),
+                                    factor_version_id=None,
+                                    is_current=False,
+                                )
+                                revisions_to_add.append(outgoing_rev)
+
+                            key = row.upload_id if row.upload_id is not None else "__LEGACY__"
+                            prod_superseded[key] = prod_superseded.get(key, 0) + 1
+
                         del_stmt = (
                             delete(FactHourlyProduction)
                             .where(
@@ -1960,15 +2302,40 @@ def ingest_validated_report(
                                     FactHourlyProduction.line_id,
                                 ).in_(chunk),
                             )
-                            .returning(FactHourlyProduction.upload_id)
                         )
-                        del_rows = session.execute(del_stmt).scalars().all()
-                        overwritten_count += len(del_rows)
-                        for orig_uid in del_rows:
-                            key = orig_uid if orig_uid is not None else "__LEGACY__"
-                            prod_superseded[key] = prod_superseded.get(key, 0) + 1
+                        session.execute(del_stmt)
+                        overwritten_count += len(existing_rows)
+
+            for r in valid_records:
+                ts_iso = r["event_ts"].isoformat() if hasattr(r["event_ts"], "isoformat") else str(r["event_ts"])
+                bkey = f"{r['plant_id']}:{r['line_id']}:{ts_iso}"
+                incoming_rev = FactSourceRevision(
+                    revision_id=f"REV-PRD-{uuid.uuid4().hex[:12].upper()}",
+                    source_table="fact_hourly_production",
+                    source_record_id=r["event_id"],
+                    business_key=bkey,
+                    plant_id=r["plant_id"],
+                    upload_id=upload_id,
+                    revision_timestamp=ingested_at,
+                    source_values_json=json.dumps(_serialize_row_values(r)),
+                    factor_version_id=None,
+                    is_current=True,
+                )
+                revisions_to_add.append(incoming_rev)
+
+            if revisions_to_add:
+                session.add_all(revisions_to_add)
+                session.flush()
 
             session.bulk_insert_mappings(FactHourlyProduction, valid_records)
+
+        # Invalidate any affected downstream pipeline runs for this reporting date and plant
+        if summary.plants_found:
+            session.query(DailyPipelineRun).filter(
+                DailyPipelineRun.reporting_date == reporting_date,
+                DailyPipelineRun.plant_id.in_(summary.plants_found),
+                DailyPipelineRun.is_current == True,
+            ).update({"is_current": False, "status": "STALE"}, synchronize_session=False)
 
         # Structure exact supersession attribution metadata
         superseded_batches: Dict[str, int] = {}

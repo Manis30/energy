@@ -1,10 +1,13 @@
 """API endpoints for daily report upload, validation, database ingestion, and audit history."""
 
+import json
+import logging
 import os
+import uuid
 from datetime import date
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db_session
@@ -17,16 +20,21 @@ from app.schemas.daily_reports import (
     InspectResponse,
     UploadHistoryItem,
     ValidateReportResponse,
+    VerifyIngestionResponse,
 )
 from app.services.daily_report_service import (
+    clear_staged_report,
     generate_template_csv,
     get_daily_report_coverage,
+    get_staged_report,
     ingest_validated_report,
     inspect_file,
+    stage_validated_report,
     validate_report_file,
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_SIZE_MB = get_settings().MAX_UPLOAD_SIZE_MB
 MAX_FILE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
@@ -103,6 +111,20 @@ async def validate_report(
             confirmed_date=confirmed_date,
             mode=norm_mode,
         )
+        target_date = confirmed_date or (result["summary"].confirmed_date or result["summary"].detected_date)
+        resolved_type = result["summary"].report_type
+        if target_date and resolved_type:
+            gen_upload_id = f"UPL-{target_date.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+            stage_validated_report(
+                reporting_date=target_date,
+                report_type=resolved_type,
+                filename=safe_filename,
+                file_bytes=content,
+                upload_id=gen_upload_id,
+                summary=result["summary"],
+            )
+            result["upload_id"] = gen_upload_id
+
         return ValidateReportResponse(**result)
     except HTTPException:
         raise
@@ -122,16 +144,35 @@ async def validate_report(
     description="Transactionally ingests validated records into fact tables. Supports INCREMENTAL (skip duplicates) and OVERWRITE_CORRECTION (replace existing date records).",
 )
 async def ingest_report(
-    file: UploadFile = File(..., description="Validated report file to ingest"),
+    file: Optional[UploadFile] = File(None, description="Validated report file to ingest"),
     report_type: str = Form(..., description="'ENERGY' or 'PRODUCTION'"),
     reporting_date: date = Form(..., description="Confirmed reporting date (YYYY-MM-DD)"),
+    plant_id: Optional[str] = Form(None, description="Plant identifier"),
+    upload_id: Optional[str] = Form(None, description="Staged or client upload ID"),
     mode: str = Form("INCREMENTAL", description="'INCREMENTAL' or 'OVERWRITE_CORRECTION'"),
     sheet_name: Optional[str] = Form(None, description="Worksheet name if multi-sheet Excel"),
     db: Session = Depends(get_db_session),
 ) -> IngestReportResponse:
     try:
-        content = await read_uploaded_file_safely(file)
-        safe_filename = os.path.basename(file.filename or "upload")
+        content = None
+        safe_filename = None
+        if file and file.filename:
+            content = await read_uploaded_file_safely(file)
+            safe_filename = os.path.basename(file.filename)
+
+        if not content:
+            staged = get_staged_report(reporting_date, report_type.upper(), upload_id=upload_id)
+            if staged:
+                content, staged_meta = staged
+                safe_filename = staged_meta.get("filename", f"{report_type.lower()}_{reporting_date.isoformat()}.csv")
+                if not upload_id:
+                    upload_id = staged_meta.get("upload_id")
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"No upload file provided and no staged file found for {reporting_date} ({report_type}). Please validate the report file first.",
+                )
+
         result = ingest_validated_report(
             session=db,
             filename=safe_filename,
@@ -140,7 +181,10 @@ async def ingest_report(
             reporting_date=reporting_date,
             mode=mode.upper(),
             sheet_name=sheet_name,
+            upload_id=upload_id,
+            plant_id=plant_id,
         )
+        clear_staged_report(reporting_date, report_type.upper(), upload_id=upload_id)
         return IngestReportResponse(**result)
     except HTTPException:
         raise
@@ -277,6 +321,7 @@ def update_pipeline_status_endpoint(
     stage_id: str = Form(..., description="Pipeline stage identifier"),
     status: str = Form(..., description="'NOT_STARTED', 'IN_PROGRESS', 'COMPLETED', 'COMPLETED_WITH_WARNINGS', 'FAILED', 'BLOCKED'"),
     summary: str = Form(..., description="Human-readable stage execution summary"),
+    details: Optional[str] = Form(None, description="Optional JSON serialized stage details"),
     db: Session = Depends(get_db_session),
 ):
     from app.services.daily_pipeline_service import record_pipeline_stage_state, get_daily_pipeline_status, STAGE_KEYS
@@ -310,13 +355,100 @@ def update_pipeline_status_endpoint(
                 detail=f"Cannot mark database_ingestion as COMPLETED: zero records exist in PostgreSQL for {reporting_date}.",
             )
 
+    parsed_details = None
+    if details:
+        try:
+            parsed_details = json.loads(details)
+        except Exception:
+            parsed_details = {"raw": details}
+
     record_pipeline_stage_state(
         reporting_date=reporting_date,
         stage_id=stage_id,
         status=status.upper(),
         summary=summary,
+        details=parsed_details,
     )
     return get_daily_pipeline_status(session=db, reporting_date=reporting_date)
+
+
+@router.get(
+    "/verify-ingestion",
+    response_model=VerifyIngestionResponse,
+    summary="Verify fact table records and upload ID linkage in PostgreSQL",
+    description="Confirms that fact records exist for the date and are linked to upload history batches.",
+)
+def verify_ingested_records(
+    reporting_date: date = Query(..., description="Confirmed reporting date (YYYY-MM-DD)"),
+    plant_id: Optional[str] = Query(None, description="Optional plant filter"),
+    upload_id: Optional[str] = Query(None, description="Specific upload ID to verify"),
+    db: Session = Depends(get_db_session),
+) -> VerifyIngestionResponse:
+    from app.models.source_data import FactEnergyMeterHourly, FactHourlyProduction
+    from app.models.upload_history import UploadHistory
+
+    energy_filters = [FactEnergyMeterHourly.date == reporting_date]
+    prod_filters = [FactHourlyProduction.event_date == reporting_date]
+    if plant_id:
+        energy_filters.append(FactEnergyMeterHourly.plant_id == plant_id)
+        prod_filters.append(FactHourlyProduction.plant_id == plant_id)
+
+    energy_count = db.query(func.count(FactEnergyMeterHourly.meter_reading_id)).filter(*energy_filters).scalar() or 0
+    prod_count = db.query(func.count(FactHourlyProduction.event_id)).filter(*prod_filters).scalar() or 0
+
+    uploads_stmt = select(UploadHistory).filter(UploadHistory.reporting_date == reporting_date)
+    if upload_id:
+        uploads_stmt = uploads_stmt.filter(UploadHistory.upload_id == upload_id)
+    uploads = db.execute(uploads_stmt).scalars().all()
+    upload_ids = [u.upload_id for u in uploads]
+
+    if upload_ids:
+        linked_energy = db.query(func.count(FactEnergyMeterHourly.meter_reading_id)).filter(
+            *energy_filters, FactEnergyMeterHourly.upload_id.in_(upload_ids)
+        ).scalar() or 0
+        linked_prod = db.query(func.count(FactHourlyProduction.event_id)).filter(
+            *prod_filters, FactHourlyProduction.upload_id.in_(upload_ids)
+        ).scalar() or 0
+    else:
+        linked_energy = 0
+        linked_prod = 0
+
+    verified = (energy_count > 0 or prod_count > 0)
+    if upload_id:
+        verified = (linked_energy > 0 or linked_prod > 0)
+
+    msg = f"PostgreSQL verification: {energy_count} energy rows ({linked_energy} linked), {prod_count} production rows ({linked_prod} linked) for {reporting_date}."
+    return VerifyIngestionResponse(
+        reporting_date=reporting_date,
+        plant_id=plant_id,
+        upload_id=upload_id,
+        verified=verified,
+        energy_records=energy_count,
+        production_records=prod_count,
+        linked_energy_records=linked_energy,
+        linked_production_records=linked_prod,
+        upload_ids=upload_ids,
+        message=msg,
+    )
+
+
+@router.get(
+    "/opportunities",
+    summary="List prioritized energy-saving opportunities for reporting date",
+    description="Surfaces and ranks energy-saving trial candidates and evidence-gathering opportunities following daily operations pipeline execution.",
+)
+def get_daily_opportunities_endpoint(
+    reporting_date: date = Query(..., description="Reporting date (YYYY-MM-DD)"),
+    plant_id: str = Query("IN-TN-01", description="Plant identifier"),
+    db: Session = Depends(get_db_session),
+):
+    from app.services.opportunity_service import get_energy_saving_opportunities
+    try:
+        return get_energy_saving_opportunities(session=db, reporting_date=reporting_date, plant_id=plant_id)
+    except Exception as e:
+        logger.exception("Failed to retrieve opportunities: %s", str(e))
+        return []
+
 
 
 

@@ -67,6 +67,9 @@ class OperationalFinding(Base):
     current_baseline_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4), nullable=True)
     current_deviation_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     current_explanation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    latest_qualification_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    latest_trust_level: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    latest_confidence: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
 
     # Lifecycle workflow fields
     acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False), nullable=True)
@@ -163,6 +166,19 @@ class FindingOccurrence(Base):
         index=True,
     )
     detector_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    revision_id: Mapped[Optional[str]] = mapped_column(
+        String(60),
+        ForeignKey("fact_source_revisions.revision_id", name="fk_finding_occ_rev_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Evidence quality & qualification attributes
+    qualification_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    trust_level: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    confidence: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    reason_codes: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    comparison_window: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
@@ -175,6 +191,7 @@ class FindingOccurrence(Base):
         Index("idx_occ_finding_ts", "finding_id", "occurrence_ts"),
         Index("idx_occ_source_record", "source_table", "source_record_id"),
         Index("idx_occ_upload_id", "upload_id"),
+        Index("idx_occ_revision_id", "revision_id"),
     )
 
     finding: Mapped["OperationalFinding"] = relationship(
@@ -184,6 +201,49 @@ class FindingOccurrence(Base):
     upload: Mapped[Optional["UploadHistory"]] = relationship(
         "UploadHistory",
         foreign_keys=[upload_id],
+    )
+    sources: Mapped[List["FindingOccurrenceSource"]] = relationship(
+        "FindingOccurrenceSource",
+        back_populates="occurrence",
+        cascade="all, delete-orphan",
+    )
+
+
+class FindingOccurrenceSource(Base):
+    """
+    Pinned source telemetry record linking an occurrence to a specific immutable revision.
+    Supports multi-source findings with explicit roles (e.g. energy and production rows).
+    """
+
+    __tablename__ = "finding_occurrence_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    occurrence_id: Mapped[str] = mapped_column(
+        String(60),
+        ForeignKey("finding_occurrences.occurrence_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    revision_id: Mapped[Optional[str]] = mapped_column(
+        String(60),
+        ForeignKey("fact_source_revisions.revision_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_table: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_record_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    role: Mapped[str] = mapped_column(String(50), nullable=False)
+    upload_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    __table_args__ = (
+        Index("idx_fos_occurrence_id", "occurrence_id"),
+        Index("idx_fos_revision_id", "revision_id"),
+        Index("idx_fos_source_rec", "source_table", "source_record_id"),
+    )
+
+    occurrence: Mapped["FindingOccurrence"] = relationship(
+        "FindingOccurrence",
+        back_populates="sources",
     )
 
 

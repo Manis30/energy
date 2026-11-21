@@ -65,6 +65,10 @@ def _to_summary_dict(f: OperationalFinding) -> Dict[str, Any]:
         "latest_upload_id": None,
         "latest_detector_version": None,
         "latest_lineage_status": None,
+        "latest_qualification_status": getattr(f, "latest_qualification_status", None),
+        "latest_trust_level": getattr(f, "latest_trust_level", None),
+        "evidence_classification": getattr(f, "latest_trust_level", None) or getattr(f, "latest_qualification_status", None),
+        "latest_confidence": getattr(f, "latest_confidence", None),
     }
     if hasattr(f, "occurrences") and f.occurrences:
         latest = f.occurrences[0]
@@ -120,6 +124,28 @@ def _to_detail_dict(f: OperationalFinding) -> Dict[str, Any]:
             lineage_status = "UNAVAILABLE"
             source_records = []
 
+        r_codes_list = []
+        raw_codes = getattr(occ, "reason_codes", None)
+        if raw_codes:
+            if isinstance(raw_codes, list):
+                r_codes_list = [str(x).strip() for x in raw_codes if str(x).strip()]
+            elif isinstance(raw_codes, str):
+                trimmed = raw_codes.strip()
+                if trimmed:
+                    try:
+                        parsed_r = json.loads(trimmed)
+                        if isinstance(parsed_r, list):
+                            r_codes_list = [str(x).strip() for x in parsed_r if str(x).strip()]
+                        elif isinstance(parsed_r, str) and "," in parsed_r:
+                            r_codes_list = [x.strip() for x in parsed_r.split(",") if x.strip()]
+                        elif str(parsed_r).strip():
+                            r_codes_list = [str(parsed_r).strip()]
+                    except Exception:
+                        if "," in trimmed:
+                            r_codes_list = [x.strip() for x in trimmed.split(",") if x.strip()]
+                        else:
+                            r_codes_list = [trimmed]
+
         occurrences_data.append({
             "occurrence_id": occ.occurrence_id,
             "finding_id": occ.finding_id,
@@ -135,6 +161,13 @@ def _to_detail_dict(f: OperationalFinding) -> Dict[str, Any]:
             "source_record_id": occ.source_record_id,
             "upload_id": occ.upload_id,
             "detector_version": occ.detector_version,
+            "revision_id": getattr(occ, "revision_id", None),
+            "qualification_status": getattr(occ, "qualification_status", None),
+            "trust_level": getattr(occ, "trust_level", None),
+            "evidence_classification": getattr(occ, "trust_level", None) or getattr(occ, "qualification_status", None),
+            "confidence": getattr(occ, "confidence", None),
+            "reason_codes": r_codes_list,
+            "comparison_window": getattr(occ, "comparison_window", None),
             "lineage_status": lineage_status,
             "source_records": source_records,
         })
@@ -484,3 +517,30 @@ def sync_findings_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to synchronize findings from anomaly detection: {str(e)}",
         )
+
+
+@router.post(
+    "/{finding_id}/investigate-ai",
+    summary="Investigate operational finding with AI Agent",
+    description="Invokes IndustrialEnergyAgent to analyze occurrence readings, matched production, downtime, comparable stoppages, and equipment evidence across four structured sections.",
+)
+def investigate_finding_endpoint(
+    finding_id: str,
+    occurrence_id: Optional[str] = Query(None, description="Optional occurrence ID to investigate"),
+    caller_attribution: Optional[str] = Query(None, description="Caller attribution"),
+    db: Session = Depends(get_db_session),
+):
+    from app.services.finding_ai_investigation_service import investigate_finding_with_ai
+    try:
+        return investigate_finding_with_ai(
+            session=db,
+            finding_id=finding_id,
+            occurrence_id=occurrence_id,
+            caller_attribution=caller_attribution,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+    except Exception as e:
+        logger.exception("AI Investigation error: %s", str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"AI Investigation failed: {str(e)}")
+

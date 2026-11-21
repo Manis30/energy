@@ -123,7 +123,18 @@ class DomoClient:
 
     def _get_client(self) -> httpx.AsyncClient:
         """Get or initialize the underlying httpx.AsyncClient."""
-        if self._client is None or self._client.is_closed:
+        need_new = self._client is None or self._client.is_closed
+        if not need_new and not self._external_client:
+            try:
+                current_loop = asyncio.get_running_loop()
+                transport = getattr(self._client, "_transport", None)
+                loop = getattr(transport, "_loop", None)
+                if loop is not None and (loop.is_closed() or loop != current_loop):
+                    need_new = True
+            except Exception:
+                pass
+
+        if need_new and not self._external_client:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self.timeout_seconds),
                 headers={
@@ -195,6 +206,13 @@ class DomoClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+
+        if isinstance(prompt, DomoTextGenerationRequest):
+            req_obj = prompt
+            prompt = req_obj.input
+            target_model = req_obj.model or target_model
+            temperature = req_obj.temperature
+            session_id = req_obj.session_id or session_id
 
         # Request payload conforming to Domo text generation contract
         payload: Dict[str, Any] = {

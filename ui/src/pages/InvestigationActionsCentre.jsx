@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { findingsApi } from '../services/findingsApi';
 import { recommendationsApi } from '../services/recommendationsApi';
 import { anomalyApi } from '../services/anomalyApi';
-import { formatDateTime, formatNumber } from '../utils/formatters';
+import { formatDateTime, formatNumber, formatFindingTitle } from '../utils/formatters';
 
 // Provenance components
 import {
@@ -18,6 +18,9 @@ import StatusModal from './recommendations/StatusModal';
 import GenerateModal from './recommendations/GenerateModal';
 import RecommendationDrawer from './recommendations/RecommendationDrawer';
 import ActionsTrackerTable from './recommendations/ActionsTrackerTable';
+import RecommendationsDirectoryTable from './recommendations/RecommendationsDirectoryTable';
+import InterventionWorkflowModal from './recommendations/InterventionWorkflowModal';
+import SavingsLedgerSection from './recommendations/SavingsLedgerSection';
 
 // Anomaly Alert List Component
 import AlertList from './anomalies/AlertList';
@@ -63,6 +66,64 @@ function isActionOverdue(action) {
   }
 }
 
+function formatCitationsInText(text, citations, onCitationClick) {
+  if (!text) return '';
+  const regex = /\[([a-zA-Z_]+):([^\]]+)\]/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    const [fullMatch, type, id] = match;
+    const matchIndex = match.index;
+
+    if (matchIndex > lastIndex) {
+      parts.push(text.substring(lastIndex, matchIndex));
+    }
+
+    const citationObj = (citations || []).find((c) => c.id === id || c.id === `${type}:${id}`);
+
+    parts.push(
+      <button
+        key={`${type}-${id}-${matchIndex}`}
+        type="button"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.2rem',
+          padding: '0.15rem 0.45rem',
+          margin: '0 0.2rem',
+          borderRadius: '4px',
+          background: 'rgba(79, 70, 229, 0.1)',
+          color: '#4338ca',
+          fontSize: '0.78rem',
+          fontWeight: 600,
+          border: '1px solid rgba(79, 70, 229, 0.25)',
+          cursor: 'pointer',
+          verticalAlign: 'baseline',
+        }}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onCitationClick?.(type, id, citationObj);
+        }}
+        title={`Click to view record: ${citationObj?.label || `${type}:${id}`}`}
+      >
+        <span style={{ fontSize: '0.7rem' }}>📎</span>
+        {id}
+      </button>
+    );
+
+    lastIndex = matchIndex + fullMatch.length;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return parts;
+}
+
 export default function InvestigationActionsCentre() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -72,10 +133,11 @@ export default function InvestigationActionsCentre() {
   const urlFindingId = searchParams.get('finding_id') || searchParams.get('id');
   const urlRecId = searchParams.get('recommendation_id');
 
-  // Top Navigation Tabs: 'workspace' | 'recommendations' | 'actions' | 'surveillance'
+  // Top Navigation Tabs: 'workspace' | 'recommendations' | 'actions' | 'ledger' | 'surveillance'
   const [activeTab, setActiveTab] = useState(() => {
     if (urlTab === 'recommendations') return 'recommendations';
     if (urlTab === 'actions') return 'actions';
+    if (urlTab === 'ledger' || urlTab === 'savings_ledger') return 'ledger';
     if (urlTab === 'surveillance' || urlTab === 'anomalies') return 'surveillance';
     return 'workspace';
   });
@@ -90,6 +152,10 @@ export default function InvestigationActionsCentre() {
     overdueActions: 0,
     loading: true,
   });
+
+  // Recommendations Directory refresh trigger & matching records counter
+  const [recsRefreshTrigger, setRecsRefreshTrigger] = useState(0);
+  const [recsTotalCount, setRecsTotalCount] = useState(0);
 
   // Global Banner Notification
   const [banner, setBanner] = useState(null);
@@ -113,9 +179,10 @@ export default function InvestigationActionsCentre() {
   // Selected Finding Investigation Workspace State
   const [selectedFindingId, setSelectedFindingId] = useState(urlFindingId || null);
   const [findingDetail, setFindingDetail] = useState(null);
+  const [selectedOccurrenceId, setSelectedOccurrenceId] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState(null);
-  const [detailSubTab, setDetailSubTab] = useState('evidence'); // 'evidence' | 'occurrences' | 'audit' | 'recs'
+  const [detailSubTab, setDetailSubTab] = useState('evidence'); // 'evidence' | 'occurrences' | 'audit' | 'recs' | 'ai_investigation'
   const [expandedOccurrences, setExpandedOccurrences] = useState({});
 
   // Linked Recommendations & Actions for the Selected Finding
@@ -123,6 +190,13 @@ export default function InvestigationActionsCentre() {
   const [recActionsMap, setRecActionsMap] = useState({});
   const [loadingRecs, setLoadingRecs] = useState(false);
   const [generatingRec, setGeneratingRec] = useState(false);
+
+  // AI Investigation State
+  const [aiInvestigation, setAiInvestigation] = useState(null);
+  const [investigatingAi, setInvestigatingAi] = useState(false);
+  const [aiInvestigationError, setAiInvestigationError] = useState(null);
+  const [activeCitationToast, setActiveCitationToast] = useState(null);
+  const [workflowAction, setWorkflowAction] = useState(null);
 
   // Modals & Drawers State
   // 1. Finding Lifecycle Action Modal (Acknowledge, Start Investigation, Add Notes, Resolve, Reopen)
@@ -341,6 +415,10 @@ export default function InvestigationActionsCentre() {
   }, [loadFindings]);
 
   useEffect(() => {
+    setAiInvestigation(null);
+    setAiInvestigationError(null);
+    setActiveCitationToast(null);
+    setSelectedOccurrenceId(null);
     if (selectedFindingId) {
       loadFindingDetailAndRecs(selectedFindingId);
     } else {
@@ -421,6 +499,7 @@ export default function InvestigationActionsCentre() {
       });
       await loadFindingDetailAndRecs(findingId);
       await loadAuthoritativeKpis(plantFilter);
+      setRecsRefreshTrigger((prev) => prev + 1);
     } catch (err) {
       setBanner({
         type: 'error',
@@ -428,6 +507,68 @@ export default function InvestigationActionsCentre() {
       });
     } finally {
       setGeneratingRec(false);
+    }
+  };
+
+  const handleInvestigateWithAi = async () => {
+    if (!selectedFindingId) return;
+    setInvestigatingAi(true);
+    setAiInvestigationError(null);
+    try {
+      const occId = selectedOccurrenceId || (findingDetail?.occurrences?.[0]?.occurrence_id) || null;
+      const url = `/api/findings/${encodeURIComponent(selectedFindingId)}/investigate-ai${occId ? `?occurrence_id=${encodeURIComponent(occId)}` : ''}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Investigation failed with HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setAiInvestigation(data);
+      setDetailSubTab('ai_investigation');
+    } catch (err) {
+      console.error('AI investigation failed:', err);
+      setAiInvestigationError(err.message || 'AI Investigation service temporarily unavailable.');
+    } finally {
+      setInvestigatingAi(false);
+    }
+  };
+
+  const handlePlanEnergySavingTrial = async () => {
+    try {
+      let targetAction = null;
+      if (findingRecs && findingRecs.length > 0) {
+        for (const rec of findingRecs) {
+          const acts = recActionsMap[rec.recommendation_id] || [];
+          if (acts.length > 0) {
+            targetAction = acts[0];
+            break;
+          }
+        }
+      }
+
+      if (!targetAction) {
+        const res = await recommendationsApi.generateFromFinding(selectedFindingId, {
+          caller_attribution: 'Finding-AI-Investigation-UI',
+        });
+        const recList = res.recommendations || [];
+        if (recList.length > 0) {
+          const recId = recList[0].recommendation_id;
+          const acts = await recommendationsApi.listActions({ recommendation_id: recId, limit: 10 });
+          targetAction = (acts.items || acts)[0];
+        }
+      }
+
+      if (targetAction) {
+        setWorkflowAction(targetAction);
+      } else {
+        alert('Could not initialize corrective action for this trial. Please check recommendation settings.');
+      }
+    } catch (err) {
+      console.error('Failed to initiate trial plan:', err);
+      alert('Failed to initialize trial plan: ' + err.message);
     }
   };
 
@@ -551,6 +692,7 @@ export default function InvestigationActionsCentre() {
         await loadFindingDetailAndRecs(selectedFindingId);
       }
       await loadAuthoritativeKpis(plantFilter);
+      setRecsRefreshTrigger((prev) => prev + 1);
     } catch (err) {
       setActionModal((prev) => ({ ...prev, loading: false, error: err.message }));
     }
@@ -571,6 +713,7 @@ export default function InvestigationActionsCentre() {
         await loadFindingDetailAndRecs(selectedFindingId);
       }
       await loadAuthoritativeKpis(plantFilter);
+      setRecsRefreshTrigger((prev) => prev + 1);
     } catch (err) {
       setBanner({ type: 'error', message: err.message || 'Failed to update action status.' });
     }
@@ -594,6 +737,7 @@ export default function InvestigationActionsCentre() {
         await loadFindingDetailAndRecs(selectedFindingId);
       }
       await loadAuthoritativeKpis(plantFilter);
+      setRecsRefreshTrigger((prev) => prev + 1);
     } catch (err) {
       setStatusModal((prev) => ({ ...prev, loading: false, error: err.message }));
     }
@@ -615,6 +759,7 @@ export default function InvestigationActionsCentre() {
         await loadFindingDetailAndRecs(selectedFindingId);
       }
       await loadAuthoritativeKpis(plantFilter);
+      setRecsRefreshTrigger((prev) => prev + 1);
     } catch (err) {
       setGenerateModal((prev) => ({ ...prev, loading: false, error: err.message }));
     }
@@ -651,14 +796,6 @@ export default function InvestigationActionsCentre() {
     <div className="investigation-actions-page">
       {/* Page Header */}
       <header className="iac-header">
-        <div className="iac-heading">
-          <span className="iac-eyebrow">Operational Intelligence & Remediation</span>
-          <h1>Investigation & Actions Centre</h1>
-          <p>
-            Unified workflow from anomaly surveillance and evidence review to investigation, recommendation synthesis, and corrective action tracking.
-          </p>
-        </div>
-
         <div className="iac-header-actions">
           <button
             type="button"
@@ -666,6 +803,7 @@ export default function InvestigationActionsCentre() {
             onClick={() => {
               loadAuthoritativeKpis(plantFilter);
               loadFindings();
+              setRecsRefreshTrigger((prev) => prev + 1);
               if (selectedFindingId) loadFindingDetailAndRecs(selectedFindingId);
             }}
             title="Refresh active queue and operational metrics"
@@ -913,6 +1051,18 @@ export default function InvestigationActionsCentre() {
 
         <button
           type="button"
+          className={`iac-tab-btn ${activeTab === 'ledger' ? 'active' : ''}`}
+          onClick={() => setActiveTab('ledger')}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <line x1="12" y1="1" x2="12" y2="23" />
+            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+          </svg>
+          Verified Savings Ledger
+        </button>
+
+        <button
+          type="button"
           className={`iac-tab-btn ${activeTab === 'surveillance' ? 'active' : ''}`}
           onClick={() => setActiveTab('surveillance')}
         >
@@ -1074,7 +1224,7 @@ export default function InvestigationActionsCentre() {
                           <td>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
                               <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                                {f.title || f.anomaly_type}
+                                {formatFindingTitle(f.title || f.anomaly_type)}
                               </span>
                               <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                                 ID: {f.finding_id}
@@ -1153,152 +1303,239 @@ export default function InvestigationActionsCentre() {
               ) : findingDetail ? (
                 <>
                   {/* Investigation Header */}
-                  <div className="iac-detail-header">
-                    <div className="iac-detail-title-row">
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                  <header className="iac-finding-header">
+                    <div className="iac-finding-top-row">
+                      <div className="iac-finding-headline-group">
+                        <div className="iac-finding-badges-wrap">
                           <span className={`badge-iac badge-sev-${(findingDetail.severity || 'medium').toLowerCase()}`}>
                             {findingDetail.severity}
                           </span>
                           <span className={`badge-iac badge-st-${(findingDetail.status || 'new').toLowerCase()}`}>
                             {findingDetail.status}
                           </span>
-                          <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                            ID: {findingDetail.finding_id}
-                          </span>
                         </div>
-                        <h2 style={{ margin: 0, fontSize: '1.25rem', color: 'var(--text-primary)' }}>
-                          {findingDetail.title || findingDetail.anomaly_type}
+                        <h2 className="iac-finding-title">
+                          {formatFindingTitle(findingDetail.title || findingDetail.anomaly_type)}
                         </h2>
-                        <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                          Plant: <strong>{findingDetail.plant_id}</strong> &bull; Asset:{' '}
-                          <strong>{findingDetail.meter_id || findingDetail.line_id || 'Plant-wide'}</strong> &bull; First detected:{' '}
-                          {formatTs(findingDetail.first_detected_at)} &bull; Occurrences: <strong>{findingDetail.occurrence_count || 1}</strong>
-                        </span>
                       </div>
 
                       <button
                         type="button"
-                        className="btn-drawer-close"
+                        className="iac-close-btn"
                         onClick={() => setSelectedFindingId(null)}
-                        title="Close investigation workspace"
+                        aria-label="Close finding"
+                        title="Close finding"
                       >
-                        ✕
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="18" y1="6" x2="6" y2="18" />
+                          <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
                       </button>
                     </div>
 
-                    {/* Operational Description */}
-                    <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                      {findingDetail.description || 'No descriptive narrative recorded.'}
-                    </p>
-
-                    {/* Investigation Lifecycle Toolbar */}
-                    <div className="iac-detail-toolbar">
-                      {/* NEW / REOPENED: Can Acknowledge */}
-                      {(findingDetail.status === 'NEW' || findingDetail.status === 'REOPENED') && (
-                        <button
-                          type="button"
-                          className="btn-iac btn-iac-primary"
-                          onClick={() => openLifecycleModal('ACKNOWLEDGE', findingDetail)}
-                        >
-                          ✓ Acknowledge
-                        </button>
-                      )}
-
-                      {/* NEW / ACKNOWLEDGED / REOPENED: Can Start Investigation */}
-                      {(findingDetail.status === 'NEW' || findingDetail.status === 'ACKNOWLEDGED' || findingDetail.status === 'REOPENED') && (
-                        <button
-                          type="button"
-                          className="btn-iac btn-iac-primary"
-                          onClick={() => openLifecycleModal('INVESTIGATE', findingDetail)}
-                        >
-                          🔍 Start Investigation
-                        </button>
-                      )}
-
-                      {/* INVESTIGATING / ACKNOWLEDGED: Can Add Diagnostic Note */}
-                      <button
-                        type="button"
-                        className="btn-iac"
-                        onClick={() => openLifecycleModal('ADD_NOTE', findingDetail)}
-                      >
-                        📝 Add Notes
-                      </button>
-
-                      {/* INVESTIGATING / ACKNOWLEDGED: Can Resolve */}
-                      {(findingDetail.status === 'INVESTIGATING' || findingDetail.status === 'ACKNOWLEDGED') && (
-                        <button
-                          type="button"
-                          className="btn-iac btn-iac-success"
-                          onClick={() => openLifecycleModal('RESOLVE', findingDetail)}
-                        >
-                          ✓ Resolve Finding
-                        </button>
-                      )}
-
-                      {/* RESOLVED: Can Reopen */}
-                      {findingDetail.status === 'RESOLVED' && (
-                        <button
-                          type="button"
-                          className="btn-iac btn-iac-danger"
-                          onClick={() => openLifecycleModal('REOPEN', findingDetail)}
-                        >
-                          ↺ Reopen Finding
-                        </button>
-                      )}
-
-                      {/* Generate Recommendations Action */}
-                      <button
-                        type="button"
-                        className="btn-iac"
-                        style={{ marginLeft: 'auto' }}
-                        onClick={() => handleGenerateRecommendationsForFinding(findingDetail.finding_id)}
-                        disabled={generatingRec}
-                        title="Deterministically generate operational recommendations from this finding"
-                      >
-                        {generatingRec ? 'Synthesizing...' : '⚡ Generate Recommendations'}
-                      </button>
+                    {/* Compact Natural-Wrapping Metadata Row */}
+                    <div className="iac-finding-meta-row">
+                      <span className="iac-meta-item">
+                        <span className="iac-meta-label">ID:</span>
+                        <code className="iac-finding-id-code">{findingDetail.finding_id}</code>
+                      </span>
+                      <span className="iac-meta-dot">&bull;</span>
+                      <span className="iac-meta-item">
+                        <span className="iac-meta-label">Plant:</span>
+                        <strong>{findingDetail.plant_id}</strong>
+                      </span>
+                      <span className="iac-meta-dot">&bull;</span>
+                      <span className="iac-meta-item">
+                        <span className="iac-meta-label">Asset:</span>
+                        <strong>{findingDetail.meter_id || findingDetail.line_id || 'Plant-wide'}</strong>
+                      </span>
+                      <span className="iac-meta-dot">&bull;</span>
+                      <span className="iac-meta-item">
+                        <span className="iac-meta-label">First detected:</span>
+                        <strong>{formatTs(findingDetail.first_detected_at)}</strong>
+                      </span>
+                      <span className="iac-meta-dot">&bull;</span>
+                      <span className="iac-meta-item">
+                        <span className="iac-meta-label">Occurrences:</span>
+                        <strong>{findingDetail.occurrence_count || 1}</strong>
+                      </span>
                     </div>
-                  </div>
 
-                  {/* Investigation Sub-navigation */}
-                  <div className="iac-detail-subnav">
+                    {/* Operational Description (Omitted when empty) */}
+                    {Boolean(findingDetail.description && findingDetail.description.trim()) && (
+                      <p className="iac-finding-narrative">
+                        {findingDetail.description}
+                      </p>
+                    )}
+                  </header>
+
+                  {/* Investigation Lifecycle Actions Toolbar (Consistent 40px buttons, 8px gaps) */}
+                  <div className="iac-lifecycle-toolbar">
+                    {/* Primary Purple Action: Investigate with AI */}
                     <button
                       type="button"
-                      className={`iac-subnav-btn ${detailSubTab === 'evidence' ? 'active' : ''}`}
+                      className="btn-iac btn-action-40 btn-action-ai"
+                      onClick={handleInvestigateWithAi}
+                      disabled={investigatingAi}
+                      title="Run autonomous root-cause investigation with citations and trial recommendations"
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                      </svg>
+                      <span>{investigatingAi ? 'Investigating...' : 'Investigate with AI'}</span>
+                    </button>
+
+                    {/* Secondary Actions */}
+                    {(findingDetail.status === 'NEW' || findingDetail.status === 'REOPENED') && (
+                      <button
+                        type="button"
+                        className="btn-iac btn-action-40 btn-action-secondary"
+                        onClick={() => openLifecycleModal('ACKNOWLEDGE', findingDetail)}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                        <span>Acknowledge</span>
+                      </button>
+                    )}
+
+                    {(findingDetail.status === 'NEW' || findingDetail.status === 'ACKNOWLEDGED' || findingDetail.status === 'REOPENED') && (
+                      <button
+                        type="button"
+                        className="btn-iac btn-action-40 btn-action-secondary"
+                        onClick={() => openLifecycleModal('INVESTIGATE', findingDetail)}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="11" cy="11" r="8" />
+                          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                        </svg>
+                        <span>Start Investigation</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      className="btn-iac btn-action-40 btn-action-secondary"
+                      onClick={() => openLifecycleModal('ADD_NOTE', findingDetail)}
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                      </svg>
+                      <span>Add Notes</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn-iac btn-action-40 btn-action-secondary"
+                      onClick={() => handleGenerateRecommendationsForFinding(findingDetail.finding_id)}
+                      disabled={generatingRec}
+                      title="Deterministically generate operational recommendations from this finding"
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="8" x2="12" y2="12" />
+                        <line x1="12" y1="16" x2="12.01" y2="16" />
+                      </svg>
+                      <span>{generatingRec ? 'Synthesizing...' : 'Generate Recommendations'}</span>
+                    </button>
+
+                    {(findingDetail.status === 'INVESTIGATING' || findingDetail.status === 'ACKNOWLEDGED') && (
+                      <button
+                        type="button"
+                        className="btn-iac btn-action-40 btn-action-secondary btn-action-resolve"
+                        onClick={() => openLifecycleModal('RESOLVE', findingDetail)}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                          <polyline points="22 4 12 14.01 9 11.01" />
+                        </svg>
+                        <span>Resolve Finding</span>
+                      </button>
+                    )}
+
+                    {findingDetail.status === 'RESOLVED' && (
+                      <button
+                        type="button"
+                        className="btn-iac btn-action-40 btn-action-secondary btn-action-reopen"
+                        onClick={() => openLifecycleModal('REOPEN', findingDetail)}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+                        </svg>
+                        <span>Reopen Finding</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Investigation Tabs Navigation (Separate Row below Actions) */}
+                  <nav className="iac-consolidated-tab-bar" aria-label="Finding investigation views">
+                    <button
+                      type="button"
+                      className={`iac-tab-item ${detailSubTab === 'ai_investigation' ? 'active' : ''}`}
+                      onClick={() => {
+                        setDetailSubTab('ai_investigation');
+                        if (!aiInvestigation && !investigatingAi) {
+                          handleInvestigateWithAi();
+                        }
+                      }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                      </svg>
+                      <span>AI Investigation</span>
+                      {aiInvestigation && <span className="iac-tab-dot" />}
+                      {detailSubTab === 'ai_investigation' && <span className="iac-tab-underline" />}
+                    </button>
+
+                    <button
+                      type="button"
+                      className={`iac-tab-item ${detailSubTab === 'evidence' ? 'active' : ''}`}
                       onClick={() => setDetailSubTab('evidence')}
                     >
-                      Evidence &amp; Measurements
+                      <span>Evidence &amp; Measurements</span>
+                      {detailSubTab === 'evidence' && <span className="iac-tab-underline" />}
                     </button>
+
                     <button
                       type="button"
-                      className={`iac-subnav-btn ${detailSubTab === 'provenance' ? 'active' : ''}`}
+                      className={`iac-tab-item ${detailSubTab === 'provenance' ? 'active' : ''}`}
                       onClick={() => setDetailSubTab('provenance')}
                     >
-                      Source Provenance
+                      <span>Source Provenance</span>
+                      {detailSubTab === 'provenance' && <span className="iac-tab-underline" />}
                     </button>
+
                     <button
                       type="button"
-                      className={`iac-subnav-btn ${detailSubTab === 'occurrences' ? 'active' : ''}`}
+                      className={`iac-tab-item ${detailSubTab === 'occurrences' ? 'active' : ''}`}
                       onClick={() => setDetailSubTab('occurrences')}
                     >
-                      Occurrences ({findingDetail.occurrences?.length || 0})
+                      <span>Occurrences</span>
+                      <span className="iac-tab-count-pill">{findingDetail.occurrences?.length || 0}</span>
+                      {detailSubTab === 'occurrences' && <span className="iac-tab-underline" />}
                     </button>
+
                     <button
                       type="button"
-                      className={`iac-subnav-btn ${detailSubTab === 'audit' ? 'active' : ''}`}
+                      className={`iac-tab-item ${detailSubTab === 'audit' ? 'active' : ''}`}
                       onClick={() => setDetailSubTab('audit')}
                     >
-                      Notes &amp; Audit Trail ({findingDetail.audit_trail?.length || 0})
+                      <span>Notes &amp; Audit Trail</span>
+                      <span className="iac-tab-count-pill">{findingDetail.audit_trail?.length || 0}</span>
+                      {detailSubTab === 'audit' && <span className="iac-tab-underline" />}
                     </button>
+
                     <button
                       type="button"
-                      className={`iac-subnav-btn ${detailSubTab === 'recs' ? 'active' : ''}`}
+                      className={`iac-tab-item ${detailSubTab === 'recs' ? 'active' : ''}`}
                       onClick={() => setDetailSubTab('recs')}
                     >
-                      Recommendations &amp; Actions ({findingRecs.length})
+                      <span>Recommendations &amp; Actions</span>
+                      <span className="iac-tab-count-pill">{findingRecs.length}</span>
+                      {detailSubTab === 'recs' && <span className="iac-tab-underline" />}
                     </button>
-                  </div>
+                  </nav>
 
                   {/* Investigation Sub-tab Body */}
                   <div className="iac-detail-body">
@@ -1368,7 +1605,7 @@ export default function InvestigationActionsCentre() {
                           <div>
                             <strong>Evidence Integrity &amp; Surveillance Constraints:</strong>
                             <div style={{ marginTop: '0.2rem' }}>
-                              Detector: <code>{findingDetail.detector_name || findingDetail.anomaly_type}</code> (Algorithm v{findingDetail.detector_version || '1.0'}).
+                              Detector Code: <code>{findingDetail.anomaly_type}</code> &bull; Detector Name: <code>{findingDetail.detector_name || findingDetail.anomaly_type}</code> (Algorithm v{findingDetail.detector_version || '1.0'}).
                               {findingDetail.baseline_value === null &&
                                 ' Baseline historical values are not recorded or not required for this threshold detector (e.g. power factor compliance check).'}
                             </div>
@@ -1708,6 +1945,190 @@ export default function InvestigationActionsCentre() {
                         )}
                       </div>
                     )}
+
+                    {/* SUB-TAB: AI INVESTIGATION */}
+                    {detailSubTab === 'ai_investigation' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                        {/* Header Banner */}
+                        <div
+                          className="iac-ai-agent-banner"
+                          style={{
+                            padding: '1.25rem',
+                            background: 'linear-gradient(135deg, rgba(79, 70, 229, 0.08) 0%, rgba(124, 58, 237, 0.08) 100%)',
+                            border: '1px solid rgba(79, 70, 229, 0.25)',
+                            borderRadius: '8px',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            flexWrap: 'wrap',
+                            gap: '1rem',
+                            width: '100%',
+                            boxSizing: 'border-box',
+                          }}
+                        >
+                          <div style={{ flex: 1, minWidth: '260px' }}>
+                            <div className="iac-ai-heading-row" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+                              <span style={{ fontWeight: 700, fontSize: '1.05rem', color: '#312e81' }}>
+                                ⚡ Industrial Energy Intelligence Agent
+                              </span>
+                              {aiInvestigation?.inference_source === 'DOMO_AI_MODEL' && (
+                                <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '0.2rem 0.5rem', background: '#ecfdf5', color: '#065f46', borderRadius: '4px', border: '1px solid #a7f3d0', whiteSpace: 'nowrap' }}>
+                                  Live AI Model · Domo AI
+                                </span>
+                              )}
+                              {aiInvestigation?.inference_source === 'RULE_BASED_FALLBACK' && (
+                                <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '0.2rem 0.5rem', background: '#fef3c7', color: '#92400e', borderRadius: '4px', border: '1px solid #fde68a', whiteSpace: 'nowrap' }}>
+                                  Rule-Based Fallback · Provider Offline
+                                </span>
+                              )}
+                              {aiInvestigation?.is_regression_case_nov4 && (
+                                <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '0.2rem 0.5rem', background: '#dbeafe', color: '#1e40af', borderRadius: '4px', border: '1px solid #bfdbfe', whiteSpace: 'nowrap' }}>
+                                  Verified Control Case · FAL-L2 Stoppage Baseline
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                              Autonomous root-cause analysis, operational comparison &amp; trial planning with deterministic citations
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className="btn-iac btn-action-40 btn-action-secondary"
+                              onClick={handleInvestigateWithAi}
+                              disabled={investigatingAi}
+                            >
+                              {investigatingAi ? 'Re-analyzing...' : '↺ Refresh Analysis'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-iac btn-action-40 btn-action-trial"
+                              onClick={handlePlanEnergySavingTrial}
+                            >
+                              Plan an Energy-Saving Trial →
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Citation Toast Notification if clicked */}
+                        {activeCitationToast && (
+                          <div style={{ padding: '0.75rem 1rem', background: '#eff6ff', border: '1px solid #93c5fd', borderRadius: '6px', fontSize: '0.82rem', color: '#1e3a8a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <strong>CITED RECORD [{activeCitationToast.type}]: </strong>
+                              <code>{activeCitationToast.id}</code> — {activeCitationToast.label || 'Authoritative telemetry reading'}
+                            </div>
+                            <button
+                              type="button"
+                              style={{ background: 'none', border: 'none', color: '#1e3a8a', cursor: 'pointer', fontWeight: 'bold' }}
+                              onClick={() => setActiveCitationToast(null)}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Citations List Pill Bar */}
+                        {aiInvestigation?.citations && aiInvestigation.citations.length > 0 && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0.6rem 0.85rem', background: 'var(--bg-secondary)', borderRadius: '6px', fontSize: '0.78rem' }}>
+                            <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>Citations:</span>
+                            {aiInvestigation.citations.map((c, i) => (
+                              <button
+                                key={i}
+                                type="button"
+                                style={{
+                                  padding: '0.2rem 0.5rem',
+                                  borderRadius: '4px',
+                                  background: '#ffffff',
+                                  border: '1px solid var(--border-color)',
+                                  color: '#4338ca',
+                                  fontSize: '0.74rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                                onClick={() => setActiveCitationToast(c)}
+                              >
+                                📎 {c.id} ({c.type})
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Loading State */}
+                        {investigatingAi && (
+                          <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                            <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>⚡</div>
+                            <strong>Analyzing operational context, telemetry intervals, and stoppage patterns...</strong>
+                          </div>
+                        )}
+
+                        {/* Error State */}
+                        {aiInvestigationError && (
+                          <div className="iac-alert-banner error" style={{ padding: '1rem', borderRadius: '6px' }}>
+                            <strong>Investigation Error: </strong> {aiInvestigationError}
+                          </div>
+                        )}
+
+                        {/* The 4 Sections */}
+                        {aiInvestigation && !investigatingAi && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            {/* Section 1 */}
+                            <div className="iac-card" style={{ padding: '1.25rem', borderLeft: '4px solid #3b82f6', background: 'var(--bg-primary)' }}>
+                              <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.96rem', fontWeight: 700, color: '#1e3a8a' }}>
+                                1. What we observed
+                              </h4>
+                              <p style={{ margin: 0, fontSize: '0.86rem', lineHeight: 1.6, color: 'var(--text-primary)' }}>
+                                {formatCitationsInText(aiInvestigation.what_we_observed, aiInvestigation.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}
+                              </p>
+                            </div>
+
+                            {/* Section 2 */}
+                            <div className="iac-card" style={{ padding: '1.25rem', borderLeft: '4px solid #8b5cf6', background: 'var(--bg-primary)' }}>
+                              <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.96rem', fontWeight: 700, color: '#5b21b6' }}>
+                                2. How it compares
+                              </h4>
+                              <p style={{ margin: 0, fontSize: '0.86rem', lineHeight: 1.6, color: 'var(--text-primary)' }}>
+                                {formatCitationsInText(aiInvestigation.how_it_compares, aiInvestigation.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}
+                              </p>
+                            </div>
+
+                            {/* Section 3 */}
+                            <div className="iac-card" style={{ padding: '1.25rem', borderLeft: '4px solid #f59e0b', background: 'var(--bg-primary)' }}>
+                              <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.96rem', fontWeight: 700, color: '#92400e' }}>
+                                3. What we still need to know
+                              </h4>
+                              <p style={{ margin: 0, fontSize: '0.86rem', lineHeight: 1.6, color: 'var(--text-primary)' }}>
+                                {formatCitationsInText(aiInvestigation.what_we_still_need_to_know, aiInvestigation.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}
+                              </p>
+                            </div>
+
+                            {/* Section 4 */}
+                            <div className="iac-card" style={{ padding: '1.25rem', borderLeft: '4px solid #10b981', background: 'var(--bg-primary)' }}>
+                              <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.96rem', fontWeight: 700, color: '#065f46' }}>
+                                4. What to check next
+                              </h4>
+                              <p style={{ margin: '0 0 1rem 0', fontSize: '0.86rem', lineHeight: 1.6, color: 'var(--text-primary)' }}>
+                                {formatCitationsInText(aiInvestigation.what_to_check_next, aiInvestigation.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}
+                              </p>
+
+                              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color-light)' }}>
+                                <button
+                                  type="button"
+                                  className="btn-iac btn-iac-primary"
+                                  style={{ background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)', color: '#fff', border: 'none', fontWeight: 600 }}
+                                  onClick={handlePlanEnergySavingTrial}
+                                >
+                                  Plan an Energy-Saving Trial →
+                                </button>
+                                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                  Drafts dual-boundary stoppage trial with output, quality and restart guardrails preconfigured.
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </>
               ) : null}
@@ -1722,7 +2143,12 @@ export default function InvestigationActionsCentre() {
       {activeTab === 'recommendations' && (
         <div className="iac-panel">
           <div className="iac-filter-toolbar">
-            <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>Plant Recommendations Directory</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>Plant Recommendations Directory</span>
+              <span className="iac-tab-count" style={{ fontSize: '0.75rem' }}>
+                {recsTotalCount} Total
+              </span>
+            </div>
             <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
               <button
                 type="button"
@@ -1735,36 +2161,47 @@ export default function InvestigationActionsCentre() {
           </div>
 
           <div style={{ padding: '1rem 1.25rem' }}>
-            {findingRecs.length > 0 && selectedFindingId && (
-              <div className="iac-banner-alert info" style={{ marginBottom: '1rem' }}>
-                <span>Viewing recommendations linked to selected finding <strong>{selectedFindingId}</strong>.</span>
-                <button
-                  type="button"
-                  className="btn-iac"
-                  style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}
-                  onClick={() => setSelectedFindingId(null)}
-                >
-                  Clear Finding Filter
-                </button>
-              </div>
-            )}
-
-            <div className="iac-rec-card" style={{ padding: '1.5rem', textAlign: 'center', background: 'transparent', border: '1px dashed var(--border-color)' }}>
-              <h3 style={{ margin: '0 0 0.5rem 0', color: 'var(--text-primary)' }}>Operational Recommendations Directory</h3>
-              <p style={{ margin: '0 0 1rem 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                All recommendations are tied directly to verified operational findings and surveillance occurrences.
-                Select any finding in the Workspace tab to inspect its recommendations, or trigger synthesis above.
-              </p>
-              <div style={{ display: 'flex', justifyContent: 'center', gap: '0.75rem' }}>
-                <button
-                  type="button"
-                  className="btn-iac btn-iac-primary"
-                  onClick={() => setActiveTab('workspace')}
-                >
-                  Return to Findings Workspace
-                </button>
-              </div>
-            </div>
+            <RecommendationsDirectoryTable
+              selectedFindingId={selectedFindingId}
+              onClearFindingFilter={() => setSelectedFindingId(null)}
+              plantScope={plantFilter}
+              initialStatus="OPEN"
+              refreshTrigger={recsRefreshTrigger}
+              onOpenRecommendation={(recId) => setDrawerRecId(recId)}
+              onStatusChange={(recId, newStatus) => {
+                setStatusModal({
+                  open: true,
+                  rec: { recommendation_id: recId },
+                  targetStatus: newStatus,
+                  loading: false,
+                  error: null,
+                });
+              }}
+              onAddAction={(rec) => {
+                setActionModal({
+                  open: true,
+                  mode: 'create',
+                  recId: rec.recommendation_id,
+                  action: null,
+                  parentRec: rec,
+                  loading: false,
+                  error: null,
+                });
+              }}
+              onFindingClick={(findingId) => {
+                setSelectedFindingId(findingId);
+                setActiveTab('workspace');
+              }}
+              onSynthesize={() =>
+                setGenerateModal({
+                  open: true,
+                  prefillFindingId: selectedFindingId || '',
+                  loading: false,
+                  error: null,
+                })
+              }
+              onTotalCountChange={(count) => setRecsTotalCount(count)}
+            />
           </div>
         </div>
       )}
@@ -1793,7 +2230,26 @@ export default function InvestigationActionsCentre() {
               onOpenRecommendation={(recId) => {
                 setDrawerRecId(recId);
               }}
+              onOpenWorkflowModal={(act) => setWorkflowAction(act)}
               refreshTrigger={kpis.openActions}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 4: FACTORY VERIFIED SAVINGS LEDGER                                    */}
+      {/* ========================================================================= */}
+      {activeTab === 'ledger' && (
+        <div className="iac-panel">
+          <div className="iac-filter-toolbar">
+            <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>Factory Verified Savings Ledger (M&amp;V Governance)</span>
+          </div>
+          <div style={{ padding: '1.25rem' }}>
+            <SavingsLedgerSection
+              onInspectAction={(actionId) => {
+                recommendationsApi.getAction(actionId).then((act) => setWorkflowAction(act)).catch(console.error);
+              }}
             />
           </div>
         </div>
@@ -1956,10 +2412,10 @@ export default function InvestigationActionsCentre() {
               <button
                 type="button"
                 className={`btn-findings ${lifecycleModal.action === 'RESOLVE'
-                    ? 'btn-findings-success'
-                    : lifecycleModal.action === 'REOPEN'
-                      ? 'btn-findings-danger'
-                      : 'btn-findings-primary'
+                  ? 'btn-findings-success'
+                  : lifecycleModal.action === 'REOPEN'
+                    ? 'btn-findings-danger'
+                    : 'btn-findings-primary'
                   }`}
                 onClick={handleExecuteLifecycleAction}
                 disabled={lifecycleModal.loading}
@@ -2038,6 +2494,19 @@ export default function InvestigationActionsCentre() {
           }}
           onRecommendationUpdated={() => {
             loadAuthoritativeKpis(plantFilter);
+            setRecsRefreshTrigger((prev) => prev + 1);
+            if (selectedFindingId) loadFindingDetailAndRecs(selectedFindingId);
+          }}
+        />
+      )}
+
+      {/* Operator Workflow Modal for Energy-Saving Trials */}
+      {workflowAction && (
+        <InterventionWorkflowModal
+          action={workflowAction}
+          isOpen={Boolean(workflowAction)}
+          onClose={() => setWorkflowAction(null)}
+          onActionUpdated={() => {
             if (selectedFindingId) loadFindingDetailAndRecs(selectedFindingId);
           }}
         />

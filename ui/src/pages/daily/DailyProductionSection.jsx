@@ -1,5 +1,6 @@
 import React from 'react';
 import { formatNumber, formatPercent } from '../../utils/formatters';
+import KpiCard, { KpiGrid } from '../../components/common/KpiCard';
 
 export default function DailyProductionSection({ productionSummary }) {
   const actualQty = productionSummary ? productionSummary.actual_qty : null;
@@ -118,26 +119,20 @@ export default function DailyProductionSection({ productionSummary }) {
         </div>
       </div>
 
-      <div className="daily-production-grid">
+      <KpiGrid className="daily-production-grid">
         {cards.map((card) => (
-          <div key={card.id} className={`kpi-card accent-${card.accent}`}>
-            <div className="kpi-card-inner">
-              <div className="kpi-header">
-                <span className="kpi-title">
-                  {card.title}
-                  <span className={`daily-value-kind ${card.kind === 'Unavailable' ? 'unavailable' : ''}`}>{card.kind}</span>
-                </span>
-                <div className="kpi-icon-wrap">{card.icon}</div>
-              </div>
-              <div className="kpi-body">
-                <span className="kpi-value">{card.value}</span>
-                {card.unit && <span className="kpi-unit">{card.unit}</span>}
-              </div>
-              {card.sublabel && <div className="kpi-sublabel">{card.sublabel}</div>}
-            </div>
-          </div>
+          <KpiCard
+            key={card.id}
+            id={card.id}
+            title={card.title}
+            value={card.value}
+            unit={card.unit}
+            accent="purple"
+            icon={card.icon}
+            minimal={true}
+          />
         ))}
-      </div>
+      </KpiGrid>
 
       {/* Engineering Integrity Notice — OEE and Adherence Disclaimer */}
       <div className="daily-disclaimer-box oee-disclaimer">

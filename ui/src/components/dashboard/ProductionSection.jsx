@@ -155,7 +155,7 @@ export default function ProductionSection({
                     ? 'No production trend records were returned.'
                     : 'Trend records were returned without usable production quantities.'}
               </div>
-            ) : <ResponsiveContainer width="100%" height={270}>
+            ) : <ResponsiveContainer width="100%" height={260}>
               <BarChart data={trendData} margin={{ top: 10, right: 15, left: -10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
                 <XAxis
@@ -200,7 +200,7 @@ export default function ProductionSection({
                     ? 'No production-by-line records were returned.'
                     : 'Line records were returned without usable production quantities.'}
               </div>
-            ) : <ResponsiveContainer width="100%" height={270}>
+            ) : <ResponsiveContainer width="100%" height={260}>
               <BarChart data={lineData} layout="vertical" margin={{ top: 5, right: 25, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" horizontal={false} />
                 <XAxis

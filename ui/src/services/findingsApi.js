@@ -144,5 +144,11 @@ export const findingsApi = {
         body: JSON.stringify(data),
       },
     }),
+
+  /**
+   * Alias for syncFindings to support callers of syncFromAnomalies safely.
+   */
+  syncFromAnomalies: (data = {}) =>
+    findingsApi.syncFindings(data),
 };
 

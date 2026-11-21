@@ -750,10 +750,22 @@
   border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
+.badge-lineage-upload-not-found {
+  background: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
 .badge-lineage-source-missing {
   background: rgba(239, 68, 68, 0.14);
   color: #ef4444;
   border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.badge-lineage-unsupported {
+  background: rgba(245, 158, 11, 0.14);
+  color: #d97706;
+  border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
 .badge-lineage-legacy-unlinked {
@@ -835,9 +847,21 @@
   color: var(--text-primary);
 }
 
+.provenance-callout.upload_not_found {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: var(--text-primary);
+}
+
 .provenance-callout.source_missing {
   background: rgba(239, 68, 68, 0.08);
   border: 1px solid rgba(239, 68, 68, 0.25);
+  color: var(--text-primary);
+}
+
+.provenance-callout.unsupported {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
   color: var(--text-primary);
 }
 
@@ -1499,6 +1523,12 @@
   background: rgba(239, 68, 68, 0.15);
   color: #ef4444;
   border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.badge-db-status.unsupported {
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+  border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
 

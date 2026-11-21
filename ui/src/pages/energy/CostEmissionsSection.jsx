@@ -40,8 +40,10 @@ export default function CostEmissionsSection({
         <div className="chart-card cost-card">
           <div className="chart-card-header">
             <div>
-              <h4 className="chart-card-title">Dataset-calculated cost</h4>
-              <span className="chart-card-subtitle">Not a verified utility bill</span>
+              <h4 className="chart-card-title">Dataset-derived cost</h4>
+              <span className="chart-card-subtitle">
+                {energySummary?.tariff_assumption?.value ? `Dataset rate: ₹${energySummary.tariff_assumption.value}/kWh (Approval: ${energySummary.tariff_assumption.approval_status || 'UNKNOWN'})` : 'Not a verified utility bill'}
+              </span>
             </div>
             <div className="cost-total-badge">
               {summaryAvailable && totalCost !== null ? formatCurrency(totalCost) : 'Unavailable'}
@@ -89,8 +91,10 @@ export default function CostEmissionsSection({
         <div className="chart-card emissions-card">
           <div className="chart-card-header">
             <div>
-              <h4 className="chart-card-title">Estimated CO₂e</h4>
-              <span className="chart-card-subtitle">Calculated using the dataset emission factor</span>
+              <h4 className="chart-card-title">Dataset-derived emissions</h4>
+              <span className="chart-card-subtitle">
+                {energySummary?.emissions_assumption?.value ? `Dataset factor: ~${energySummary.emissions_assumption.value} kg CO₂e/kWh (Approval: ${energySummary.emissions_assumption.approval_status || 'UNKNOWN'})` : 'Calculated using the dataset emission factor'}
+              </span>
             </div>
             <div className="emissions-total-badge">
               {summaryAvailable && totalCo2eTonnes !== null ? `${formatNumber(totalCo2eTonnes, 2)} t CO₂e` : 'Unavailable'}
@@ -146,9 +150,9 @@ export default function CostEmissionsSection({
           </svg>
         </div>
         <div className="integrity-content">
-          <div className="integrity-title">Source Data Accounting Notice</div>
+          <div className="integrity-title">Dataset Factor Assumptions Notice</div>
           <p className="integrity-text">
-            Cost is dataset-calculated and may not match the current electricity contract or bill. CO₂e is an estimate based on a dataset emission factor, not a verified emissions measurement. No cost savings or tariff adjustments are inferred here.
+            Cost and emissions are calculated from unverified dataset assumptions (Electricity: ₹{energySummary?.tariff_assumption?.value || '8.25'}/kWh, Status: {energySummary?.tariff_assumption?.approval_status || 'UNKNOWN'}; Grid Emissions: ~{energySummary?.emissions_assumption?.value || '0.716'} kg CO₂e/kWh, Status: {energySummary?.emissions_assumption?.approval_status || 'UNKNOWN'}). They are displayed as 'Dataset-derived cost' and 'Dataset-derived emissions' and do not reflect audited contract utility bills or stack emissions measurements.
           </p>
         </div>
       </div>

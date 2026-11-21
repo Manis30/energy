@@ -33,6 +33,14 @@ DETECTOR_VERSION_STATISTICAL_ZSCORE = "statistical_zscore:1.0.0"
 DETECTOR_VERSION_ROLLING_BASELINE = "rolling_baseline:1.0.0"
 DETECTOR_VERSION_LOW_POWER_FACTOR = "low_power_factor:1.0.0"
 DETECTOR_VERSION_STANDBY_ENERGY = "zero_production_standby:1.0.0"
+DETECTOR_VERSION_PERSISTENT_BASELOAD = "persistent_baseload:1.0.0"
+DETECTOR_VERSION_ZERO_OUTPUT_RESTART = "zero_output_restart:1.0.0"
+
+# Central Evidence Classification constants across finding lifecycle and schemas
+EVIDENCE_TRUSTED = "TRUSTED"
+EVIDENCE_TENTATIVE = "TENTATIVE"
+EVIDENCE_INCONCLUSIVE = "INCONCLUSIVE"
+EVIDENCE_DISQUALIFIED = "DISQUALIFIED"
 
 
 def _format_decimal(val: Any, decimals: int = 4) -> Optional[Decimal]:
@@ -386,6 +394,15 @@ def detect_energy_statistical_anomalies(
                 f"for meter {mid} at plant {pid}."
             )
 
+            if q_status_str == "QUALIFIED":
+                evidence_cls = EVIDENCE_TRUSTED
+            elif q_status_str == "INCONCLUSIVE":
+                evidence_cls = EVIDENCE_INCONCLUSIVE
+            elif q_status_str in ("NOT_QUALIFIED", "DISQUALIFIED"):
+                evidence_cls = EVIDENCE_DISQUALIFIED
+            else:
+                evidence_cls = EVIDENCE_TENTATIVE
+
             context_flags = {
                 "sample_size": count,
                 "std_kwh": float(round(std_v, 4)),
@@ -397,7 +414,8 @@ def detect_energy_statistical_anomalies(
                 "evaluation_start": eval_start.isoformat(),
                 "evaluation_end": eval_end.isoformat(),
                 "baseline_qualification_status": q_status_str,
-                "baseline_trust_level": "TRUSTED" if q_status_str == "QUALIFIED" else "TENTATIVE",
+                "baseline_trust_level": evidence_cls,
+                "evidence_classification": evidence_cls,
                 "qualification_reasons": b_info.get("qualification_reasons", []),
                 "source_table": "fact_energy_meter_hourly",
                 "source_record_id": str(reading_id) if reading_id else None,
@@ -428,6 +446,12 @@ def detect_energy_statistical_anomalies(
                 "source_record_id": str(reading_id) if reading_id else None,
                 "upload_id": str(upl_id) if upl_id else None,
                 "detector_version": DETECTOR_VERSION_STATISTICAL_ZSCORE,
+                "qualification_status": q_status_str,
+                "trust_level": evidence_cls,
+                "evidence_classification": evidence_cls,
+                "confidence": "HIGH" if q_status_str == "QUALIFIED" else ("LOW" if q_status_str == "NOT_QUALIFIED" else "MEDIUM"),
+                "reason_codes": b_info.get("qualification_reasons", []),
+                "comparison_window": f"{lookback_days}d",
             })
 
     return {
@@ -932,6 +956,15 @@ def detect_rolling_baseline_anomalies(
                 if dw not in combined_reasons:
                     combined_reasons.append(dw)
 
+            if q_status_str == BaselineQualificationStatus.QUALIFIED.value:
+                evidence_cls = EVIDENCE_TRUSTED
+            elif q_status_str == BaselineQualificationStatus.INCONCLUSIVE.value:
+                evidence_cls = EVIDENCE_INCONCLUSIVE
+            elif q_status_str == BaselineQualificationStatus.NOT_QUALIFIED.value:
+                evidence_cls = EVIDENCE_DISQUALIFIED
+            else:
+                evidence_cls = EVIDENCE_TENTATIVE
+
             context_flags = {
                 "window_size_hours": w_size,
                 "historical_observations_used": obs_count,
@@ -941,7 +974,8 @@ def detect_rolling_baseline_anomalies(
                 "evaluation_start": eval_start.isoformat(),
                 "evaluation_end": eval_end.isoformat(),
                 "baseline_qualification_status": q_status_str,
-                "baseline_trust_level": trust_level,
+                "baseline_trust_level": evidence_cls,
+                "evidence_classification": evidence_cls,
                 "qualification_reasons": combined_reasons,
                 "window_coverage_ratio": round(completeness_ratio, 4),
                 "source_table": "fact_energy_meter_hourly",
@@ -989,6 +1023,12 @@ def detect_rolling_baseline_anomalies(
                 "source_record_id": str(reading_id) if reading_id else None,
                 "upload_id": str(upl_id) if upl_id else None,
                 "detector_version": DETECTOR_VERSION_ROLLING_BASELINE,
+                "qualification_status": q_status_str,
+                "trust_level": evidence_cls,
+                "evidence_classification": evidence_cls,
+                "confidence": "HIGH" if q_status_str == BaselineQualificationStatus.QUALIFIED.value else "MEDIUM",
+                "reason_codes": b_info.get("qualification_reasons", []),
+                "comparison_window": f"{w_size}h",
             })
 
     return {
@@ -1020,6 +1060,463 @@ def detect_rolling_baseline_anomalies(
             "evaluation_scope": evaluation_scope,
         },
         "meter_baselines": meter_baselines,
+        "anomalies": anomalies[:limit] if limit is not None and limit >= 0 else anomalies,
+    }
+
+
+def _record_baseload_anomaly(
+    run_rows: List[Any],
+    b_data: Dict[str, Any],
+    direction: str,
+    threshold_pct: float,
+    persistence_rule: int,
+    lookback_days: int,
+    anomalies: List[Dict[str, Any]],
+):
+    pid = run_rows[0][0]
+    mid = run_rows[0][1]
+    start_ts = run_rows[0][2]
+    end_ts = run_rows[-1][2]
+    readings_ids = [str(r[4]) for r in run_rows if r[4]]
+    kwh_values = [float(r[3]) for r in run_rows]
+    avg_kwh = sum(kwh_values) / len(kwh_values)
+    base_val = b_data["mean_kwh"]
+    dev_pct = ((avg_kwh - base_val) / base_val) * 100.0
+    streak_len = len(run_rows)
+
+    anomaly_type = (
+        f"PERSISTENT_BASELOAD_{direction}"
+        if b_data.get("low_load_proven")
+        else f"COMPARABLE_PERIOD_ELECTRICITY_{direction}"
+    )
+    sev = "CRITICAL" if abs(dev_pct) >= 35.0 else ("HIGH" if abs(dev_pct) >= 25.0 else "MEDIUM")
+    load_cls = b_data["load_classification"]
+
+    start_str = start_ts.strftime("%Y-%m-%d %H:%M") if hasattr(start_ts, "strftime") else str(start_ts)
+    end_str = (end_ts + timedelta(hours=1)).strftime("%H:%M") if hasattr(end_ts, "strftime") else str(end_ts)
+    window_notation = f"[{start_ts.strftime('%H:%M') if hasattr(start_ts, 'strftime') else ''}, {end_str})"
+
+    ref_win = b_data.get("reference_window", f"{lookback_days}d prior")
+    stab_thresh = b_data.get("stability_threshold", "CV < 0.15")
+    ll_evidence = b_data.get("low_load_evidence", {})
+
+    explanation = (
+        f"Persistent {direction.lower()} in {load_cls.lower()} detected across {streak_len} consecutive intervals "
+        f"({window_notation} on {start_ts.strftime('%Y-%m-%d') if hasattr(start_ts, 'strftime') else ''}): "
+        f"average rate of {avg_kwh:.2f} kWh/h vs baseline of {base_val:.2f} kWh/h "
+        f"(observed change: {dev_pct:+.1f}%, threshold: ±{threshold_pct:.0f}%) on meter {mid} at plant {pid}. "
+        f"Reference window: {ref_win} (N={b_data['sample_size']} eligible intervals, {stab_thresh}). "
+        f"Low-load evidence: {ll_evidence.get('status', 'UNPROVEN')}. {b_data['boundary_note']}"
+    )
+
+    evidence_cls = EVIDENCE_TRUSTED if b_data.get("low_load_proven") and b_data["sample_size"] >= 10 else EVIDENCE_TENTATIVE
+
+    anomalies.append({
+        "anomaly_type": anomaly_type,
+        "plant_id": pid,
+        "meter_id": mid,
+        "line_id": None,
+        "timestamp": start_ts.isoformat() if hasattr(start_ts, "isoformat") else str(start_ts),
+        "actual_value": _format_decimal(avg_kwh, 4),
+        "baseline_value": _format_decimal(base_val, 4),
+        "deviation_score": float(round(dev_pct, 2)),
+        "severity": sev,
+        "explanation": explanation,
+        "context_flags": {
+            "load_classification": load_cls,
+            "boundary_note": b_data["boundary_note"],
+            "reference_window": ref_win,
+            "eligible_intervals": b_data["sample_size"],
+            "low_load_evidence": ll_evidence,
+            "exclusions": b_data.get("exclusions", []),
+            "stability_threshold": stab_thresh,
+            "observed_change": f"{dev_pct:+.2f}% ({avg_kwh:.2f} kWh/h vs baseline {base_val:.2f} kWh/h)",
+            "streak_length_intervals": streak_len,
+            "persistence_rule": f"At least {persistence_rule} consecutive intervals",
+            "deviation_threshold_pct": threshold_pct,
+            "prior_window_days": lookback_days,
+            "sample_size": b_data["sample_size"],
+            "baseline_std_kwh": b_data["std_kwh"],
+            "interval_window": window_notation,
+            "source_record_ids": readings_ids,
+            "detector_version": DETECTOR_VERSION_PERSISTENT_BASELOAD,
+            "evidence_classification": evidence_cls,
+            "limits_of_interpretation": (
+                "Persistent shift in verified low-load baseload. Facilities inspection required to verify auxiliary equipment off-shift state."
+                if b_data.get("low_load_proven") else
+                "Sustained shift in comparable-period electricity use. Root cause investigation requires checking operating schedule, auxiliary equipment setpoints, or shift handover."
+            ),
+        },
+        "source_table": "fact_energy_meter_hourly",
+        "source_record_id": readings_ids[0] if readings_ids else None,
+        "upload_id": str(run_rows[0][5]) if run_rows[0][5] else None,
+        "detector_version": DETECTOR_VERSION_PERSISTENT_BASELOAD,
+        "qualification_status": "QUALIFIED",
+        "trust_level": evidence_cls,
+        "evidence_classification": evidence_cls,
+        "confidence": "HIGH" if evidence_cls == EVIDENCE_TRUSTED else "MEDIUM",
+        "reason_codes": [f"PERSISTENT_BASELOAD_{direction}", "CONSECUTIVE_INTERVALS_MET"],
+        "comparison_window": f"{lookback_days}d",
+    })
+
+
+def detect_persistent_baseload_anomalies(
+    session: Session,
+    plant_id: Optional[str] = None,
+    meter_id: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+    lookback_days: int = 14,
+    min_sample_size: int = 5,
+    deviation_threshold_pct: float = 15.0,
+    persistence_intervals: int = 3,
+    limit: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Detect persistent baseload or comparable-period electricity use changes.
+
+    Requirements:
+    - Screen shifts in kWh/h across low-load or comparable intervals for a plant or meter.
+    - Qualify what is true plant unvarying baseload vs 'Change in comparable-period electricity use'
+      (e.g., process line standby vs plant unvarying infrastructure load).
+    - Explicit prior window (default 14 days), minimum sample size (default 5 intervals),
+      deviation threshold (default 15%), and persistence rule (at least 3 consecutive intervals).
+    - Deterministic derivation from database records.
+    - Central evidence classification: TRUSTED, TENTATIVE, INCONCLUSIVE, DISQUALIFIED.
+    """
+    if lookback_days < 1:
+        raise ValueError("lookback_days must be at least 1")
+    if min_sample_size < 2:
+        raise ValueError("min_sample_size must be at least 2")
+    if deviation_threshold_pct <= 0:
+        raise ValueError("deviation_threshold_pct must be positive")
+    if persistence_intervals < 2:
+        raise ValueError("persistence_intervals must be at least 2")
+
+    # Time boundaries determination
+    if start_time is not None and end_time is not None:
+        eval_start = start_time
+        if end_time == start_time:
+            eval_end = start_time + timedelta(days=1)
+        elif end_time.hour == 23 and end_time.minute == 0 and end_time.second == 0:
+            eval_end = end_time + timedelta(hours=1)
+        else:
+            eval_end = end_time
+    elif start_time is not None:
+        eval_start = start_time
+        eval_end = start_time + timedelta(days=1)
+    else:
+        max_ts_row = session.execute(text("SELECT MAX(timestamp) FROM fact_energy_meter_hourly")).fetchone()
+        max_ts = max_ts_row[0] if max_ts_row and max_ts_row[0] else datetime.utcnow()
+        eval_end = datetime.combine(max_ts.date() + timedelta(days=1), datetime.min.time())
+        eval_start = datetime.combine(max_ts.date(), datetime.min.time())
+
+    baseline_start = eval_start - timedelta(days=lookback_days)
+    baseline_end = eval_start
+
+    # Query baseline stats partitioned by (plant_id, meter_id)
+    where_parts = []
+    params: Dict[str, Any] = {
+        "b_start": baseline_start,
+        "b_end": baseline_end,
+        "e_start": eval_start,
+        "e_end": eval_end,
+    }
+    if plant_id:
+        where_parts.append("plant_id = :plant_id")
+        params["plant_id"] = plant_id
+    if meter_id:
+        where_parts.append("meter_id = :meter_id")
+        params["meter_id"] = meter_id
+    extra_filter = f"AND {' AND '.join(where_parts)}" if where_parts else ""
+
+    # Query baseline intervals and production records partitioned by (plant_id, meter_id)
+    where_parts = []
+    params: Dict[str, Any] = {
+        "b_start": baseline_start,
+        "b_end": baseline_end,
+        "e_start": eval_start,
+        "e_end": eval_end,
+    }
+    if plant_id:
+        where_parts.append("plant_id = :plant_id")
+        params["plant_id"] = plant_id
+    if meter_id:
+        where_parts.append("meter_id = :meter_id")
+        params["meter_id"] = meter_id
+    extra_filter = f"AND {' AND '.join(where_parts)}" if where_parts else ""
+
+    # Fetch individual baseline intervals to evaluate low-load evidence and stability independently
+    baseline_intervals_sql = f"""
+        SELECT
+            plant_id,
+            meter_id,
+            timestamp,
+            consumption_kwh,
+            meter_reading_id
+        FROM fact_energy_meter_hourly
+        WHERE timestamp >= :b_start AND timestamp < :b_end
+          AND consumption_kwh > 0
+          {extra_filter}
+        ORDER BY plant_id, meter_id, timestamp ASC
+    """
+    b_interval_rows = session.execute(text(baseline_intervals_sql), params).fetchall()
+
+    # Group baseline readings by (plant_id, meter_id)
+    baseline_by_group: Dict[Tuple[str, str], List[Any]] = {}
+    for r in b_interval_rows:
+        k = (r[0], r[1])
+        baseline_by_group.setdefault(k, []).append(r)
+
+    # Query matched production records in the reference window to evaluate low-load condition
+    prod_where = ["event_ts >= :b_start", "event_ts < :b_end"]
+    prod_params: Dict[str, Any] = {"b_start": baseline_start, "b_end": baseline_end}
+    if plant_id:
+        prod_where.append("plant_id = :plant_id")
+        prod_params["plant_id"] = plant_id
+
+    prod_sql = f"""
+        SELECT
+            plant_id,
+            line_id,
+            event_ts,
+            actual_qty AS actual_units_produced,
+            good_qty AS good_units_produced,
+            downtime_min AS downtime_minutes
+        FROM fact_hourly_production
+        WHERE {' AND '.join(prod_where)}
+    """
+    prod_rows = session.execute(text(prod_sql), prod_params).fetchall()
+    prod_by_plant_ts: Dict[Tuple[str, datetime], List[Any]] = {}
+    for pr in prod_rows:
+        k_prod = (pr[0], pr[2])
+        prod_by_plant_ts.setdefault(k_prod, []).append(pr)
+
+    # Fetch registered lines per plant to know full meter and utility boundaries
+    line_rows = session.execute(text("SELECT line_id, plant_id, line_type FROM dim_production_line")).fetchall()
+    lines_by_plant: Dict[str, List[str]] = {}
+    for lr in line_rows:
+        lines_by_plant.setdefault(lr[1], []).append(lr[0])
+
+    group_baselines = {}
+    disqualified_groups = {}
+    CV_STABILITY_THRESHOLD = 0.15  # Maximum coefficient of variation allowed for stable baseline
+
+    for (pid, mid), group_rows in baseline_by_group.items():
+        all_readings = [float(r[3]) for r in group_rows]
+        cnt = len(all_readings)
+
+        # Disqualification check 1: Sample size
+        if cnt < min_sample_size:
+            disqualified_groups[f"{pid}_{mid}"] = (
+                f"Sample size {cnt} is below minimum requirement of {min_sample_size} intervals"
+            )
+            continue
+
+        # Determine meter boundary lines
+        is_dedicated = False
+        plant_lines = lines_by_plant.get(pid, [])
+        if "SMT" in mid.upper():
+            boundary_lines = [l for l in plant_lines if "SMT" in l.upper()]
+            is_dedicated = True
+        elif "FAL" in mid.upper() or "ASSEMBLY" in mid.upper():
+            boundary_lines = [l for l in plant_lines if "FAL" in l.upper()]
+            is_dedicated = True
+        else:
+            # Shared utility meter: serves all lines across the plant
+            boundary_lines = plant_lines
+            is_dedicated = False
+
+        # Evaluate Condition 1: Low-load evidence across boundary lines
+        # For dedicated process meter: matched production records must show zero output / stoppage on its lines
+        # For shared utility meter: a single stopped line cannot establish low load across the utility boundary;
+        # whole-plant non-operating state (all lines at plant stopped) is required.
+        low_load_rows = []
+        excluded_active_intervals = 0
+
+        for r in group_rows:
+            ts = r[2]
+            p_records = prod_by_plant_ts.get((pid, ts), [])
+            if not p_records or not boundary_lines:
+                # No production records to prove low-load
+                continue
+
+            # Check if all boundary lines were non-operating / stopped in this interval
+            boundary_prod = [p for p in p_records if p[1] in boundary_lines]
+            if len(boundary_prod) == len(boundary_lines):
+                # We have complete matched records for all boundary lines
+                # Distinguish missing reading (None) from measured zero (0)
+                all_stopped = all(
+                    (p[3] is not None and p[4] is not None and p[3] == 0 and p[4] == 0) or
+                    (p[5] is not None and p[5] >= 60)
+                    for p in boundary_prod
+                )
+                if all_stopped:
+                    low_load_rows.append(r)
+                else:
+                    excluded_active_intervals += 1
+
+        low_load_proven = len(low_load_rows) >= min_sample_size
+
+        # Select candidate evaluation set:
+        # If low-load is proven across eligible intervals, evaluate statistics on the low-load intervals.
+        # Otherwise, use the comparable historical population.
+        if low_load_proven:
+            eval_dataset = [float(r[3]) for r in low_load_rows]
+            eval_count = len(eval_dataset)
+            exclusions_list = [f"Excluded {excluded_active_intervals} active production intervals from low-load baseline population"]
+            low_load_detail = (
+                f"Demonstrated low-load condition confirmed by complete matched production records "
+                f"across all boundary lines ({', '.join(boundary_lines)}). N={eval_count} low-load intervals."
+            )
+        else:
+            eval_dataset = all_readings
+            eval_count = cnt
+            exclusions_list = [
+                f"Low-load condition unverified across full meter boundary ({', '.join(boundary_lines)}). "
+                f"Comparison population uses {cnt} historical operating intervals."
+            ]
+            low_load_detail = (
+                f"Low-load evidence missing across full meter boundary ({', '.join(boundary_lines)}). "
+                f"A single stopped line cannot establish low load for a shared utility or process boundary."
+            )
+
+        mean_v = sum(eval_dataset) / eval_count
+        med_v = sorted(eval_dataset)[eval_count // 2]
+        variance = sum((x - mean_v) ** 2 for x in eval_dataset) / (eval_count - 1) if eval_count > 1 else 0.0
+        std_v = math.sqrt(variance)
+
+        # Disqualification check 2: Zero variance flatline
+        if std_v == 0.0:
+            disqualified_groups[f"{pid}_{mid}"] = "Baseline exhibits zero-variance flatline (stddev == 0.0000 kWh)"
+            continue
+
+        # Evaluate Condition 2: Stability (low coefficient of variation establishes stability only)
+        cv = (std_v / mean_v) if mean_v > 0 else 1.0
+        is_stable = cv < CV_STABILITY_THRESHOLD
+
+        if not is_stable:
+            disqualified_groups[f"{pid}_{mid}"] = (
+                f"Comparison inadequate: baseline stability threshold not met "
+                f"(observed CV={cv:.2f} >= {CV_STABILITY_THRESHOLD:.2f}, threshold: CV < {CV_STABILITY_THRESHOLD:.2f})"
+            )
+            continue
+
+        # Classification of load type:
+        # Use "Baseload drift" ONLY when low-load evidence, sample size, stability, and persistence rules all pass.
+        # When low-load evidence is missing but comparable historical change exists, use "Change in comparable-period electricity use".
+        if low_load_proven:
+            load_cls = "Baseload drift"
+            boundary_note = (
+                f"Demonstrated low-load reference period with verified non-operating production boundary "
+                f"and stable electricity consumption (CV={cv:.2f}, N={eval_count} low-load intervals)."
+            )
+        else:
+            load_cls = "Change in comparable-period electricity use"
+            boundary_note = (
+                f"Electricity use compared against historical reference population of {cnt} intervals "
+                f"(CV={cv:.2f}, mean={mean_v:.2f} kWh/h on meter {mid}). "
+                f"Low-load evidence across full meter boundary is unverified; classified as comparable-period change."
+            )
+
+        ref_window_str = f"[{baseline_start.strftime('%Y-%m-%d %H:%M')}, {baseline_end.strftime('%Y-%m-%d %H:%M')})"
+        group_baselines[(pid, mid)] = {
+            "sample_size": eval_count,
+            "mean_kwh": mean_v,
+            "median_kwh": med_v,
+            "std_kwh": std_v,
+            "cv": cv,
+            "load_classification": load_cls,
+            "boundary_note": boundary_note,
+            "low_load_proven": low_load_proven,
+            "reference_window": ref_window_str,
+            "stability_threshold": f"CV < {CV_STABILITY_THRESHOLD:.2f} (observed CV={cv:.4f})",
+            "exclusions": exclusions_list,
+            "low_load_evidence": {
+                "status": "QUALIFIED" if low_load_proven else "UNPROVEN",
+                "meter_boundary": "DEDICATED_PROCESS" if is_dedicated else "SHARED_UTILITY",
+                "detail": low_load_detail,
+                "matched_production_checked": True,
+                "boundary_lines": boundary_lines,
+                "low_load_sample_count": len(low_load_rows),
+            },
+        }
+
+    # Query evaluation observations
+    eval_sql = f"""
+        SELECT
+            plant_id,
+            meter_id,
+            timestamp,
+            consumption_kwh,
+            meter_reading_id,
+            upload_id
+        FROM fact_energy_meter_hourly
+        WHERE timestamp >= :e_start AND timestamp < :e_end
+          AND consumption_kwh > 0
+          {extra_filter}
+        ORDER BY plant_id, meter_id, timestamp ASC
+    """
+    e_rows = session.execute(text(eval_sql), params).fetchall()
+
+    # Group evaluation rows by (plant_id, meter_id)
+    eval_by_group: Dict[Tuple[str, str], List[Any]] = {}
+    for r in e_rows:
+        k = (r[0], r[1])
+        if k not in eval_by_group:
+            eval_by_group[k] = []
+        eval_by_group[k].append(r)
+
+    anomalies: List[Dict[str, Any]] = []
+
+    for group_key, rows_in_group in eval_by_group.items():
+        if group_key not in group_baselines:
+            continue
+
+        b_data = group_baselines[group_key]
+        base_val = b_data["mean_kwh"]
+        if base_val <= 0:
+            continue
+
+        pid, mid = group_key
+
+        # Track persistent consecutive runs
+        current_run: List[Any] = []
+        current_direction: Optional[str] = None
+
+        for r in rows_in_group:
+            kwh_float = float(r[3])
+            pct_dev = ((kwh_float - base_val) / base_val) * 100.0
+
+            if abs(pct_dev) >= deviation_threshold_pct:
+                direction = "INCREASE" if pct_dev > 0 else "DECREASE"
+                if current_direction == direction:
+                    current_run.append(r)
+                else:
+                    if len(current_run) >= persistence_intervals:
+                        _record_baseload_anomaly(current_run, b_data, current_direction, deviation_threshold_pct, persistence_intervals, lookback_days, anomalies)
+                    current_run = [r]
+                    current_direction = direction
+            else:
+                if len(current_run) >= persistence_intervals:
+                    _record_baseload_anomaly(current_run, b_data, current_direction, deviation_threshold_pct, persistence_intervals, lookback_days, anomalies)
+                current_run = []
+                current_direction = None
+
+        # Check trailing run
+        if len(current_run) >= persistence_intervals:
+            _record_baseload_anomaly(current_run, b_data, current_direction, deviation_threshold_pct, persistence_intervals, lookback_days, anomalies)
+
+    return {
+        "analysis_type": "persistent_baseload",
+        "prior_window_days": lookback_days,
+        "min_sample_size": min_sample_size,
+        "deviation_threshold_pct": deviation_threshold_pct,
+        "persistence_intervals": persistence_intervals,
+        "baseline_period": {"start_time": baseline_start.isoformat(), "end_time": baseline_end.isoformat()},
+        "evaluation_period": {"start_time": eval_start.isoformat(), "end_time": eval_end.isoformat()},
+        "total_anomalies_detected": len(anomalies),
+        "disqualified_groups": disqualified_groups,
         "anomalies": anomalies[:limit] if limit is not None and limit >= 0 else anomalies,
     }
 
@@ -1109,23 +1606,37 @@ def detect_low_power_factor_anomalies(
             "baseline_value": _format_decimal(thresh_dec, 4),
             "deviation_score": float(round(deficit, 4)),
             "severity": sev,
-            "explanation": explanation,
+            "explanation": (
+                f"Measured power factor of {pf_dec:.4f} at {ts} is below the engineering monitoring benchmark "
+                f"of {thresh_dec:.4f} (deficit: {deficit:.4f}, source: CEA Technical Standards / IEEE 519 benchmark) "
+                f"on meter {mid} at plant {pid}. Active energy: {kwh:.4f} kWh. "
+                f"Note: Financial tariff penalty claims require the unsupplied utility billing contract."
+            ),
             "context_flags": {
                 "threshold": float(threshold),
+                "threshold_source": "CEA Technical Standards / IEEE 519 benchmark (0.90 lag)",
                 "deficit": float(round(deficit, 4)),
                 "consumption_kwh": float(round(kwh, 4)),
                 "tariff_penalty_claimed": False,
+                "tariff_penalty_disclaimer": "Tariff penalty claims require the unsupplied utility billing contract.",
                 "note": "Power factor deficit detected; monetary penalty requires site-specific utility tariff schedule.",
                 "source_table": "fact_energy_meter_hourly",
                 "source_record_id": str(reading_id) if reading_id else None,
                 "upload_id": str(upl_id) if upl_id else None,
                 "detector_version": DETECTOR_VERSION_LOW_POWER_FACTOR,
                 "lineage_status": "AVAILABLE" if reading_id else "UNAVAILABLE",
+                "evidence_classification": EVIDENCE_TRUSTED if reading_id else EVIDENCE_TENTATIVE,
             },
             "source_table": "fact_energy_meter_hourly",
             "source_record_id": str(reading_id) if reading_id else None,
             "upload_id": str(upl_id) if upl_id else None,
             "detector_version": DETECTOR_VERSION_LOW_POWER_FACTOR,
+            "qualification_status": "QUALIFIED",
+            "trust_level": EVIDENCE_TRUSTED if reading_id else EVIDENCE_TENTATIVE,
+            "evidence_classification": EVIDENCE_TRUSTED if reading_id else EVIDENCE_TENTATIVE,
+            "confidence": "HIGH",
+            "reason_codes": ["POWER_FACTOR_BELOW_THRESHOLD"],
+            "comparison_window": "HOURLY_METER_READING",
         })
 
     return {
@@ -1268,10 +1779,43 @@ def detect_zero_production_standby_anomalies(
 
         reason_counts[dt_reason] = reason_counts.get(dt_reason, 0) + 1
 
-        explanation = (
-            f"Line {lid} ({area}) recorded 0 units during hour {event_ts} with reported downtime of "
-            f"{dt_min} min ({dt_reason}). Process meter {mid} registered {kwh_dec:.4f} kWh during that interval."
+        # Look up following productive interval if available
+        following_row = session.execute(
+            text("""
+                SELECT event_ts, good_qty, actual_qty
+                FROM fact_hourly_production
+                WHERE plant_id = :pid AND line_id = :lid AND event_ts > :event_ts AND good_qty > 0
+                ORDER BY event_ts ASC
+                LIMIT 1
+            """),
+            {"pid": pid, "lid": lid, "event_ts": event_ts},
+        ).fetchone()
+
+        following_info = None
+        following_str = ""
+        if following_row:
+            f_ts, f_good, f_act = following_row
+            f_time_str = f_ts.strftime("%H:%M") if hasattr(f_ts, "strftime") else str(f_ts)
+            following_str = f" At {f_time_str} the line produced {f_good} good units."
+            following_info = {
+                "timestamp": f_ts.isoformat() if hasattr(f_ts, "isoformat") else str(f_ts),
+                "good_qty": int(f_good),
+                "actual_qty": int(f_act),
+            }
+
+        hour_str = event_ts.strftime("%H:%M") if hasattr(event_ts, "strftime") else str(event_ts)
+        observed_condition = (
+            f"electricity consumed during zero-output hour at {hour_str} "
+            f"(target: {target_q} units, actual: {actual_q}, downtime: {dt_min} min, reason: {dt_reason}). "
+            f"Associated {mid} readings registered {kwh_dec:.4f} kWh."
         )
+        limits_of_interpretation = (
+            "The avoidable portion and verified savings are unknown. "
+            "No expected-energy baseline is available."
+        )
+        suggested_investigation = "Investigate operating conditions and restart requirements."
+
+        explanation = f"{observed_condition}{following_str} {suggested_investigation} {limits_of_interpretation}"
 
         source_records = [
             {
@@ -1309,7 +1853,11 @@ def detect_zero_production_standby_anomalies(
                 "product_id": prod_id,
                 "category": "STANDBY_POWER",
                 "avoidable_waste_claimed": False,
-                "note": "Energy during a zero-output interval; no expected-energy baseline is available, and it is not classified as avoidable waste.",
+                "observed_condition": observed_condition,
+                "limits_of_interpretation": limits_of_interpretation,
+                "suggested_investigation": suggested_investigation,
+                "following_productive_interval": following_info,
+                "note": "Electricity consumed during zero-output interval; investigate operating conditions and restart requirements. The avoidable portion and verified savings are unknown.",
                 "detector_version": DETECTOR_VERSION_STANDBY_ENERGY,
                 "lineage_status": "MULTI_SOURCE",
                 "lineage_reason": "Cross-domain correlation between zero-output production interval and process meter energy draw.",
@@ -1319,6 +1867,13 @@ def detect_zero_production_standby_anomalies(
             "source_record_id": None,
             "upload_id": None,
             "detector_version": DETECTOR_VERSION_STANDBY_ENERGY,
+            "qualification_status": "QUALIFIED",
+            "trust_level": EVIDENCE_TRUSTED,
+            "evidence_classification": EVIDENCE_TRUSTED,
+            "confidence": "MEDIUM",
+            "reason_codes": ["ZERO_OUTPUT_PROCESS_DRAW"],
+            "comparison_window": "HOURLY_CROSS_STREAM",
+            "source_records": source_records,
         })
 
     # Query facility utility totals strictly during these intended zero-production timestamps for complete segregation.
@@ -1368,6 +1923,240 @@ def detect_zero_production_standby_anomalies(
             "note": "Facility utilities (HVAC, Compressor, Chiller) provide baseline plant infrastructure and are excluded from process standby.",
             "overall_utility_totals": utility_breakdown,
         },
+        "anomalies": anomalies[:limit] if limit is not None and limit >= 0 else anomalies,
+    }
+
+
+def detect_zero_output_and_restart_anomalies(
+    session: Session,
+    plant_id: Optional[str] = None,
+    line_id: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+    limit: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Detect zero-output line stoppage and restart anomalies reusing Phase 3 operating context service.
+
+    Requirements:
+    - Reuses Phase 3 operating-context service (get_operating_context_observations, detect_stoppage_episodes, compare_similar_periods).
+    - Distinguishes three specific subtypes:
+      1. UNUSUALLY_LONG_STOPPAGE: stoppage duration vs historical median duration
+      2. HIGH_STOPPAGE_ENERGY_RATE: stoppage electricity rate (kWh/h) vs historical median rate
+      3. UNUSUAL_RESTART_BEHAVIOR: restart good output, scrap, downtime
+    - Protects the boundary: actual > 0 with good = 0 is a quality scrap event, NOT zero production.
+    - Central evidence classification: TRUSTED, TENTATIVE, INCONCLUSIVE, DISQUALIFIED.
+    """
+    from app.services.operating_context import (
+        build_actionable_investigation,
+        compare_similar_periods,
+        detect_stoppage_episodes,
+        get_operating_context_observations,
+    )
+
+    # Load all observations for the selected line/plant across full dataset to support historical comparison
+    obs = get_operating_context_observations(
+        session=session,
+        plant_id=plant_id,
+        line_id=line_id,
+        start_date=None,
+        end_date=None,
+        limit=50000,
+    )
+
+    all_episodes = detect_stoppage_episodes(obs, min_duration_hours=1)
+
+    # Filter evaluation episodes matching parameters
+    eval_episodes = []
+    for ep in all_episodes:
+        if plant_id and ep.plant_id != plant_id:
+            continue
+        if line_id and ep.line_id != line_id:
+            continue
+        if start_time and ep.last_interval < start_time:
+            continue
+        if end_time and ep.first_interval >= end_time:
+            continue
+        eval_episodes.append(ep)
+
+    anomalies: List[Dict[str, Any]] = []
+
+    for ep in eval_episodes:
+        # STRICT BOUNDARY PROTECTION: actual_qty must be 0 for zero-production stoppage
+        if ep.actual_qty > 0:
+            # actual_qty > 0 with good_qty = 0 is a quality scrap event, NOT zero production
+            continue
+
+        comparison = compare_similar_periods(ep, all_episodes)
+        actionable_inv = build_actionable_investigation(ep, comparison)
+
+        evidence_cls = (
+            EVIDENCE_TRUSTED
+            if (comparison.eligible_count >= 5 and ep.energy_coverage_pct >= 100.0)
+            else (EVIDENCE_TENTATIVE if comparison.eligible_count >= 1 else EVIDENCE_INCONCLUSIVE)
+        )
+
+        kwh_rate = round(ep.process_kwh / ep.observed_duration_hours, 2) if (ep.process_kwh and ep.observed_duration_hours > 0) else None
+        source_rec_id = ep.source_record_ids[0] if ep.source_record_ids else None
+
+        # 1. Unusually long stoppage (duration vs historical median / norm)
+        hist_norm_dur = comparison.duration_max_hours or 1
+        if comparison.eligible_count > 0 and ep.observed_duration_hours > hist_norm_dur:
+            dur_diff = ep.observed_duration_hours - hist_norm_dur
+            dur_sev = "HIGH" if ep.observed_duration_hours >= 3 else "MEDIUM"
+            dur_explanation = (
+                f"Line {ep.line_id} ({ep.process}) experienced an unusually long stoppage of {ep.observed_duration_hours} hours "
+                f"across interval {ep.interval_window} (historical norm across {comparison.eligible_count} earlier episodes was {hist_norm_dur} hour). "
+                f"Process electricity during zero-output hours: {ep.process_kwh:.3f} kWh. "
+                f"Target shortfall during observed hours: {ep.target_shortfall} units. "
+                f"Recorded downtime: {ep.recorded_downtime_minutes} min ({', '.join(ep.downtime_reasons_display)})."
+            )
+            anomalies.append({
+                "anomaly_type": "UNUSUALLY_LONG_STOPPAGE",
+                "plant_id": ep.plant_id,
+                "meter_id": ep.meter_id if hasattr(ep, "meter_id") else None,
+                "line_id": ep.line_id,
+                "timestamp": ep.first_interval.isoformat(),
+                "actual_value": _format_decimal(ep.observed_duration_hours, 2),
+                "baseline_value": _format_decimal(hist_norm_dur, 2),
+                "deviation_score": float(dur_diff),
+                "severity": dur_sev,
+                "explanation": dur_explanation,
+                "context_flags": {
+                    "subtype": "UNUSUALLY_LONG_STOPPAGE",
+                    "interval_window": ep.interval_window,
+                    "target_shortfall": ep.target_shortfall,
+                    "process_kwh": ep.process_kwh,
+                    "process_electricity_label": "Process electricity during zero-output hours",
+                    "downtime_reasons_display": ep.downtime_reasons_display,
+                    "historical_eligible_count": comparison.eligible_count,
+                    "historical_median_duration": comparison.duration_max_hours,
+                    "actionable_investigation": actionable_inv.model_dump(),
+                    "source_records": [{"source_table": "fact_hourly_production", "source_record_id": s} for s in ep.source_record_ids],
+                    "detector_version": DETECTOR_VERSION_ZERO_OUTPUT_RESTART,
+                    "evidence_classification": evidence_cls,
+                },
+                "source_table": "fact_hourly_production",
+                "source_record_id": source_rec_id,
+                "upload_id": None,
+                "detector_version": DETECTOR_VERSION_ZERO_OUTPUT_RESTART,
+                "qualification_status": "QUALIFIED" if evidence_cls == EVIDENCE_TRUSTED else "PARTIAL",
+                "trust_level": evidence_cls,
+                "evidence_classification": evidence_cls,
+                "confidence": "HIGH" if evidence_cls == EVIDENCE_TRUSTED else "MEDIUM",
+                "reason_codes": ["UNUSUALLY_LONG_STOPPAGE_DURATION", "HISTORICAL_COMPARISON_EXCEEDED"],
+                "comparison_window": comparison.historical_window,
+            })
+
+        # 2. High stoppage energy rate (kWh/h vs historical median rate)
+        if (
+            comparison.median_kwh_per_hour is not None
+            and kwh_rate is not None
+            and kwh_rate > (comparison.median_kwh_per_hour * 1.15)
+        ):
+            rate_deficit = kwh_rate - comparison.median_kwh_per_hour
+            rate_sev = "HIGH" if kwh_rate > (comparison.median_kwh_per_hour * 1.30) else "MEDIUM"
+            rate_explanation = (
+                f"Line {ep.line_id} ({ep.process}) registered an elevated stoppage consumption rate of {kwh_rate:.2f} kWh/h "
+                f"during interval {ep.interval_window} (historical median rate: {comparison.median_kwh_per_hour:.2f} kWh/h across {comparison.eligible_count} earlier episodes). "
+                f"Process electricity during zero-output hours: {ep.process_kwh:.3f} kWh."
+            )
+            anomalies.append({
+                "anomaly_type": "HIGH_STOPPAGE_ENERGY_RATE",
+                "plant_id": ep.plant_id,
+                "meter_id": ep.meter_id if hasattr(ep, "meter_id") else None,
+                "line_id": ep.line_id,
+                "timestamp": ep.first_interval.isoformat(),
+                "actual_value": _format_decimal(kwh_rate, 4),
+                "baseline_value": _format_decimal(comparison.median_kwh_per_hour, 4),
+                "deviation_score": float(round(rate_deficit, 4)),
+                "severity": rate_sev,
+                "explanation": rate_explanation,
+                "context_flags": {
+                    "subtype": "HIGH_STOPPAGE_ENERGY_RATE",
+                    "interval_window": ep.interval_window,
+                    "process_kwh": ep.process_kwh,
+                    "process_electricity_label": "Process electricity during zero-output hours",
+                    "historical_median_kwh_per_hour": comparison.median_kwh_per_hour,
+                    "actionable_investigation": actionable_inv.model_dump(),
+                    "source_records": [{"source_table": "fact_energy_meter_hourly", "source_record_id": s} for s in ep.source_record_ids],
+                    "detector_version": DETECTOR_VERSION_ZERO_OUTPUT_RESTART,
+                    "evidence_classification": evidence_cls,
+                },
+                "source_table": "fact_energy_meter_hourly",
+                "source_record_id": source_rec_id,
+                "upload_id": None,
+                "detector_version": DETECTOR_VERSION_ZERO_OUTPUT_RESTART,
+                "qualification_status": "QUALIFIED" if evidence_cls == EVIDENCE_TRUSTED else "PARTIAL",
+                "trust_level": evidence_cls,
+                "evidence_classification": evidence_cls,
+                "confidence": "HIGH" if evidence_cls == EVIDENCE_TRUSTED else "MEDIUM",
+                "reason_codes": ["HIGH_STOPPAGE_ENERGY_DRAW", "MEDIAN_RATE_EXCEEDED"],
+                "comparison_window": comparison.historical_window,
+            })
+
+        # 3. Unusual restart behavior (restart good output, scrap, downtime)
+        if ep.next_restart_interval:
+            rst = ep.next_restart_interval
+            has_restart_scrap = (rst.reject_qty or 0) > 0
+            has_low_ramp = (rst.actual_qty or 0) < 100 and (rst.consumption_kwh or 0) > 40.0
+            has_restart_downtime = (rst.downtime_min or 0) > 15
+
+            if has_restart_scrap or has_low_ramp or has_restart_downtime:
+                rst_sev = "HIGH" if (rst.reject_qty or 0) >= 30 else "MEDIUM"
+                rst_reasons = []
+                if has_restart_scrap:
+                    rst_reasons.append(f"{rst.reject_qty} scrap units on restart")
+                if has_low_ramp:
+                    rst_reasons.append(f"low output ramp ({rst.actual_qty} units at {rst.consumption_kwh:.2f} kWh)")
+                if has_restart_downtime:
+                    rst_reasons.append(f"{rst.downtime_min} min restart downtime")
+
+                rst_explanation = (
+                    f"Line {ep.line_id} ({ep.process}) exhibited unusual restart behavior following stoppage at {ep.interval_window}: "
+                    f"restart interval {rst.interval_window} recorded {', '.join(rst_reasons)} "
+                    f"({rst.actual_qty} actual units, {rst.good_qty} good, {rst.consumption_kwh:.2f} kWh)."
+                )
+                anomalies.append({
+                    "anomaly_type": "UNUSUAL_RESTART_BEHAVIOR",
+                    "plant_id": ep.plant_id,
+                    "meter_id": ep.meter_id if hasattr(ep, "meter_id") else None,
+                    "line_id": ep.line_id,
+                    "timestamp": rst.timestamp.isoformat(),
+                    "actual_value": _format_decimal(rst.reject_qty, 2),
+                    "baseline_value": Decimal("0.00"),
+                    "deviation_score": float(rst.reject_qty or 0),
+                    "severity": rst_sev,
+                    "explanation": rst_explanation,
+                    "context_flags": {
+                        "subtype": "UNUSUAL_RESTART_BEHAVIOR",
+                        "stoppage_episode_id": ep.episode_id,
+                        "restart_interval_window": rst.interval_window,
+                        "restart_actual_qty": rst.actual_qty,
+                        "restart_good_qty": rst.good_qty,
+                        "restart_reject_qty": rst.reject_qty,
+                        "restart_kwh": rst.consumption_kwh,
+                        "restart_downtime_min": rst.downtime_min,
+                        "actionable_investigation": actionable_inv.model_dump(),
+                        "detector_version": DETECTOR_VERSION_ZERO_OUTPUT_RESTART,
+                        "evidence_classification": EVIDENCE_TRUSTED,
+                    },
+                    "source_table": "fact_hourly_production",
+                    "source_record_id": str(rst.event_id) if hasattr(rst, "event_id") and rst.event_id else None,
+                    "upload_id": None,
+                    "detector_version": DETECTOR_VERSION_ZERO_OUTPUT_RESTART,
+                    "qualification_status": "QUALIFIED",
+                    "trust_level": EVIDENCE_TRUSTED,
+                    "evidence_classification": EVIDENCE_TRUSTED,
+                    "confidence": "HIGH",
+                    "reason_codes": ["UNUSUAL_RESTART_SCRAP_OR_RAMP", "QUALITY_SCRAP_ON_RESTART"],
+                    "comparison_window": "POST_STOPPAGE_RESTART_INTERVAL",
+                })
+
+    return {
+        "analysis_type": "zero_output_restart",
+        "total_anomalies_detected": len(anomalies),
+        "total_stoppage_episodes_evaluated": len(eval_episodes),
         "anomalies": anomalies[:limit] if limit is not None and limit >= 0 else anomalies,
     }
 
@@ -1426,12 +2215,34 @@ def detect_all_anomalies(
         end_time=end_time,
         limit=limit,
     )
+    baseload_anomalies = detect_persistent_baseload_anomalies(
+        session=session,
+        plant_id=plant_id,
+        meter_id=meter_id,
+        start_time=start_time,
+        end_time=end_time,
+        lookback_days=14,
+        min_sample_size=5,
+        deviation_threshold_pct=15.0,
+        persistence_intervals=3,
+        limit=limit,
+    )
+    restart_anomalies = detect_zero_output_and_restart_anomalies(
+        session=session,
+        plant_id=plant_id,
+        line_id=None,
+        start_time=start_time,
+        end_time=end_time,
+        limit=limit,
+    )
 
     total_count = (
         stat_anomalies["total_anomalies_detected"]
         + rolling_anomalies["total_anomalies_detected"]
         + pf_anomalies["total_anomalies_detected"]
         + standby_anomalies["total_events_detected"]
+        + baseload_anomalies["total_anomalies_detected"]
+        + restart_anomalies["total_anomalies_detected"]
     )
 
     return {
@@ -1445,4 +2256,6 @@ def detect_all_anomalies(
         "rolling_baseline": rolling_anomalies,
         "low_power_factor": pf_anomalies,
         "zero_production_standby": standby_anomalies,
+        "persistent_baseload": baseload_anomalies,
+        "zero_output_restart": restart_anomalies,
     }

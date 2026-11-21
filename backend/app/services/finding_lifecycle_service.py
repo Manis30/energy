@@ -23,8 +23,17 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.findings import FindingAuditLog, FindingOccurrence, OperationalFinding
-from app.models.source_data import FactEnergyMeterHourly, FactHourlyProduction
+from app.models.findings import (
+    FindingAuditLog,
+    FindingOccurrence,
+    FindingOccurrenceSource,
+    OperationalFinding,
+)
+from app.models.source_data import (
+    FactEnergyMeterHourly,
+    FactHourlyProduction,
+    FactSourceRevision,
+)
 from app.models.upload_history import UploadHistory
 from app.services.anomaly_detection import detect_all_anomalies
 
@@ -58,6 +67,29 @@ DETECTOR_FAMILY_MAP: Dict[str, List[str]] = {
     "POWER_FACTOR": ["LOW_POWER_FACTOR"],
     "ZERO_PRODUCTION_STANDBY": ["ZERO_PRODUCTION_STANDBY_ENERGY"],
     "ZERO_PRODUCTION": ["ZERO_PRODUCTION_STANDBY_ENERGY"],
+    "PERSISTENT_BASELOAD": [
+        "PERSISTENT_BASELOAD_INCREASE",
+        "PERSISTENT_BASELOAD_DECREASE",
+        "BASELOAD_DRIFT",
+        "COMPARABLE_PERIOD_ELECTRICITY_CHANGE",
+        "COMPARABLE_PERIOD_ELECTRICITY_INCREASE",
+        "COMPARABLE_PERIOD_ELECTRICITY_DECREASE",
+    ],
+    "BASELOAD": [
+        "PERSISTENT_BASELOAD_INCREASE",
+        "PERSISTENT_BASELOAD_DECREASE",
+        "BASELOAD_DRIFT",
+        "COMPARABLE_PERIOD_ELECTRICITY_CHANGE",
+        "COMPARABLE_PERIOD_ELECTRICITY_INCREASE",
+        "COMPARABLE_PERIOD_ELECTRICITY_DECREASE",
+    ],
+    "COMPARABLE_PERIOD": [
+        "COMPARABLE_PERIOD_ELECTRICITY_CHANGE",
+        "COMPARABLE_PERIOD_ELECTRICITY_INCREASE",
+        "COMPARABLE_PERIOD_ELECTRICITY_DECREASE",
+    ],
+    "ZERO_OUTPUT_RESTART": ["UNUSUALLY_LONG_STOPPAGE", "HIGH_STOPPAGE_ENERGY_RATE", "UNUSUAL_RESTART_BEHAVIOR"],
+    "RESTART": ["UNUSUALLY_LONG_STOPPAGE", "HIGH_STOPPAGE_ENERGY_RATE", "UNUSUAL_RESTART_BEHAVIOR"],
 }
 
 # In-process lock guarding anomaly telemetry synchronization against duplicate concurrent runs
@@ -145,6 +177,169 @@ def _parse_datetime(dt_val: Any) -> datetime:
     raise ValueError(f"Cannot parse datetime from: {dt_val}")
 
 
+def _serialize_record_for_revision(rec: Any, tbl: str) -> Dict[str, Any]:
+    """Serialize physical fact record with exact string representation for numeric fields."""
+    if tbl == "fact_energy_meter_hourly":
+        return {
+            "meter_reading_id": rec.meter_reading_id,
+            "timestamp": rec.timestamp.isoformat() if rec.timestamp else None,
+            "date": rec.date.isoformat() if rec.date else None,
+            "plant_id": rec.plant_id,
+            "meter_id": rec.meter_id,
+            "area": rec.area,
+            "energy_source": rec.energy_source,
+            "consumption_kwh": str(rec.consumption_kwh) if rec.consumption_kwh is not None else None,
+            "demand_kw": str(rec.demand_kw) if rec.demand_kw is not None else None,
+            "power_factor": str(rec.power_factor) if rec.power_factor is not None else None,
+            "tariff_inr_per_kwh": str(rec.tariff_inr_per_kwh) if rec.tariff_inr_per_kwh is not None else None,
+            "cost_inr": str(rec.cost_inr) if rec.cost_inr is not None else None,
+            "co2e_kg": str(rec.co2e_kg) if rec.co2e_kg is not None else None,
+            "reading_quality": rec.reading_quality,
+            "upload_id": rec.upload_id,
+            "ingested_at": rec.ingested_at.isoformat() if rec.ingested_at else None,
+        }
+    elif tbl == "fact_hourly_production":
+        return {
+            "event_id": rec.event_id,
+            "event_ts": rec.event_ts.isoformat() if rec.event_ts else None,
+            "event_date": rec.event_date.isoformat() if rec.event_date else None,
+            "year": rec.year,
+            "month": rec.month,
+            "week": rec.week,
+            "day": rec.day,
+            "hour": rec.hour,
+            "plant_id": rec.plant_id,
+            "line_id": rec.line_id,
+            "shift_id": rec.shift_id,
+            "product_id": rec.product_id,
+            "production_order_id": rec.production_order_id,
+            "target_qty": rec.target_qty,
+            "actual_qty": rec.actual_qty,
+            "good_qty": rec.good_qty,
+            "reject_qty": rec.reject_qty,
+            "rework_qty": rec.rework_qty,
+            "downtime_min": rec.downtime_min,
+            "downtime_reason": rec.downtime_reason,
+            "operator_team": rec.operator_team,
+            "source_system": rec.source_system,
+            "data_quality": rec.data_quality,
+            "upload_id": rec.upload_id,
+            "ingested_at": rec.ingested_at.isoformat() if rec.ingested_at else None,
+        }
+    return {}
+
+
+def _pin_occurrence_sources(
+    session: Session,
+    occ_id: str,
+    anomaly: Dict[str, Any],
+    default_upload_id: Optional[str],
+    now: datetime,
+) -> Optional[str]:
+    """
+    Pin each contributing source telemetry record to an immutable FactSourceRevision.
+    Creates an initial revision on demand if one does not exist for the source record.
+    Returns the primary revision_id if applicable.
+    """
+    sources_to_pin: List[Dict[str, Any]] = []
+    if anomaly.get("source_records") and isinstance(anomaly["source_records"], list):
+        for s in anomaly["source_records"]:
+            sources_to_pin.append({
+                "source_table": s.get("source_table"),
+                "source_record_id": s.get("source_record_id"),
+                "role": s.get("role") or "PRIMARY_OBSERVATION",
+                "upload_id": s.get("upload_id") or default_upload_id,
+                "revision_id": s.get("revision_id"),
+            })
+    elif anomaly.get("source_table") and anomaly.get("source_record_id"):
+        sources_to_pin.append({
+            "source_table": anomaly.get("source_table"),
+            "source_record_id": anomaly.get("source_record_id"),
+            "role": "PRIMARY_OBSERVATION",
+            "upload_id": anomaly.get("upload_id") or default_upload_id,
+            "revision_id": anomaly.get("revision_id"),
+        })
+
+    primary_rev_id: Optional[str] = None
+
+    for item in sources_to_pin:
+        tbl = item.get("source_table")
+        rec_id = item.get("source_record_id")
+        role = item.get("role") or "PRIMARY_OBSERVATION"
+        up_id = item.get("upload_id")
+        rev_id = item.get("revision_id")
+
+        if not tbl or not rec_id:
+            continue
+
+        if not rev_id:
+            # Query existing current revision
+            rev_stmt = select(FactSourceRevision).where(
+                FactSourceRevision.source_table == tbl,
+                FactSourceRevision.source_record_id == str(rec_id),
+                FactSourceRevision.is_current == True,
+            )
+            existing_rev = session.execute(rev_stmt).scalars().first()
+            if existing_rev:
+                rev_id = existing_rev.revision_id
+            else:
+                # Create initial baseline revision from actual table row
+                raw_values = {}
+                b_key = f"{tbl}:{rec_id}"
+                plant_id = anomaly.get("plant_id", "UNKNOWN")
+
+                if tbl == "fact_energy_meter_hourly":
+                    e_row = session.execute(
+                        select(FactEnergyMeterHourly).where(FactEnergyMeterHourly.meter_reading_id == str(rec_id))
+                    ).scalars().first()
+                    if e_row:
+                        plant_id = e_row.plant_id
+                        b_key = f"{e_row.plant_id}:{e_row.meter_id}:{e_row.timestamp.isoformat()}"
+                        raw_values = _serialize_record_for_revision(e_row, tbl)
+                        up_id = up_id or e_row.upload_id
+                elif tbl == "fact_hourly_production":
+                    p_row = session.execute(
+                        select(FactHourlyProduction).where(FactHourlyProduction.event_id == str(rec_id))
+                    ).scalars().first()
+                    if p_row:
+                        plant_id = p_row.plant_id
+                        b_key = f"{p_row.plant_id}:{p_row.line_id}:{p_row.event_ts.isoformat()}"
+                        raw_values = _serialize_record_for_revision(p_row, tbl)
+                        up_id = up_id or p_row.upload_id
+
+                if raw_values:
+                    rev_id = f"REV-{tbl[:4].upper()}-{str(rec_id)[:16]}-1"
+                    new_rev = FactSourceRevision(
+                        revision_id=rev_id,
+                        source_table=tbl,
+                        source_record_id=str(rec_id),
+                        business_key=b_key,
+                        plant_id=plant_id,
+                        upload_id=up_id,
+                        revision_timestamp=now,
+                        source_values_json=json.dumps(raw_values, default=str),
+                        is_current=True,
+                    )
+                    session.add(new_rev)
+                    session.flush()
+
+        if rev_id and primary_rev_id is None:
+            primary_rev_id = rev_id
+
+        # Insert FindingOccurrenceSource link
+        occ_src = FindingOccurrenceSource(
+            occurrence_id=occ_id,
+            revision_id=rev_id,
+            source_table=tbl,
+            source_record_id=str(rec_id),
+            role=role,
+            upload_id=up_id,
+        )
+        session.add(occ_src)
+
+    return primary_rev_id
+
+
 def record_anomaly_occurrence(
     session: Session,
     anomaly: Dict[str, Any],
@@ -181,6 +376,24 @@ def record_anomaly_occurrence(
     upload_id = str(anomaly["upload_id"]).strip() if anomaly.get("upload_id") else None
     detector_version = str(anomaly["detector_version"]).strip() if anomaly.get("detector_version") else None
 
+    qual_status = anomaly.get("qualification_status")
+    raw_trust = str(anomaly.get("evidence_classification") or anomaly.get("trust_level") or "").strip().upper()
+    if raw_trust in ("TRUSTED", "HIGH", "QUALIFIED"):
+        trust_lvl = "TRUSTED"
+    elif raw_trust in ("TENTATIVE", "MEDIUM", "PARTIAL"):
+        trust_lvl = "TENTATIVE"
+    elif raw_trust in ("INCONCLUSIVE",):
+        trust_lvl = "INCONCLUSIVE"
+    elif raw_trust in ("DISQUALIFIED", "LOW", "UNQUALIFIED", "NOT_QUALIFIED"):
+        trust_lvl = "DISQUALIFIED"
+    elif raw_trust:
+        trust_lvl = raw_trust
+    else:
+        trust_lvl = "TRUSTED"
+    conf = anomaly.get("confidence")
+    r_codes = json.dumps(anomaly.get("reason_codes"), default=str) if anomaly.get("reason_codes") else None
+    comp_window = anomaly.get("comparison_window")
+
     finding_key = compute_finding_key(plant_id, anomaly_type, meter_id, line_id)
     finding_id = generate_finding_id(finding_key, plant_id)
     occ_id = generate_occurrence_id(finding_id, occ_ts)
@@ -215,6 +428,9 @@ def record_anomaly_occurrence(
                     current_baseline_value=base_val,
                     current_deviation_score=dev_score,
                     current_explanation=explanation,
+                    latest_qualification_status=qual_status,
+                    latest_trust_level=trust_lvl,
+                    latest_confidence=conf,
                     created_at=now,
                     updated_at=now,
                 )
@@ -249,10 +465,21 @@ def record_anomaly_occurrence(
                     source_record_id=source_record_id,
                     upload_id=upload_id,
                     detector_version=detector_version,
+                    revision_id=None,
+                    qualification_status=qual_status,
+                    trust_level=trust_lvl,
+                    confidence=conf,
+                    reason_codes=r_codes,
+                    comparison_window=comp_window,
                     recorded_at=now,
                 )
                 session.add(occurrence)
                 session.flush()
+
+                primary_rev_id = _pin_occurrence_sources(session, occ_id, anomaly, upload_id, now)
+                if primary_rev_id:
+                    occurrence.revision_id = primary_rev_id
+                    session.flush()
 
                 return finding, "CREATED"
 
@@ -378,6 +605,12 @@ def record_anomaly_occurrence(
         finding.current_deviation_score = dev_score
         finding.current_explanation = explanation
         finding.severity = _max_severity(finding.severity, severity)
+        if qual_status:
+            finding.latest_qualification_status = qual_status
+        if trust_lvl:
+            finding.latest_trust_level = trust_lvl
+        if conf:
+            finding.latest_confidence = conf
         finding.updated_at = now
 
         audit = FindingAuditLog(
@@ -412,10 +645,21 @@ def record_anomaly_occurrence(
                 source_record_id=source_record_id,
                 upload_id=upload_id,
                 detector_version=detector_version,
+                revision_id=None,
+                qualification_status=qual_status,
+                trust_level=trust_lvl,
+                confidence=conf,
+                reason_codes=r_codes,
+                comparison_window=comp_window,
                 recorded_at=now,
             )
             session.add(occurrence)
             session.flush()
+
+            primary_rev_id = _pin_occurrence_sources(session, occ_id, anomaly, upload_id, now)
+            if primary_rev_id:
+                occurrence.revision_id = primary_rev_id
+                session.flush()
     except IntegrityError:
         # In the unlikely event of concurrent occurrence collision, savepoint safely absorbs it
         pass
@@ -453,7 +697,14 @@ def sync_findings_from_anomalies(
         )
 
         all_anomalies: List[Dict[str, Any]] = []
-        for detector_key in ("statistical_zscore", "rolling_baseline", "low_power_factor", "zero_production_standby"):
+        for detector_key in (
+            "statistical_zscore",
+            "rolling_baseline",
+            "low_power_factor",
+            "zero_production_standby",
+            "persistent_baseload",
+            "zero_output_restart",
+        ):
             detector_result = detection_payload.get(detector_key) or {}
             anomalies_list = detector_result.get("anomalies") or []
             all_anomalies.extend(anomalies_list)
@@ -1008,8 +1259,35 @@ def get_occurrence_provenance(
         except Exception:
             c_flags = {}
 
+    needs_energy_lookup = False
+    needs_prod_lookup = False
+
+    # 1. First check pinned database sources in finding_occurrence_sources
+    db_sources = session.execute(
+        select(FindingOccurrenceSource)
+        .where(FindingOccurrenceSource.occurrence_id == target_occ.occurrence_id)
+        .order_by(FindingOccurrenceSource.id.asc())
+    ).scalars().all()
+
     specs: List[Dict[str, Any]] = []
-    if c_flags.get("source_records") and isinstance(c_flags["source_records"], list):
+    if db_sources:
+        for ds in db_sources:
+            specs.append({
+                "source_table": ds.source_table,
+                "source_record_id": ds.source_record_id,
+                "upload_id": ds.upload_id or target_occ.upload_id,
+                "role": ds.role,
+                "revision_id": ds.revision_id,
+            })
+    elif target_occ.revision_id:
+        specs.append({
+            "source_table": target_occ.source_table or "fact_energy_meter_hourly",
+            "source_record_id": target_occ.source_record_id,
+            "upload_id": target_occ.upload_id,
+            "role": "PRIMARY_OBSERVATION",
+            "revision_id": target_occ.revision_id,
+        })
+    elif c_flags.get("source_records") and isinstance(c_flags["source_records"], list):
         specs = list(c_flags["source_records"])
     elif target_occ.source_table and target_occ.source_record_id:
         specs = [
@@ -1018,6 +1296,7 @@ def get_occurrence_provenance(
                 "source_record_id": target_occ.source_record_id,
                 "upload_id": target_occ.upload_id,
                 "role": "PRIMARY_OBSERVATION",
+                "revision_id": None,
             }
         ]
     else:
@@ -1028,6 +1307,7 @@ def get_occurrence_provenance(
                 "source_record_id": str(c_flags["meter_reading_id"]),
                 "upload_id": c_flags.get("upload_id") or target_occ.upload_id,
                 "role": "PROCESS_ENERGY_MEASUREMENT",
+                "revision_id": None,
             })
         if c_flags.get("event_id"):
             specs.append({
@@ -1035,7 +1315,15 @@ def get_occurrence_provenance(
                 "source_record_id": str(c_flags["event_id"]),
                 "upload_id": c_flags.get("upload_id") or target_occ.upload_id,
                 "role": "PRODUCTION_ZERO_OUTPUT_EVENT",
+                "revision_id": None,
             })
+
+        has_energy = any(s.get("source_table") == "fact_energy_meter_hourly" for s in specs)
+        has_prod = any(s.get("source_table") == "fact_hourly_production" for s in specs)
+        if not has_energy and finding.meter_id and target_occ.occurrence_ts:
+            needs_energy_lookup = True
+        if not has_prod and finding.line_id and target_occ.occurrence_ts and finding.anomaly_type == "ZERO_PRODUCTION_STANDBY_ENERGY":
+            needs_prod_lookup = True
 
     ALLOWLISTED_TABLES = {"fact_energy_meter_hourly", "fact_hourly_production"}
 
@@ -1056,16 +1344,52 @@ def get_occurrence_provenance(
     })
 
     energy_map: Dict[str, FactEnergyMeterHourly] = {}
+    fallback_energy_rec: Optional[FactEnergyMeterHourly] = None
     if energy_ids:
         e_stmt = select(FactEnergyMeterHourly).where(FactEnergyMeterHourly.meter_reading_id.in_(energy_ids))
         for r in session.execute(e_stmt).scalars().all():
             energy_map[r.meter_reading_id] = r
+    elif needs_energy_lookup and finding.meter_id and target_occ.occurrence_ts:
+        e_sub = select(FactEnergyMeterHourly.meter_reading_id).where(
+            FactEnergyMeterHourly.meter_id == finding.meter_id,
+            FactEnergyMeterHourly.timestamp == target_occ.occurrence_ts,
+        )
+        e_stmt = select(FactEnergyMeterHourly).where(FactEnergyMeterHourly.meter_reading_id.in_(e_sub))
+        for r in session.execute(e_stmt).scalars().all():
+            energy_map[r.meter_reading_id] = r
+            fallback_energy_rec = r
+
+    if fallback_energy_rec and not any(s.get("source_table") == "fact_energy_meter_hourly" for s in specs):
+        specs.append({
+            "source_table": "fact_energy_meter_hourly",
+            "source_record_id": fallback_energy_rec.meter_reading_id,
+            "upload_id": fallback_energy_rec.upload_id or target_occ.upload_id,
+            "role": "PROCESS_ENERGY_MEASUREMENT" if finding.anomaly_type == "ZERO_PRODUCTION_STANDBY_ENERGY" else "PRIMARY_OBSERVATION",
+        })
 
     prod_map: Dict[str, FactHourlyProduction] = {}
+    fallback_prod_rec: Optional[FactHourlyProduction] = None
     if prod_ids:
         p_stmt = select(FactHourlyProduction).where(FactHourlyProduction.event_id.in_(prod_ids))
         for r in session.execute(p_stmt).scalars().all():
             prod_map[r.event_id] = r
+    elif needs_prod_lookup and finding.line_id and target_occ.occurrence_ts:
+        p_sub = select(FactHourlyProduction.event_id).where(
+            FactHourlyProduction.line_id == finding.line_id,
+            FactHourlyProduction.event_ts == target_occ.occurrence_ts,
+        )
+        p_stmt = select(FactHourlyProduction).where(FactHourlyProduction.event_id.in_(p_sub))
+        for r in session.execute(p_stmt).scalars().all():
+            prod_map[r.event_id] = r
+            fallback_prod_rec = r
+
+    if fallback_prod_rec and not any(s.get("source_table") == "fact_hourly_production" for s in specs):
+        specs.append({
+            "source_table": "fact_hourly_production",
+            "source_record_id": fallback_prod_rec.event_id,
+            "upload_id": fallback_prod_rec.upload_id or target_occ.upload_id,
+            "role": "PRODUCTION_ZERO_OUTPUT_EVENT",
+        })
 
     # Collect upload IDs for batch lookup in upload_history
     upload_ids: Set[str] = set()
@@ -1099,6 +1423,7 @@ def get_occurrence_provenance(
             resolved_records.append({
                 "source_table": table_name or "UNKNOWN",
                 "source_record_id": rec_id,
+                "upload_id": spec.get("upload_id") or target_occ.upload_id,
                 "role": role,
                 "reporting_timestamp": None,
                 "plant_id": finding.plant_id,
@@ -1141,32 +1466,86 @@ def get_occurrence_provenance(
                 if p_rec.upload_id:
                     found_upload_id = p_rec.upload_id
 
-        if raw_obj is not None:
+        rev = None
+        rev_id = spec.get("revision_id")
+        if rev_id:
+            rev = session.execute(
+                select(FactSourceRevision).where(FactSourceRevision.revision_id == str(rev_id))
+            ).scalars().first()
+
+        has_newer_rev = False
+        current_corrected = None
+        rev_timestamp = None
+
+        if rev:
+            try:
+                raw_obj = json.loads(rev.source_values_json)
+            except Exception:
+                raw_obj = {}
+            rev_timestamp = rev.revision_timestamp.isoformat() if rev.revision_timestamp else None
+            found_upload_id = rev.upload_id or spec.get("upload_id") or target_occ.upload_id
+            reporting_ts = raw_obj.get("timestamp") or raw_obj.get("event_ts")
             record_status = "FOUND"
+            lineage_state = "AVAILABLE"
+            lineage_note = "Original source revision pinned at detection verified in database."
+
+            # Check if newer corrected revision exists
+            newer_rev = session.execute(
+                select(FactSourceRevision).where(
+                    FactSourceRevision.source_table == rev.source_table,
+                    FactSourceRevision.business_key == rev.business_key,
+                    FactSourceRevision.id > rev.id,
+                    FactSourceRevision.is_current == True,
+                )
+            ).scalars().first()
+            if newer_rev:
+                has_newer_rev = True
+                try:
+                    current_corrected = json.loads(newer_rev.source_values_json)
+                except Exception:
+                    current_corrected = {}
+                current_corrected["_revision_id"] = newer_rev.revision_id
+                current_corrected["_upload_id"] = newer_rev.upload_id
+                current_corrected["_revision_timestamp"] = (
+                    newer_rev.revision_timestamp.isoformat() if newer_rev.revision_timestamp else None
+                )
+
             if found_upload_id and found_upload_id in upload_map:
                 up_info = _serialize_upload_history(upload_map[found_upload_id])
                 up_status = "AVAILABLE"
-                lineage_state = "AVAILABLE"
-                lineage_note = "Original source record and upload batch metadata are verified in the database."
             else:
                 up_info = None
                 up_status = "UNAVAILABLE_HISTORICAL" if not found_upload_id else "UPLOAD_NOT_FOUND"
-                lineage_state = "UPLOAD_UNAVAILABLE"
-                lineage_note = (
-                    "Source record exists in database, but batch upload metadata is unavailable (record predates upload tracking)."
-                    if not found_upload_id
-                    else f"Upload batch ID '{found_upload_id}' was not found in upload history."
-                )
+
         else:
-            record_status = "MISSING"
-            up_info = None
-            up_status = "UNAVAILABLE"
-            lineage_state = "SOURCE_MISSING"
-            lineage_note = f"Source record ID '{rec_id}' was not found in database table '{table_name}'."
+            # Legacy occurrence: no pinned revision
+            # Handle legacy occurrences honestly
+            rev_id = None
+            rev_timestamp = None
+            has_newer_rev = False
+            current_corrected = None
+
+            if raw_obj is not None:
+                record_status = "FOUND"
+                lineage_state = "ORIGINAL_REVISION_UNAVAILABLE"
+                lineage_note = "Original revision unavailable; current row with matching ID is insufficient proof of historical identity."
+                if found_upload_id and found_upload_id in upload_map:
+                    up_info = _serialize_upload_history(upload_map[found_upload_id])
+                    up_status = "AVAILABLE"
+                else:
+                    up_info = None
+                    up_status = "UNAVAILABLE_HISTORICAL" if not found_upload_id else "UPLOAD_NOT_FOUND"
+            else:
+                record_status = "MISSING"
+                up_info = None
+                up_status = "UNAVAILABLE"
+                lineage_state = "SOURCE_MISSING"
+                lineage_note = f"Source record ID '{rec_id}' was not found in database table '{table_name}'."
 
         resolved_records.append({
             "source_table": table_name,
             "source_record_id": rec_id,
+            "upload_id": found_upload_id,
             "role": role,
             "reporting_timestamp": reporting_ts,
             "plant_id": plant_id,
@@ -1178,12 +1557,19 @@ def get_occurrence_provenance(
             "upload_status": up_status,
             "lineage_state": lineage_state,
             "lineage_note": lineage_note,
+            "revision_id": rev_id,
+            "revision_timestamp": rev_timestamp,
+            "has_newer_revision": has_newer_rev,
+            "current_corrected_reading": current_corrected,
         })
 
     is_multi = len(resolved_records) > 1
     if len(resolved_records) == 0:
         overall_lineage = "LEGACY_UNLINKED"
         lineage_explanation = "Historical finding has no stored source record identity. Ingested prior to telemetry tracking."
+    elif any(r.get("lineage_state") == "ORIGINAL_REVISION_UNAVAILABLE" for r in resolved_records) and not is_multi:
+        overall_lineage = "ORIGINAL_REVISION_UNAVAILABLE"
+        lineage_explanation = "Original revision unavailable; current row with matching ID is insufficient proof of historical identity."
     elif is_multi:
         overall_lineage = "MULTI_SOURCE"
         lineage_explanation = (
@@ -1198,6 +1584,17 @@ def get_occurrence_provenance(
     det_ver = target_occ.detector_version or c_flags.get("detector_version") or "1.0.0"
     det_name = c_flags.get("detector_name") or finding.anomaly_type
 
+    r_codes_list: List[str] = []
+    if target_occ.reason_codes:
+        try:
+            parsed = json.loads(target_occ.reason_codes)
+            if isinstance(parsed, list):
+                r_codes_list = [str(x) for x in parsed]
+            else:
+                r_codes_list = [str(parsed)]
+        except Exception:
+            r_codes_list = [target_occ.reason_codes]
+
     return {
         "finding_id": finding.finding_id,
         "occurrence_id": target_occ.occurrence_id,
@@ -1209,6 +1606,12 @@ def get_occurrence_provenance(
         "overall_lineage_state": overall_lineage,
         "lineage_explanation": lineage_explanation,
         "is_multi_source": is_multi,
+        "qualification_status": target_occ.qualification_status,
+        "trust_level": target_occ.trust_level,
+        "confidence": target_occ.confidence,
+        "reason_codes": r_codes_list,
+        "comparison_window": target_occ.comparison_window,
+        "has_newer_revision": any(r.get("has_newer_revision") for r in resolved_records),
         "source_records": resolved_records,
         "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }

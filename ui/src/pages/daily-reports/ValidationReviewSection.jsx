@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { formatDate } from '../../utils/formatters';
+import KpiCard, { KpiGrid } from '../../components/common/KpiCard';
 
 export default function ValidationReviewSection({
   validationResult,
@@ -84,31 +85,61 @@ export default function ValidationReviewSection({
       </div>
 
       {/* KPI Validation Summary Badges */}
-      <div className="reports-kpi-grid">
-        <div className="reports-kpi-card accent-navy">
-          <div className="kpi-label">Total Records</div>
-          <div className="kpi-value">{summary.total_rows.toLocaleString()}</div>
-          <div className="kpi-subtext">Rows in active sheet</div>
-        </div>
-
-        <div className="reports-kpi-card accent-green">
-          <div className="kpi-label">Valid for Ingestion</div>
-          <div className="kpi-value">{summary.valid_rows.toLocaleString()}</div>
-          <div className="kpi-subtext">Passed all domain rules</div>
-        </div>
-
-        <div className="reports-kpi-card accent-orange">
-          <div className="kpi-label">Duplicates Detected</div>
-          <div className="kpi-value">{summary.duplicate_rows.toLocaleString()}</div>
-          <div className="kpi-subtext">In-file or existing in DB</div>
-        </div>
-
-        <div className="reports-kpi-card accent-red">
-          <div className="kpi-label">Rejected Records</div>
-          <div className="kpi-value">{summary.rejected_rows.toLocaleString()}</div>
-          <div className="kpi-subtext">Constraint or schema errors</div>
-        </div>
-      </div>
+      <KpiGrid className="reports-kpi-grid" style={{ marginBottom: '1.25rem' }}>
+        <KpiCard
+          id="val-total"
+          title="Total Records"
+          value={summary.total_rows.toLocaleString()}
+          accent="purple"
+          minimal={true}
+          icon={
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
+          }
+        />
+        <KpiCard
+          id="val-valid"
+          title="Valid for Ingestion"
+          value={summary.valid_rows.toLocaleString()}
+          accent="purple"
+          minimal={true}
+          icon={
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+              <polyline points="22 4 12 14.01 9 11.01" />
+            </svg>
+          }
+        />
+        <KpiCard
+          id="val-dupes"
+          title="Duplicates Detected"
+          value={summary.duplicate_rows.toLocaleString()}
+          accent="purple"
+          minimal={true}
+          icon={
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+              <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+            </svg>
+          }
+        />
+        <KpiCard
+          id="val-rejected"
+          title="Rejected Records"
+          value={summary.rejected_rows.toLocaleString()}
+          accent="purple"
+          minimal={true}
+          icon={
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="15" y1="9" x2="9" y2="15" />
+              <line x1="9" y1="9" x2="15" y2="15" />
+            </svg>
+          }
+        />
+      </KpiGrid>
 
       {/* Scope Chips */}
       <div className="reports-scope-chips">

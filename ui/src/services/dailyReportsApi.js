@@ -52,19 +52,23 @@ export const dailyReportsApi = {
 
   /**
    * Ingest validated report records into PostgreSQL fact tables.
-   * @param {File} file
+   * @param {File|null} file
    * @param {object} options
    * @param {string} options.reportType - 'ENERGY' | 'PRODUCTION'
    * @param {string} options.reportingDate - YYYY-MM-DD
+   * @param {string} [options.plantId] - Plant identifier (e.g. IN-TN-01)
+   * @param {string} [options.uploadId] - Staged or explicit upload batch ID
    * @param {string} [options.mode] - 'INCREMENTAL' | 'OVERWRITE_CORRECTION'
    * @param {string} [options.sheetName] - Optional worksheet name
    * @returns {Promise<any>}
    */
-  async ingestReport(file, { reportType, reportingDate, mode = 'INCREMENTAL', sheetName } = {}) {
+  async ingestReport(file, { reportType, reportingDate, plantId, uploadId, mode = 'INCREMENTAL', sheetName } = {}) {
     const formData = new FormData();
-    formData.append('file', file);
+    if (file) formData.append('file', file);
     formData.append('report_type', reportType);
     formData.append('reporting_date', reportingDate);
+    if (plantId) formData.append('plant_id', plantId);
+    if (uploadId) formData.append('upload_id', uploadId);
     formData.append('mode', mode);
     if (sheetName) formData.append('sheet_name', sheetName);
 
@@ -161,14 +165,18 @@ export const dailyReportsApi = {
    * @param {string} stageId - Stage key
    * @param {string} status - 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'COMPLETED_WITH_WARNINGS' | 'FAILED' | 'BLOCKED'
    * @param {string} summary - Human-readable summary
+   * @param {object|null} [details] - Structured stage metrics and metadata
    * @returns {Promise<any>}
    */
-  async updatePipelineStatus(reportingDate, stageId, status, summary) {
+  async updatePipelineStatus(reportingDate, stageId, status, summary, details = null) {
     const formData = new FormData();
     formData.append('reporting_date', reportingDate);
     formData.append('stage_id', stageId);
     formData.append('status', status);
     formData.append('summary', summary);
+    if (details) {
+      formData.append('details', typeof details === 'string' ? details : JSON.stringify(details));
+    }
 
     return apiRequest('/daily-reports/pipeline-status', {
       init: {
@@ -176,6 +184,22 @@ export const dailyReportsApi = {
         body: formData,
       },
     });
+  },
+
+  /**
+   * Verify actual fact records and upload ID linkage in PostgreSQL.
+   * @param {object} options
+   * @param {string} options.reportingDate - YYYY-MM-DD
+   * @param {string} [options.plantId] - Optional plant filter
+   * @param {string} [options.uploadId] - Specific upload batch ID
+   * @returns {Promise<any>}
+   */
+  async verifyIngestion({ reportingDate, plantId, uploadId } = {}) {
+    const params = { reporting_date: reportingDate };
+    if (plantId) params.plant_id = plantId;
+    if (uploadId) params.upload_id = uploadId;
+
+    return apiRequest('/daily-reports/verify-ingestion', { params });
   },
 };
 

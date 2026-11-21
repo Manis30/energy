@@ -68,11 +68,34 @@ class CorrectiveActionResponse(BaseModel):
     recommendation_id: str
     title: str
     description: str
-    status: str = Field(description="OPEN, IN_PROGRESS, COMPLETED, CANCELLED")
+    status: str = Field(description="OPEN, IN_PROGRESS, PROPOSED, APPROVED, REJECTED, IMPLEMENTED, ASSESSMENT_REQUESTED, COMPLETED, CANCELLED")
     owner: Optional[str] = Field(None, description="Assigned owner or team label. Nullable.")
     due_date: Optional[str] = Field(None, description="ISO format due date string")
     completed_at: Optional[str] = Field(None, description="ISO format completion timestamp")
     resolution_notes: Optional[str] = Field(None, description="Notes documenting resolution or progress")
+
+    # Phase 5: Boundary, Lineage & Review Lifecycle
+    plant_id: Optional[str] = None
+    finding_id: Optional[str] = None
+    occurrence_id: Optional[str] = None
+    pinned_evidence: List[Any] = Field(default_factory=list)
+    affected_equipment: Optional[str] = None
+    measurement_meter_id: Optional[str] = None
+    shared_meter_limitation: Optional[str] = None
+    responsible_team: Optional[str] = None
+
+    review_status: str = "PENDING_REVIEW"
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[str] = None
+    review_decision_reason: Optional[str] = None
+
+    implemented_at: Optional[str] = None
+    implemented_by: Optional[str] = None
+    implementation_notes: Optional[str] = None
+
+    measurement_plan_id: Optional[str] = None
+    assessment_status: str = "NONE"
+
     created_at: str
     updated_at: str
     audit_trail: List[ActionAuditLogResponse] = Field(default_factory=list)
@@ -189,6 +212,8 @@ class UpdateRecommendationStatusRequest(BaseModel):
 
 class GenerateRecommendationsResponse(BaseModel):
     """Response payload when generating recommendations from an operational finding."""
-    generated_count: int
+    generated_count: int = Field(..., description="Count of newly generated recommendations")
+    created_count: int = Field(0, description="Count of newly created recommendations")
+    reused_count: int = Field(0, description="Count of existing active recommendations reused")
     recommendations: List[RecommendationSummary]
     message: str

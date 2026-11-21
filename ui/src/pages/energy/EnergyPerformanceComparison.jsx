@@ -39,18 +39,27 @@ function getProcessMetrics(area, meterId, processEnergy, processAvailable) {
   }
 
   const summary = isSmt ? processEnergy?.smt_summary : processEnergy?.fal_summary;
-  const quantity = summary?.total_actual_qty;
-  const intensity = isSmt
-    ? summary?.overall_process_sec_kwh_per_board
-    : summary?.overall_process_sec_kwh_per_phone;
+  const actualQty = summary?.actual_units ?? summary?.total_actual_qty;
+  const goodQty = summary?.good_units ?? summary?.total_good_qty;
+  const unitLabel = isSmt ? 'boards' : 'assembly units';
+  const secActual = summary?.kwh_per_actual_unit ?? (isSmt ? summary?.overall_process_sec_kwh_per_board : summary?.overall_process_sec_kwh_per_phone);
+  const secGood = summary?.kwh_per_good_unit ?? (isSmt ? summary?.overall_process_sec_good_kwh_per_board : summary?.overall_process_sec_good_kwh_per_assembly_unit);
+
+  const prodText = isNonNegativeNumber(goodQty)
+    ? `${formatNumber(goodQty, 0)} good ${unitLabel}${isNonNegativeNumber(actualQty) ? ` (${formatNumber(actualQty, 0)} actual)` : ''}`
+    : isNonNegativeNumber(actualQty)
+    ? `${formatNumber(actualQty, 0)} ${unitLabel}`
+    : 'Unavailable';
+
+  const intensityText = isNonNegativeNumber(secGood)
+    ? `${formatNumber(secGood, 4)} kWh/good ${unitLabel}${isNonNegativeNumber(secActual) ? ` · ${formatNumber(secActual, 4)} kWh/actual` : ''}`
+    : isNonNegativeNumber(secActual)
+    ? `${formatNumber(secActual, 4)} kWh/actual ${unitLabel}`
+    : 'Unavailable';
 
   return {
-    production: isNonNegativeNumber(quantity)
-      ? `${formatNumber(quantity, 0)} ${isSmt ? 'boards' : 'phones'}`
-      : 'Unavailable',
-    intensity: isNonNegativeNumber(intensity)
-      ? `${formatNumber(intensity, 4)} ${isSmt ? 'kWh/board' : 'kWh/phone'}`
-      : 'Unavailable',
+    production: prodText,
+    intensity: intensityText,
   };
 }
 
@@ -348,11 +357,12 @@ export default function EnergyPerformanceComparison({
                 <thead>
                   <tr>
                     <th>Plant</th>
-                    <th>Total energy consumption</th>
-                    <th>Existing factory SEC</th>
-                    <th>Finished output</th>
-                    <th>Consumption rank among returned plants</th>
-                    <th>Process SEC details</th>
+                    <th>Electricity Intensity</th>
+                    <th>Cost Intensity</th>
+                    <th>Emissions Intensity</th>
+                    <th>Good Finished Output</th>
+                    <th>Coverage</th>
+                    <th>Engineering &amp; Lineage Inspection</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -360,36 +370,73 @@ export default function EnergyPerformanceComparison({
                     <tr key={row.plantId}>
                       <th scope="row">{row.plantId}</th>
                       <td>
-                        {row.energyAvailable
-                          ? valueOrUnavailable(row.energySummary?.total_consumption_kwh, 2, 'kWh')
+                        <span style={{ fontWeight: 600 }}>
+                          {row.factoryAvailable
+                            ? valueOrUnavailable(row.factoryEnergy?.electricity_intensity_kwh_per_good_unit, 4, 'kWh/good unit')
+                            : 'Unavailable'}
+                        </span>
+                      </td>
+                      <td>
+                        {row.factoryAvailable
+                          ? valueOrUnavailable(row.factoryEnergy?.cost_intensity_inr_per_good_unit, 2, '₹/good unit')
                           : 'Unavailable'}
                       </td>
                       <td>
                         {row.factoryAvailable
-                          ? valueOrUnavailable(row.factoryEnergy?.factory_sec_kwh_per_finished_unit, 4, 'kWh/finished unit')
+                          ? valueOrUnavailable(row.factoryEnergy?.emissions_intensity_co2e_per_good_unit, 4, 'kg CO₂e/good unit')
                           : 'Unavailable'}
                       </td>
                       <td>
                         {row.factoryAvailable
-                          ? valueOrUnavailable(row.factoryEnergy?.final_assembly_actual_output, 0, 'phones')
+                          ? valueOrUnavailable(row.factoryEnergy?.final_assembly_good_output, 0, 'units')
                           : 'Unavailable'}
                       </td>
                       <td>
-                        {plantRanks.has(row) ? `#${plantRanks.get(row)}` : 'Not ranked'}
+                        {row.factoryAvailable && row.factoryEnergy?.coverage ? (
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              padding: '0.15rem 0.45rem',
+                              borderRadius: '4px',
+                              fontSize: '0.72rem',
+                              fontWeight: 600,
+                              backgroundColor: row.factoryEnergy.coverage.coverage_status === 'FULL' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)',
+                              color: row.factoryEnergy.coverage.coverage_status === 'FULL' ? '#22c55e' : '#eab308',
+                              border: `1px solid ${row.factoryEnergy.coverage.coverage_status === 'FULL' ? 'rgba(34, 197, 94, 0.3)' : 'rgba(234, 179, 8, 0.3)'}`,
+                            }}
+                          >
+                            {row.factoryEnergy.coverage.coverage_status} ({row.factoryEnergy.coverage.coverage_percentage}%)
+                          </span>
+                        ) : 'Unavailable'}
                       </td>
                       <td>
                         <details className="energy-comparison-inline-details">
-                          <summary>View SMT / FAL</summary>
-                          <div>
+                          <summary>Inspect Numerator / Denominator</summary>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginTop: '0.35rem', fontSize: '0.75rem' }}>
                             <span>
-                              SMT: {row.processAvailable
-                                ? `${valueOrUnavailable(row.processEnergy?.smt_summary?.total_actual_qty, 0, 'boards')} · ${valueOrUnavailable(row.processEnergy?.smt_summary?.overall_process_sec_kwh_per_board, 4, 'kWh/board')}`
-                                : 'Unavailable'}
+                              <strong>Numerator (Energy):</strong> {row.factoryAvailable ? valueOrUnavailable(row.factoryEnergy?.factory_sec_aligned_energy_kwh, 2, 'kWh') : 'Unavailable'}
                             </span>
                             <span>
-                              FAL: {row.processAvailable
-                                ? `${valueOrUnavailable(row.processEnergy?.fal_summary?.total_actual_qty, 0, 'phones')} · ${valueOrUnavailable(row.processEnergy?.fal_summary?.overall_process_sec_kwh_per_phone, 4, 'kWh/phone')}`
-                                : 'Unavailable'}
+                              <strong>Numerator (Cost):</strong> {row.factoryAvailable ? valueOrUnavailable(row.factoryEnergy?.factory_sec_aligned_cost_inr, 2, 'INR') : 'Unavailable'} (Tariff: ₹8.25/kWh, UNKNOWN)
+                            </span>
+                            <span>
+                              <strong>Numerator (CO₂e):</strong> {row.factoryAvailable ? valueOrUnavailable(row.factoryEnergy?.factory_sec_aligned_co2e_kg, 2, 'kg') : 'Unavailable'} (Grid factor: 0.716 kg/kWh, UNKNOWN)
+                            </span>
+                            <span>
+                              <strong>Denominator:</strong> {row.factoryAvailable ? `${valueOrUnavailable(row.factoryEnergy?.final_assembly_good_output, 0, 'good units')} (Actual: ${valueOrUnavailable(row.factoryEnergy?.final_assembly_actual_output, 0, 'units')})` : 'Unavailable'}
+                            </span>
+                            <span>
+                              <strong>Engineering SEC (Actual):</strong> {row.factoryAvailable ? valueOrUnavailable(row.factoryEnergy?.factory_sec_kwh_per_finished_unit, 4, 'kWh/unit') : 'Unavailable'}
+                            </span>
+                            <span>
+                              <strong>Process SMT:</strong> {row.processAvailable ? (
+                                `${valueOrUnavailable(row.processEnergy?.smt_summary?.process_kwh ?? row.processEnergy?.smt_summary?.total_process_kwh, 2, 'kWh')} · ${valueOrUnavailable(row.processEnergy?.smt_summary?.good_units ?? row.processEnergy?.smt_summary?.total_good_qty, 0, 'good boards')} (${valueOrUnavailable(row.processEnergy?.smt_summary?.actual_units ?? row.processEnergy?.smt_summary?.total_actual_qty, 0, 'actual boards')}) · ${valueOrUnavailable(row.processEnergy?.smt_summary?.kwh_per_good_unit ?? row.processEnergy?.smt_summary?.overall_process_sec_good_kwh_per_board, 4, 'kWh/good board')} [Actual: ${valueOrUnavailable(row.processEnergy?.smt_summary?.kwh_per_actual_unit ?? row.processEnergy?.smt_summary?.overall_process_sec_kwh_per_board, 4, 'kWh/actual board')}]`
+                              ) : 'Unavailable'}
+                            </span>
+                            <span>
+                              <strong>Process FAL:</strong> {row.processAvailable ? (
+                                `${valueOrUnavailable(row.processEnergy?.fal_summary?.process_kwh ?? row.processEnergy?.fal_summary?.total_process_kwh, 2, 'kWh')} · ${valueOrUnavailable(row.processEnergy?.fal_summary?.good_units ?? row.processEnergy?.fal_summary?.total_good_qty, 0, 'good assembly units')} (${valueOrUnavailable(row.processEnergy?.fal_summary?.actual_units ?? row.processEnergy?.fal_summary?.total_actual_qty, 0, 'actual assembly units')}) · ${valueOrUnavailable(row.processEnergy?.fal_summary?.kwh_per_good_unit ?? row.processEnergy?.fal_summary?.overall_process_sec_good_kwh_per_assembly_unit, 4, 'kWh/good assembly unit')} [Actual: ${valueOrUnavailable(row.processEnergy?.fal_summary?.kwh_per_actual_unit ?? row.processEnergy?.fal_summary?.overall_process_sec_kwh_per_phone, 4, 'kWh/actual assembly unit')}]`
+                              ) : 'Unavailable'}
                             </span>
                           </div>
                         </details>

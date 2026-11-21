@@ -1,10 +1,6 @@
 import React, { useState } from 'react';
 import { formatDateTime, formatNumber } from '../../utils/formatters';
 
-function formatSeverity(severity) {
-  return severity ? severity.toLowerCase() : 'unclassified';
-}
-
 function formatContextValue(key, value) {
   if (value === null || value === undefined || value === '') return 'Unavailable';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
@@ -15,29 +11,28 @@ function formatContextValue(key, value) {
   return String(value);
 }
 
-function AlertEvidence({ alert }) {
+export function AlertEvidence({ alert }) {
   const isPowerFactor = alert.anomaly_type === 'LOW_POWER_FACTOR';
   const isStandby = alert.anomaly_type === 'ZERO_PRODUCTION_STANDBY_ENERGY';
   const isZScore = alert.anomaly_type?.startsWith('ENERGY_STATISTICAL_')
     || alert.anomaly_type?.startsWith('ROLLING_BASELINE_');
   const unit = isPowerFactor ? ' PF' : ' kWh';
-
   const hasBaseline = alert.baseline_value !== null && alert.baseline_value !== undefined;
 
   return (
-    <div className="alert-detail-content">
-      <div className="alert-evidence-grid">
-        <div>
-          <span>Measured</span>
-          <strong>
+    <div className="iac-evidence-expanded">
+      <div className="iac-evidence-grid">
+        <div className="iac-evidence-stat">
+          <span className="iac-evidence-label">Measured Value</span>
+          <strong className="iac-evidence-val">
             {alert.actual_value !== null && alert.actual_value !== undefined
               ? `${formatNumber(alert.actual_value, 4)}${unit}`
               : 'Unavailable'}
           </strong>
         </div>
-        <div>
-          <span>Reference mean / threshold</span>
-          <strong>
+        <div className="iac-evidence-stat">
+          <span className="iac-evidence-label">Reference Mean / Threshold</span>
+          <strong className="iac-evidence-val">
             {isStandby
               ? 'No baseline (Zero output standby)'
               : hasBaseline
@@ -45,28 +40,32 @@ function AlertEvidence({ alert }) {
                 : 'Baseline unavailable'}
           </strong>
         </div>
-        <div>
-          <span>{isZScore ? 'Z-score' : isStandby ? 'Standby energy' : isPowerFactor ? 'Power factor deficit' : 'Deviation score'}</span>
-          <strong>
+        <div className="iac-evidence-stat">
+          <span className="iac-evidence-label">
+            {isZScore ? 'Z-Score' : isStandby ? 'Standby Energy' : isPowerFactor ? 'Power Factor Deficit' : 'Deviation Score'}
+          </span>
+          <strong className="iac-evidence-val">
             {alert.deviation_score !== null && alert.deviation_score !== undefined
               ? `${formatNumber(alert.deviation_score, 4)}${isZScore ? 'σ' : isStandby ? ' kWh' : ''}`
               : 'Unavailable'}
           </strong>
         </div>
         {alert.source && (
-          <div>
-            <span>Detector</span>
-            <strong>{alert.source}</strong>
+          <div className="iac-evidence-stat">
+            <span className="iac-evidence-label">Detector Algorithm</span>
+            <strong className="iac-evidence-val">{alert.source}</strong>
           </div>
         )}
       </div>
-      {alert.explanation && <p className="alert-explanation">{alert.explanation}</p>}
+      {alert.explanation && (
+        <p className="iac-evidence-explanation">{alert.explanation}</p>
+      )}
       {Object.keys(alert.context_flags || {}).length > 0 && (
-        <details className="alert-context">
-          <summary>Calculation context and evidence</summary>
-          <dl>
+        <details className="iac-evidence-context">
+          <summary>Calculation Context & Detection Evidence</summary>
+          <dl className="iac-evidence-dl">
             {Object.entries(alert.context_flags).map(([key, value]) => (
-              <div key={key}>
+              <div key={key} className="iac-evidence-row">
                 <dt>{key.replace(/_/g, ' ')}</dt>
                 <dd>{formatContextValue(key, value)}</dd>
               </div>
@@ -78,51 +77,128 @@ function AlertEvidence({ alert }) {
   );
 }
 
-export default function AlertList({ alerts }) {
+export default function AlertList({ alerts = [] }) {
   const [expandedKey, setExpandedKey] = useState(null);
 
+  if (!alerts || alerts.length === 0) {
+    return (
+      <div className="iac-empty-state" style={{ padding: '3rem 1.5rem' }}>
+        <p style={{ color: 'var(--text-muted)' }}>
+          No surveillance signals match the current filter criteria.
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <div className="alert-list">
-      {alerts.map((alert) => {
-        const expanded = expandedKey === alert.alertKey;
-        const source = alert.meter_id || alert.line_id;
-        const detailsId = `alert-details-${alert.alertKey.replace(/\s+/g, '-')}`;
-        return (
-          <article
-            key={alert.alertKey}
-            className={`alert-item ${formatSeverity(alert.severity)}`}
-          >
-            <button
-              type="button"
-              className="alert-item-summary"
-              onClick={() => setExpandedKey((current) => current === alert.alertKey ? null : alert.alertKey)}
-              aria-expanded={expanded}
-              aria-controls={detailsId}
-            >
-              <span className={`alert-severity-indicator ${formatSeverity(alert.severity)}`} />
-              <span className="alert-time">{formatDateTime(alert.timestamp)}</span>
-              <span className={`alert-severity-label ${formatSeverity(alert.severity)}`}>
-                {alert.severity || 'Unclassified'}
-              </span>
-              <span className="alert-category">{(alert.anomaly_type || 'Uncategorized').replace(/_/g, ' ')}</span>
-              <span className="alert-location">
-                {alert.plant_id || 'Plant unavailable'}
-                {source ? ` · ${source}` : ''}
-              </span>
-              <span className="alert-source">{alert.source}</span>
-              <span className="alert-measurement">
-                {alert.actual_value !== null && alert.actual_value !== undefined
-                  ? `${formatNumber(alert.actual_value, 2)}${alert.anomaly_type === 'LOW_POWER_FACTOR' ? ' PF' : ' kWh'}`
-                  : 'Unavailable'}
-              </span>
-              <span className={`alert-disclosure ${expanded ? 'expanded' : ''}`} aria-hidden="true">⌄</span>
-            </button>
-            <div id={detailsId} hidden={!expanded}>
-              {expanded && <AlertEvidence alert={alert} />}
-            </div>
-          </article>
-        );
-      })}
+    <div className="iac-table-wrapper">
+      <table className="iac-table iac-surveillance-table" aria-label="Surveillance Suite Signals Table">
+        <thead>
+          <tr>
+            <th style={{ width: '160px' }}>Timestamp</th>
+            <th style={{ width: '120px' }}>Severity</th>
+            <th>Signal / Anomaly Type</th>
+            <th style={{ width: '120px' }}>Plant</th>
+            <th style={{ width: '140px' }}>Meter or Asset</th>
+            <th style={{ width: '160px' }}>Measured Value</th>
+            <th style={{ width: '70px', textAlign: 'center' }}>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {alerts.map((alert, index) => {
+            const key = alert.alertKey || `${alert.timestamp}-${alert.plant_id}-${alert.meter_id || alert.line_id || index}`;
+            const isExpanded = expandedKey === key;
+            const assetName = alert.meter_id || alert.line_id || alert.source || 'Facility-wide';
+            const isPowerFactor = alert.anomaly_type === 'LOW_POWER_FACTOR';
+            const unit = isPowerFactor ? ' PF' : ' kWh';
+            const sevClass = (alert.severity || 'low').toLowerCase();
+
+            return (
+              <React.Fragment key={key}>
+                <tr
+                  className={`iac-surveillance-row ${isExpanded ? 'is-expanded' : ''}`}
+                  onClick={() => setExpandedKey(isExpanded ? null : key)}
+                  tabIndex={0}
+                  role="button"
+                  aria-expanded={isExpanded}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setExpandedKey(isExpanded ? null : key);
+                    }
+                  }}
+                >
+                  <td className="iac-table-date">
+                    {formatDateTime(alert.timestamp)}
+                  </td>
+                  <td>
+                    <span className={`badge-iac badge-sev-${sevClass}`}>
+                      <span className="badge-dot" />
+                      {alert.severity || 'LOW'}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="iac-table-title-group">
+                      <span className="iac-table-title">
+                        {(alert.anomaly_type || 'Uncategorized').replace(/_/g, ' ')}
+                      </span>
+                      {alert.source && (
+                        <span className="iac-table-id">{alert.source}</span>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    <span className="iac-table-plant-badge">
+                      {alert.plant_id || 'IN-TN-01'}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="iac-table-asset">
+                      {assetName}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="iac-surveillance-measurement">
+                      <span className="iac-measure-val">
+                        {alert.actual_value !== null && alert.actual_value !== undefined
+                          ? `${formatNumber(alert.actual_value, 2)}${unit}`
+                          : 'Unavailable'}
+                      </span>
+                      {alert.baseline_value !== null && alert.baseline_value !== undefined && (
+                        <span className="iac-measure-baseline">
+                          Base: {formatNumber(alert.baseline_value, 2)}{unit}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td style={{ textAlign: 'center' }}>
+                    <button
+                      type="button"
+                      className={`iac-row-expand-btn ${isExpanded ? 'is-expanded' : ''}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpandedKey(isExpanded ? null : key);
+                      }}
+                      aria-label={isExpanded ? 'Collapse evidence details' : 'Expand evidence details'}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                  </td>
+                </tr>
+                {isExpanded && (
+                  <tr className="iac-evidence-expanded-row">
+                    <td colSpan={7}>
+                      <AlertEvidence alert={alert} />
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

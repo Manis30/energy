@@ -77,6 +77,25 @@ class BaseProvenanceTestCase(unittest.TestCase):
         self.session = self.session_factory()
         self.test_prefix = f"TEST-PROV-{uuid4().hex[:8]}"
 
+        # Deterministic legacy finding with 0 occurrences for legacy/unlinked boundary tests
+        self.legacy_finding_id = f"{self.test_prefix}-LEGACY"
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        legacy_finding = OperationalFinding(
+            finding_id=self.legacy_finding_id,
+            finding_key=f"KEY-{self.test_prefix}-LEGACY",
+            plant_id="IN-TN-01",
+            anomaly_type="ENERGY_STATISTICAL_SPIKE",
+            severity="MEDIUM",
+            status="NEW",
+            first_detected_at=now,
+            last_detected_at=now,
+            occurrence_count=1,
+            created_at=now,
+            updated_at=now,
+        )
+        self.session.add(legacy_finding)
+        self.session.commit()
+
     def tearDown(self):
         # Guarantee 100% cleanup of any test-created records
         try:
@@ -224,7 +243,7 @@ class TestLineageStatesRegression(BaseProvenanceTestCase):
     def test_lineage_state_legacy_unlinked(self):
         """LEGACY_UNLINKED: Historical finding with no recorded occurrences or source telemetry links."""
         # Query existing finding without occurrences
-        result = get_occurrence_provenance(self.session, "FND-ATOMIC-1794727303")
+        result = get_occurrence_provenance(self.session, self.legacy_finding_id)
 
         self.assertEqual(result["overall_lineage_state"], "LEGACY_UNLINKED")
         self.assertFalse(result["is_multi_source"])
@@ -296,6 +315,66 @@ class TestLineageStatesRegression(BaseProvenanceTestCase):
         self.assertEqual(rec["lineage_state"], "UPLOAD_UNAVAILABLE")
         self.assertIsNone(rec["upload"])
         self.assertIn("batch upload metadata is unavailable", rec["lineage_note"])
+
+    def test_lineage_state_upload_not_found(self):
+        """UPLOAD_NOT_FOUND: Upload batch ID exists on occurrence/record but is missing from upload_history."""
+        test_finding_id = f"{self.test_prefix}-UP-MISS"
+        test_occ_id = f"OCC-{uuid4().hex[:8]}"
+        missing_upload_id = f"TEST-UPL-MISSING-{uuid4().hex[:6]}"
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        finding = OperationalFinding(
+            finding_id=test_finding_id,
+            finding_key=f"TEST-KEY-{uuid4().hex[:6]}",
+            anomaly_type="ENERGY_STATISTICAL_SPIKE",
+            plant_id="IN-TN-01",
+            meter_id="MTR-SMT",
+            status="NEW",
+            severity="MEDIUM",
+            first_detected_at=now,
+            last_detected_at=now,
+            occurrence_count=1,
+            created_at=now,
+            updated_at=now,
+        )
+        self.session.add(finding)
+
+        occ = FindingOccurrence(
+            occurrence_id=test_occ_id,
+            finding_id=test_finding_id,
+            occurrence_ts=now,
+            actual_value=Decimal("120.00"),
+            baseline_value=Decimal("100.00"),
+            deviation_score=1.5,
+            severity="MEDIUM",
+            source_table="fact_energy_meter_hourly",
+            source_record_id="EN-000022044",  # physical record exists
+            upload_id=None,
+            context_flags_json=json.dumps({
+                "source_records": [{
+                    "source_table": "fact_energy_meter_hourly",
+                    "source_record_id": "EN-000022044",
+                    "upload_id": missing_upload_id,
+                    "role": "PRIMARY_OBSERVATION",
+                }]
+            }),
+            detector_version="1.0.0",
+            recorded_at=now,
+        )
+        self.session.add(occ)
+        self.session.commit()
+
+        result = get_occurrence_provenance(self.session, test_finding_id, test_occ_id)
+
+        self.assertEqual(result["overall_lineage_state"], "UPLOAD_UNAVAILABLE")
+        self.assertEqual(len(result["source_records"]), 1)
+        rec = result["source_records"][0]
+        self.assertEqual(rec["record_status"], "FOUND")
+        self.assertEqual(rec["upload_status"], "UPLOAD_NOT_FOUND")
+        self.assertEqual(rec["upload_id"], missing_upload_id)
+        self.assertIsNone(rec["upload"])
+        self.assertEqual(rec["lineage_state"], "UPLOAD_UNAVAILABLE")
+        self.assertIn("was not found in upload history", rec["lineage_note"])
 
     def test_source_status_and_upload_status_remain_distinct(self):
         """Source record status and upload status remain decoupled across states."""
@@ -513,7 +592,7 @@ class TestProvenanceIntegrityBoundaries(BaseProvenanceTestCase):
 
     def test_legacy_records_do_not_receive_fabricated_metadata(self):
         """Legacy records without source IDs receive no fabricated IDs, upload IDs, or timestamps."""
-        result = get_occurrence_provenance(self.session, "FND-ATOMIC-1794727303")
+        result = get_occurrence_provenance(self.session, self.legacy_finding_id)
         self.assertEqual(result["overall_lineage_state"], "LEGACY_UNLINKED")
         self.assertEqual(result["source_records"], [])
         self.assertEqual(result["occurrence_id"], "NONE")
@@ -530,7 +609,7 @@ class TestProvenanceIntegrityBoundaries(BaseProvenanceTestCase):
         # Execute multiple provenance requests
         get_occurrence_provenance(self.session, "FND-IN-TN-01-F49D91078C")
         get_occurrence_provenance(self.session, "FND-IN-TN-01-670442A4C1")
-        get_occurrence_provenance(self.session, "FND-ATOMIC-1794727303")
+        get_occurrence_provenance(self.session, self.legacy_finding_id)
 
         # Execute HTTP API calls
         self.client.get("/api/findings/FND-IN-TN-01-F49D91078C/provenance")

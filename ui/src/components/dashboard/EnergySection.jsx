@@ -167,7 +167,7 @@ export default function EnergySection({
                     ? 'No energy trend records were returned.'
                     : 'Trend records were returned without usable consumption values.'}
               </div>
-            ) : <ResponsiveContainer width="100%" height={280}>
+            ) : <ResponsiveContainer width="100%" height={260}>
               <AreaChart data={trendData} margin={{ top: 10, right: 15, left: -10, bottom: 0 }}>
                 <defs>
                   <linearGradient id="energyGrad" x1="0" y1="0" x2="0" y2="1">
@@ -225,7 +225,7 @@ export default function EnergySection({
                     ? 'No meter records were returned.'
                     : 'Meter records were returned without usable consumption values.'}
               </div>
-            ) : <ResponsiveContainer width="100%" height={280}>
+            ) : <ResponsiveContainer width="100%" height={260}>
               <BarChart data={meterData} layout="vertical" margin={{ top: 5, right: 25, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" horizontal={false} />
                 <XAxis

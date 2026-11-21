@@ -81,3 +81,20 @@ export function formatDateTime(dtStr) {
   }
 }
 
+/**
+ * Format raw anomaly / detector code into clean sentence-case readable title.
+ * e.g. "COMPARABLE_PERIOD_ELECTRICITY_DECREASE" -> "Comparable period electricity decrease"
+ * @param {string|null|undefined} titleOrType
+ * @returns {string}
+ */
+export function formatFindingTitle(titleOrType) {
+  if (!titleOrType) return 'Operational finding';
+  const text = String(titleOrType).trim();
+  if (text.includes('_') || text === text.toUpperCase()) {
+    const readable = text.replace(/_/g, ' ').toLowerCase();
+    return readable.charAt(0).toUpperCase() + readable.slice(1);
+  }
+  return text;
+}
+
+

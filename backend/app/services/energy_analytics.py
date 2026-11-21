@@ -8,7 +8,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.config import DEFAULT_POWER_FACTOR_THRESHOLD
-from app.models.source_data import FactEnergyMeterHourly
+from app.models.source_data import DatasetFactorAssumption, FactEnergyMeterHourly
 
 
 def _decimal_or_none(value) -> Optional[Decimal]:
@@ -86,12 +86,59 @@ def get_energy_summary(
 
     peak_reading = None
     if peak_row:
+        scope_desc = (
+            f"Meter '{peak_row[1]}' at plant '{peak_row[2]}'"
+            if plant_id
+            else f"Meter '{peak_row[1]}' at plant '{peak_row[2]}' across all monitored facilities"
+        )
+        kwh_val = Decimal(str(peak_row[3]))
         peak_reading = {
             "timestamp": peak_row[0].isoformat(),
             "meter_id": peak_row[1],
             "plant_id": peak_row[2],
-            "consumption_kwh": Decimal(str(peak_row[3])),
+            "consumption_kwh": kwh_val,
+            "peak_hourly_consumption_kwh": kwh_val,
+            "scope_description": scope_desc,
         }
+
+    # Retrieve dataset factor assumptions (tariff and emissions)
+    tariff_factor = session.execute(
+        select(DatasetFactorAssumption)
+        .where(
+            DatasetFactorAssumption.factor_type == "ELECTRICITY_TARIFF",
+        )
+        .order_by(DatasetFactorAssumption.id.desc())
+    ).scalars().first()
+
+    emissions_factor = session.execute(
+        select(DatasetFactorAssumption)
+        .where(
+            DatasetFactorAssumption.factor_type == "GRID_EMISSIONS_FACTOR",
+        )
+        .order_by(DatasetFactorAssumption.id.desc())
+    ).scalars().first()
+
+    tariff_assumption = {
+        "factor_key": "ELECTRICITY_TARIFF_INR_PER_KWH",
+        "factor_type": tariff_factor.factor_type if tariff_factor else "ELECTRICITY_TARIFF",
+        "value": float(tariff_factor.numeric_value) if tariff_factor else 8.25,
+        "unit": tariff_factor.unit if tariff_factor else "INR/kWh",
+        "version": tariff_factor.source_dataset_version if tariff_factor else "synthetic_daily_reports_nov_2026",
+        "approval_status": tariff_factor.approval_status if tariff_factor else "UNKNOWN",
+        "description": tariff_factor.notes if (tariff_factor and tariff_factor.notes) else "Supplied dataset hardcoded electricity tariff",
+        "is_verified_contractual": False,
+    }
+
+    emissions_assumption = {
+        "factor_key": "GRID_EMISSION_FACTOR_KG_PER_KWH",
+        "factor_type": emissions_factor.factor_type if emissions_factor else "GRID_EMISSIONS_FACTOR",
+        "value": float(emissions_factor.numeric_value) if emissions_factor else 0.716,
+        "unit": emissions_factor.unit if emissions_factor else "kg CO2e/kWh",
+        "version": emissions_factor.source_dataset_version if emissions_factor else "synthetic_daily_reports_nov_2026",
+        "approval_status": emissions_factor.approval_status if emissions_factor else "UNKNOWN",
+        "description": emissions_factor.notes if (emissions_factor and emissions_factor.notes) else "Supplied dataset grid emission factor",
+        "is_verified_grid_factor": False,
+    }
 
     return {
         "plant_id": plant_id,
@@ -111,6 +158,15 @@ def get_energy_summary(
         "distinct_hours": distinct_hours,
         "avg_hourly_consumption_kwh": _round_or_none(avg_hourly_kwh, 4),
         "peak_reading": peak_reading,
+        "peak_hourly_consumption": peak_reading,
+        "peak_demand_kw": None,
+        "peak_demand_status": "UNAVAILABLE",
+        "peak_demand_reason": "The supplied dataset contains derived demand values.",
+        "billing_demand_kw": None,
+        "billing_demand_reason": "The supplied dataset contains derived demand values.",
+        "demand_data_available": False,
+        "tariff_assumption": tariff_assumption,
+        "emissions_assumption": emissions_assumption,
     }
 
 

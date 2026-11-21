@@ -1,5 +1,6 @@
 import React from 'react';
 import { formatCurrency, formatDateTime, formatNumber } from '../../utils/formatters';
+import KpiCard, { KpiGrid } from '../../components/common/KpiCard';
 
 export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
   const totalReadings = energySummary?.total_readings ?? null;
@@ -110,33 +111,20 @@ export default function DailyEnergyKpis({ energySummary, powerFactorData }) {
 
   return (
     <div className="daily-energy-kpis-container">
-      <div className="kpi-grid">
+      <KpiGrid className="kpi-grid">
         {kpis.map((card) => (
-          <div key={card.id} className={`kpi-card accent-${card.accent}`}>
-            <div className="kpi-card-inner">
-              <div className="kpi-header">
-                <span className="kpi-title">
-                  {card.title}
-                  <span className={`daily-value-kind ${card.kind === 'Unavailable' ? 'unavailable' : ''}`}>{card.kind}</span>
-                </span>
-                <div className="kpi-icon-wrap">{card.icon}</div>
-              </div>
-              <div className="kpi-body">
-                <span className="kpi-value">{card.value}</span>
-                {card.unit && <span className="kpi-unit">{card.unit}</span>}
-              </div>
-              <div className="kpi-footer-row">
-                {card.sublabel && <span className="kpi-sublabel">{card.sublabel}</span>}
-                {card.badge && (
-                  <span className={`kpi-mini-badge ${lowPfEvents === null ? '' : lowPfEvents === 0 ? 'status-ok' : 'status-alert'}`}>
-                    {card.badge}
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
+          <KpiCard
+            key={card.id}
+            id={card.id}
+            title={card.title}
+            value={card.value}
+            unit={card.unit}
+            accent="purple"
+            icon={card.icon}
+            minimal={true}
+          />
         ))}
-      </div>
+      </KpiGrid>
 
       {peak && (
         <div className="daily-peak-strip">

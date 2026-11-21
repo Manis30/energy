@@ -11,6 +11,8 @@ class EnergyPeakReading(BaseModel):
     meter_id: Optional[str] = Field(None, description="Meter recording peak consumption")
     plant_id: Optional[str] = Field(None, description="Plant location of peak reading")
     consumption_kwh: Decimal = Field(..., description="Peak hourly consumption in kWh")
+    peak_hourly_consumption_kwh: Optional[Decimal] = Field(None, description="Peak hourly consumption in kWh")
+    scope_description: Optional[str] = Field(None, description="Accurate description of geographic/facility scope")
 
 
 class EnergySummaryResponse(BaseModel):
@@ -32,6 +34,15 @@ class EnergySummaryResponse(BaseModel):
     distinct_hours: int = Field(..., description="Number of distinct operating hours")
     avg_hourly_consumption_kwh: Optional[Decimal] = Field(None, description="Average consumption per active meter-hour")
     peak_reading: Optional[EnergyPeakReading] = None
+    peak_hourly_consumption: Optional[EnergyPeakReading] = Field(None, description="Maximum individual meter-hour reading (kWh)")
+    peak_demand_kw: Optional[Decimal] = Field(None, description="Actual measured peak kW (unavailable: dataset contains derived demand values)")
+    peak_demand_status: str = Field("UNAVAILABLE", description="Peak kW demand availability status")
+    peak_demand_reason: str = Field("The supplied dataset contains derived demand values.", description="Reason peak kW is unavailable")
+    billing_demand_kw: Optional[Decimal] = Field(None, description="Billing demand kW (unavailable: dataset contains derived demand values)")
+    billing_demand_reason: str = Field("The supplied dataset contains derived demand values.", description="Reason billing demand is unavailable")
+    demand_data_available: bool = Field(False, description="False because supplied demand_kw is derived as 0.92 x kWh")
+    tariff_assumption: Optional[Dict[str, Any]] = Field(None, description="Versioned dataset tariff assumption (₹8.25/kWh, status: UNKNOWN)")
+    emissions_assumption: Optional[Dict[str, Any]] = Field(None, description="Versioned dataset emissions factor (~0.716 kg CO2e/kWh, status: UNKNOWN)")
 
 
 class MeterEnergyItem(BaseModel):

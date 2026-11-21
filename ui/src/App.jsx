@@ -30,7 +30,7 @@ function RedirectToInvestigation({ defaultTab }) {
 
 function RedirectPreserveQuery({ to }) {
   const location = useLocation();
-  return <Navigate to={`${to}${location.search}`} replace />;
+  return <Navigate to={`${to}${location.search}${location.hash}`} replace />;
 }
 
 export default function App() {
@@ -85,52 +85,72 @@ export default function App() {
 
   const location = useLocation();
   const isChatPage = location.pathname === '/ai-assistant';
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Close mobile sidebar on route transition
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname]);
 
   return (
     <div className="app-container">
-      <Sidebar />
+      {sidebarOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      <Sidebar
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
       <div className={`main-wrapper ${isChatPage ? 'main-wrapper-chat' : ''}`}>
         <Header
           theme={theme}
           onToggleTheme={toggleTheme}
           backendStatus={backendStatus}
+          onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
         />
         <main className={`content-area ${isChatPage ? 'content-area-chat' : ''}`}>
           <Suspense fallback={<PageLoader />}>
             <Routes>
-              {/* 1. Dashboard */}
-              <Route path="/" element={<Dashboard />} />
+              {/* 1. Home (Landing Page) */}
+              <Route path="/" element={<PlatformStory />} />
 
-              {/* 2. Daily Operations */}
+              {/* 2. Dashboard */}
+              <Route path="/dashboard" element={<Dashboard />} />
+
+              {/* 3. Daily Operations */}
               <Route path="/daily-operations" element={<DailyReports />} />
               <Route path="/daily-reports" element={<RedirectPreserveQuery to="/daily-operations" />} />
               <Route path="/daily-analysis" element={<RedirectPreserveQuery to="/daily-operations" />} />
 
-              {/* 3. Energy Analytics */}
+              {/* 4. Energy Analytics */}
               <Route path="/energy-analytics" element={<EnergyAnalytics />} />
 
-              {/* 4. Production Analytics */}
+              {/* 5. Production Analytics */}
               <Route path="/production-analytics" element={<ProductionAnalytics />} />
 
-              {/* 5. Investigation & Actions Centre (Unified Page) */}
+              {/* 6. Investigation & Actions Centre (Unified Page) */}
               <Route path="/investigation-actions" element={<InvestigationActionsCentre />} />
               <Route path="/findings" element={<RedirectToInvestigation />} />
               <Route path="/anomalies" element={<RedirectToInvestigation defaultTab="surveillance" />} />
               <Route path="/recommendations-actions" element={<RedirectToInvestigation defaultTab="recommendations" />} />
               <Route path="/investigation-queue" element={<RedirectToInvestigation />} />
 
-              {/* 6. Data Connectors */}
+              {/* 7. Data Connectors */}
               <Route path="/data-connectors" element={<DataConnectors />} />
               <Route path="/connectors" element={<RedirectPreserveQuery to="/data-connectors" />} />
 
-              {/* 7. AI Assistant */}
+              {/* 8. AI Assistant */}
               <Route
                 path="/ai-assistant"
                 element={<AIAssistant theme={theme} onToggleTheme={toggleTheme} />}
               />
 
-              {/* 8. Platform Story & Architecture */}
-              <Route path="/platform-story" element={<PlatformStory />} />
+              {/* 9. Platform Story backward compatibility (redirects to Home preserving query & hash) */}
+              <Route path="/platform-story" element={<RedirectPreserveQuery to="/" />} />
 
               {/* Catch-all fallback */}
               <Route path="*" element={<Navigate to="/" replace />} />

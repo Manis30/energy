@@ -2,7 +2,8 @@ import React from 'react';
 import { useLocation } from 'react-router-dom';
 
 const PATH_TITLES = {
-  '/': 'Overview Dashboard',
+  '/': 'Home',
+  '/dashboard': 'Overview Dashboard',
   '/daily-operations': 'Daily Operations',
   '/daily-reports': 'Daily Operations',
   '/energy-analytics': 'Energy Analytics',
@@ -13,10 +14,10 @@ const PATH_TITLES = {
   '/anomalies': 'Anomaly Surveillance',
   '/data-connectors': 'Data Connectors',
   '/ai-assistant': 'Conversational AI Assistant',
-  '/platform-story': 'Platform Story & Architecture',
+  '/platform-story': 'Home',
 };
 
-export default function Header({ theme, onToggleTheme, backendStatus }) {
+export default function Header({ theme, onToggleTheme, backendStatus, onToggleSidebar }) {
   const location = useLocation();
 
   // Hide the global top header on the AI Assistant chat page to maximize usable conversation height
@@ -54,6 +55,18 @@ export default function Header({ theme, onToggleTheme, backendStatus }) {
   return (
     <header className="top-header">
       <div className="header-title-section">
+        <button
+          className="mobile-menu-btn"
+          onClick={onToggleSidebar}
+          type="button"
+          aria-label="Toggle navigation menu"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
         <h1 className="page-title">{currentTitle}</h1>
         {renderBadge()}
       </div>
@@ -68,19 +81,19 @@ export default function Header({ theme, onToggleTheme, backendStatus }) {
         >
           {theme === 'dark' ? (
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="4"/>
-              <path d="M12 2v2"/>
-              <path d="M12 20v2"/>
-              <path d="m4.93 4.93 1.41 1.41"/>
-              <path d="m17.66 17.66 1.41 1.41"/>
-              <path d="M2 12h2"/>
-              <path d="M20 12h2"/>
-              <path d="m6.34 17.66-1.41 1.41"/>
-              <path d="m19.07 4.93-1.41 1.41"/>
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2" />
+              <path d="M12 20v2" />
+              <path d="m4.93 4.93 1.41 1.41" />
+              <path d="m17.66 17.66 1.41 1.41" />
+              <path d="M2 12h2" />
+              <path d="M20 12h2" />
+              <path d="m6.34 17.66-1.41 1.41" />
+              <path d="m19.07 4.93-1.41 1.41" />
             </svg>
           ) : (
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
             </svg>
           )}
         </button>

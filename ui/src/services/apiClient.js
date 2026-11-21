@@ -90,7 +90,13 @@ export async function apiRequest(endpoint, { params = {}, init = {} } = {}) {
   if (!response.ok) {
     let message = `Request failed with status ${response.status}`;
     if (data && typeof data === 'object') {
-      message = data.detail || data.message || data.error || message;
+      if (Array.isArray(data.detail)) {
+        message = data.detail.map((d) => (typeof d === 'string' ? d : d.msg || JSON.stringify(d))).join('; ');
+      } else if (typeof data.detail === 'object' && data.detail !== null) {
+        message = JSON.stringify(data.detail);
+      } else {
+        message = data.detail || data.message || data.error || message;
+      }
     } else if (typeof data === 'string' && data.trim()) {
       message = data.trim();
     }

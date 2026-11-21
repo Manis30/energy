@@ -34,6 +34,25 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_MB: int = 25
     MAX_UPLOAD_ROWS: int = 50000
 
+    # Frontend Client URL and CORS settings
+    CLIENT_URL: Optional[str] = None
+    CORS_ALLOWED_ORIGINS: Optional[str] = None
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Parse and return unique allowed CORS origins from CLIENT_URL and CORS_ALLOWED_ORIGINS."""
+        origins: set[str] = set()
+        for raw in (self.CLIENT_URL, self.CORS_ALLOWED_ORIGINS):
+            if raw:
+                for item in raw.split(","):
+                    cleaned = item.strip().rstrip("/")
+                    if cleaned:
+                        origins.add(cleaned)
+        if not origins:
+            # Default fallback for local development
+            origins.update(["http://localhost:5173", "http://127.0.0.1:5173"])
+        return sorted(list(origins))
+
     model_config = SettingsConfigDict(
         env_file=(".env", "backend/.env"),
         env_file_encoding="utf-8",

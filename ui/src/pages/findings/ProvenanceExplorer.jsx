@@ -71,6 +71,21 @@ export function getLineageStatus(occ) {
     return occ.overall_lineage_state;
   }
 
+  // Explicit stream-level state if inspecting a single resolved record
+  if (occ.lineage_state) {
+    if (occ.upload_status === 'UPLOAD_NOT_FOUND') {
+      return 'UPLOAD_NOT_FOUND';
+    }
+    if (occ.record_status === 'UNSUPPORTED_TABLE') {
+      return 'UNSUPPORTED_TABLE';
+    }
+    return occ.lineage_state;
+  }
+
+  if (occ.revision_status === 'ORIGINAL_REVISION_UNAVAILABLE' || occ.lineage_status === 'ORIGINAL_REVISION_UNAVAILABLE') {
+    return 'ORIGINAL_REVISION_UNAVAILABLE';
+  }
+
   // Explicit multi-source from backend schema or composite source records list
   if (
     occ.lineage_status === 'MULTI_SOURCE' ||
@@ -92,6 +107,8 @@ export function getLineageStatus(occ) {
   if (Array.isArray(occ.source_records) && occ.source_records.length === 1) {
     const single = occ.source_records[0];
     if (single.source_table && single.source_record_id) {
+      if (single.upload_status === 'UPLOAD_NOT_FOUND') return 'UPLOAD_NOT_FOUND';
+      if (single.record_status === 'UNSUPPORTED_TABLE') return 'UNSUPPORTED_TABLE';
       return single.upload_id ? 'AVAILABLE' : 'UPLOAD_UNAVAILABLE';
     }
   }
@@ -130,7 +147,7 @@ export function formatRoleLabel(role) {
 
 /**
  * Badge indicating deterministic lineage status.
- * Supports all 5 explicit states: AVAILABLE, MULTI_SOURCE, UPLOAD_UNAVAILABLE, SOURCE_MISSING, LEGACY_UNLINKED
+ * Supports all explicit states: AVAILABLE, MULTI_SOURCE, UPLOAD_UNAVAILABLE, UPLOAD_NOT_FOUND, SOURCE_MISSING, UNSUPPORTED_TABLE, LEGACY_UNLINKED
  */
 export function LineageStatusBadge({ status, streamCount = 0, isCompact = false, occurrence = null }) {
   const resolvedStatus = status || (occurrence ? getLineageStatus(occurrence) : 'UNAVAILABLE');
@@ -156,10 +173,20 @@ export function LineageStatusBadge({ status, streamCount = 0, isCompact = false,
       label = isCompact ? 'Upload Unlinked' : 'Upload Metadata Unavailable';
       title = 'Source telemetry record exists in database, but batch upload metadata is unavailable or record predates upload tracking';
       break;
+    case 'UPLOAD_NOT_FOUND':
+      badgeClass = 'badge-lineage badge-lineage-upload-not-found';
+      label = isCompact ? 'Upload Missing' : 'Upload Record Missing';
+      title = 'Upload batch ID was referenced, but no matching record exists in upload_history (batch unlinked or purged)';
+      break;
     case 'SOURCE_MISSING':
       badgeClass = 'badge-lineage badge-lineage-source-missing';
       label = isCompact ? 'Source Missing' : 'Source Record Missing';
       title = 'Stored source record identifier exists, but original record could not be retrieved from the database';
+      break;
+    case 'UNSUPPORTED_TABLE':
+      badgeClass = 'badge-lineage badge-lineage-unsupported';
+      label = isCompact ? 'Unsupported' : 'Unsupported Source Table';
+      title = 'Source table is not in allowlisted telemetry tables; query execution was blocked';
       break;
     case 'LEGACY_UNLINKED':
       badgeClass = 'badge-lineage badge-lineage-legacy-unlinked';
@@ -170,6 +197,11 @@ export function LineageStatusBadge({ status, streamCount = 0, isCompact = false,
       badgeClass = 'badge-lineage badge-lineage-legacy';
       label = isCompact ? 'Legacy Upload' : 'Legacy Record (Unattributed Upload)';
       title = 'Historical sensor record; row ID resolved, but batch upload metadata was not tracked prior to provenance tracking';
+      break;
+    case 'ORIGINAL_REVISION_UNAVAILABLE':
+      badgeClass = 'badge-lineage badge-lineage-legacy';
+      label = isCompact ? 'Rev Unavailable' : 'Original Revision Unavailable';
+      title = 'Original source revision was not pinned at detection; historical values retained from snapshot';
       break;
     case 'UNAVAILABLE':
     default:
@@ -566,12 +598,32 @@ export function ProvenanceDrillDownView({
     <div className="provenance-drilldown-wrapper">
       {/* 1. Header Toolbar with Occurrence Switcher */}
       <div className="provenance-toolbar">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-primary)' }}>
               Source Record Provenance Drill-Down
             </span>
             <LineageStatusBadge status={overallState} streamCount={streams.length} />
+            {data.qualification_status && (
+              <span className={`provenance-detector-pill status-${data.qualification_status.toLowerCase()}`} title="Baseline qualification status">
+                Qualification: {data.qualification_status}
+              </span>
+            )}
+            {data.confidence && (
+              <span className="provenance-detector-pill" title="Detector confidence score">
+                Confidence: {data.confidence}
+              </span>
+            )}
+            {data.trust_level && (
+              <span className="provenance-detector-pill" title="Detector trust level">
+                Trust: {data.trust_level}
+              </span>
+            )}
+            {data.comparison_window && (
+              <span className="provenance-detector-pill" title="Comparison window used by detector">
+                Window: {data.comparison_window}
+              </span>
+            )}
           </div>
           <span className="provenance-breadcrumb">
             Trace: Finding {findingId} &rarr; Occurrence {currentOccId}
@@ -671,6 +723,47 @@ export function ProvenanceDrillDownView({
         </div>
       )}
 
+      {/* Evidence Quality & Physical Conditions Card */}
+      {(data.observed_condition || data.limits_of_interpretation || data.suggested_investigation) && (
+        <div className="provenance-evidence-quality-box" style={{ padding: '0.85rem', background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '6px', marginBottom: '1rem' }}>
+          <div style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', marginBottom: '0.5rem', letterSpacing: '0.04em' }}>
+            Detector Evidence Quality &amp; Physical Conditions
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.75rem' }}>
+            {data.observed_condition && (
+              <div style={{ padding: '0.6rem', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '4px', borderLeft: '3px solid var(--brand-blue, #3b82f6)' }}>
+                <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--brand-blue, #3b82f6)', textTransform: 'uppercase', display: 'block', marginBottom: '0.2rem' }}>
+                  Observed Physical Condition
+                </span>
+                <p style={{ margin: 0, fontSize: '0.76rem', color: 'var(--text-primary)', lineHeight: 1.4 }}>
+                  {data.observed_condition}
+                </p>
+              </div>
+            )}
+            {data.limits_of_interpretation && (
+              <div style={{ padding: '0.6rem', background: 'rgba(234, 179, 8, 0.05)', borderRadius: '4px', borderLeft: '3px solid var(--brand-yellow, #eab308)' }}>
+                <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--brand-yellow, #eab308)', textTransform: 'uppercase', display: 'block', marginBottom: '0.2rem' }}>
+                  Limits of Interpretation
+                </span>
+                <p style={{ margin: 0, fontSize: '0.76rem', color: 'var(--text-primary)', lineHeight: 1.4 }}>
+                  {data.limits_of_interpretation}
+                </p>
+              </div>
+            )}
+            {data.suggested_investigation && (
+              <div style={{ padding: '0.6rem', background: 'rgba(16, 185, 129, 0.05)', borderRadius: '4px', borderLeft: '3px solid var(--brand-green, #10b981)' }}>
+                <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--brand-green, #10b981)', textTransform: 'uppercase', display: 'block', marginBottom: '0.2rem' }}>
+                  Suggested Operational Investigation
+                </span>
+                <p style={{ margin: 0, fontSize: '0.76rem', color: 'var(--text-primary)', lineHeight: 1.4 }}>
+                  {data.suggested_investigation}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* 4. Contributing Source Streams */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -757,6 +850,31 @@ export function ProvenanceDrillDownView({
                       {stream.entity_id ? <code>{stream.entity_id}</code> : 'N/A'}
                     </span>
                   </div>
+
+                  <div className="provenance-meta-item">
+                    <span className="provenance-meta-label">Historical Source Revision</span>
+                    <div className="provenance-meta-value">
+                      {stream.revision_id ? (
+                        <>
+                          <span><code>{stream.revision_id}</code></span>
+                          <CopyButton text={stream.revision_id} label="Copy Rev" className="btn-copy-mini" />
+                        </>
+                      ) : (
+                        <span className="provenance-val-unavailable">
+                          {stream.revision_status === 'ORIGINAL_REVISION_UNAVAILABLE' ? 'Original Revision Unavailable' : 'Historical Snapshot'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {stream.revision_timestamp && (
+                    <div className="provenance-meta-item">
+                      <span className="provenance-meta-label">Revision Pinned At</span>
+                      <span className="provenance-meta-value">
+                        {formatDateTime(stream.revision_timestamp)}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Upload History Provenance Block */}
@@ -827,6 +945,44 @@ export function ProvenanceDrillDownView({
                     </div>
                   )}
                 </div>
+
+                {/* Current Corrected Reading (Exposed separately when superseded after detection) */}
+                {stream.has_newer_revision && stream.current_corrected_reading && (
+                  <div className="provenance-corrected-box" style={{ marginTop: '0.85rem', padding: '0.75rem', background: 'rgba(234, 179, 8, 0.06)', border: '1px solid rgba(234, 179, 8, 0.28)', borderRadius: '6px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem', flexWrap: 'wrap', gap: '0.4rem' }}>
+                      <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--brand-yellow, #eab308)', textTransform: 'uppercase' }}>
+                        Current Corrected Reading (Superseded after Detection)
+                      </span>
+                      <span className="badge-lineage badge-lineage-legacy" style={{ fontSize: '0.65rem' }}>
+                        Replacement Revision Active
+                      </span>
+                    </div>
+                    <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.73rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                      A replacement revision was ingested for this business key after anomaly detection. The original evidence panel above retains the values and batch used at detection.
+                    </p>
+                    <div className="provenance-upload-grid">
+                      <div className="provenance-meta-item">
+                        <span className="provenance-meta-label">Replacement Revision ID</span>
+                        <div className="provenance-meta-value">
+                          <span><code>{stream.current_corrected_reading.revision_id}</code></span>
+                          <CopyButton text={stream.current_corrected_reading.revision_id} label="Copy" className="btn-copy-mini" />
+                        </div>
+                      </div>
+                      <div className="provenance-meta-item">
+                        <span className="provenance-meta-label">Replacement Upload Batch</span>
+                        <div className="provenance-meta-value">
+                          <span><code>{stream.current_corrected_reading.upload_id || 'Correction Batch'}</code></span>
+                        </div>
+                      </div>
+                      <div className="provenance-meta-item">
+                        <span className="provenance-meta-label">Replacement Timestamp</span>
+                        <span className="provenance-meta-value">
+                          {formatDateTime(stream.current_corrected_reading.revision_timestamp)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Expandable Raw Record Viewer */}
                 {stream.raw_data && (

@@ -25,6 +25,15 @@ class AnomalyRecord(BaseModel):
     source_record_id: Optional[str] = Field(None, description="Primary key identifier of the originating source record")
     upload_id: Optional[str] = Field(None, description="Upload batch identifier that introduced the originating record")
     detector_version: Optional[str] = Field(None, description="Deterministic detector algorithm version that identified the anomaly")
+    qualification_status: Optional[str] = Field(None, description="Detector qualification status: QUALIFIED, UNQUALIFIED, or PARTIAL")
+    trust_level: Optional[str] = Field(None, description="Detector trust level: TRUSTED, TENTATIVE, INCONCLUSIVE, or DISQUALIFIED")
+    evidence_classification: Optional[str] = Field(
+        None,
+        description="Central evidence classification: TRUSTED, TENTATIVE, INCONCLUSIVE, or DISQUALIFIED"
+    )
+    confidence: Optional[str] = Field(None, description="Confidence level separate from severity")
+    reason_codes: List[str] = Field(default_factory=list, description="Qualification and detection reason codes")
+    comparison_window: Optional[str] = Field(None, description="Baseline comparison window used")
 
 
 class StatisticalAnomaliesResponse(BaseModel):
@@ -105,3 +114,11 @@ class UnifiedAnomaliesResponse(BaseModel):
     rolling_baseline: RollingAnomaliesResponse
     low_power_factor: LowPowerFactorResponse
     zero_production_standby: ZeroProductionStandbyResponse
+    persistent_baseload: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Persistent baseload change detector results"
+    )
+    zero_output_restart: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Zero-output stoppage and restart behavior detector results"
+    )

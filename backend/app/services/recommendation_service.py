@@ -19,7 +19,8 @@ Provides deterministic lifecycle state machines and immutable audit logging for:
    - Append-only audit history tracking task creation, status, ownership, due dates, and notes.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
+import hashlib
 import json
 import logging
 import uuid
@@ -88,21 +89,25 @@ def build_audit_metadata(
     caller_attribution: Optional[str] = None,
     source: str = "SYSTEM_AUTOMATION",
     details: Optional[Dict[str, Any]] = None,
+    is_authenticated: bool = False,
 ) -> str:
     """
     Construct standardized audit metadata JSON string.
     
     Adheres to attribution constraints:
-    - Never fabricates or validates authentications.
-    - Classifies actor_type as UNVERIFIED_CALLER vs SYSTEM_AUTOMATION.
-    - Sets is_authenticated=False unconditionally.
+    - Never fabricates or validates unverified caller strings as authenticated.
+    - Classifies actor_type as AUTHENTICATED_OPERATOR, UNVERIFIED_CALLER, or SYSTEM_AUTOMATION.
+    - Preserves is_authenticated flag derived from authenticated session.
     """
     clean_attribution = caller_attribution.strip() if caller_attribution and caller_attribution.strip() else None
-    actor_type = "UNVERIFIED_CALLER" if clean_attribution else "SYSTEM_AUTOMATION"
+    if is_authenticated:
+        actor_type = "AUTHENTICATED_OPERATOR"
+    else:
+        actor_type = "UNVERIFIED_CALLER" if clean_attribution else "SYSTEM_AUTOMATION"
     payload: Dict[str, Any] = {
         "actor_type": actor_type,
         "actor_attribution": clean_attribution,
-        "is_authenticated": False,
+        "is_authenticated": bool(is_authenticated),
         "source": source,
         "details": details or {},
     }
@@ -137,7 +142,14 @@ def list_recommendations(
     if finding_id:
         stmt = stmt.where(OperationalRecommendation.finding_id == finding_id.strip())
     if status:
-        stmt = stmt.where(OperationalRecommendation.status == status.strip().upper())
+        status_clean = status.strip().upper()
+        if "," in status_clean:
+            statuses = [s.strip() for s in status_clean.split(",") if s.strip()]
+            stmt = stmt.where(OperationalRecommendation.status.in_(statuses))
+        elif status_clean == "ACTIVE":
+            stmt = stmt.where(OperationalRecommendation.status.in_(["OPEN", "IN_PROGRESS"]))
+        else:
+            stmt = stmt.where(OperationalRecommendation.status == status_clean)
     if priority:
         stmt = stmt.where(OperationalRecommendation.priority == priority.strip().upper())
     if category:
@@ -524,7 +536,7 @@ def generate_recommendations_from_finding(
     session: Session,
     finding_id: str,
     caller_attribution: Optional[str] = None,
-) -> List[OperationalRecommendation]:
+) -> Tuple[List[OperationalRecommendation], int, int]:
     """
     Generate evidence-backed recommendations for an existing operational finding.
     
@@ -532,13 +544,15 @@ def generate_recommendations_from_finding(
     - Analyzes finding anomaly_type, severity, plant, meter, line, and latest occurrence lineage.
     - Suggests category-specific operational interventions:
         * LOW_POWER_FACTOR -> POWER_FACTOR_CORRECTION
-        * ZERO_PRODUCTION_STANDBY_ENERGY -> STANDBY_SHUTDOWN
-        * PEAK_DEMAND / LOAD_SPIKE -> LOAD_BALANCING
+        * ZERO_PRODUCTION_STANDBY_ENERGY -> STANDBY_SHUTDOWN (Advisory investigation)
+        * PEAK_DEMAND / LOAD_SPIKE -> LOAD_BALANCING (Peak Hourly Consumption)
         * SEC_EXCURSION / INTENSITY -> OPERATIONAL_TUNING
         * General / Statistical -> MAINTENANCE_INSPECTION
     - Preserves row-level lineage (source_table, source_record_id, upload_id, detector_version).
     - Never fabricates dollar savings, percentage energy savings, or unverified claims.
+    - Advisory only: recommendations suggest human review/investigation rather than automated plant control.
     - Deduplicates: will not recreate an OPEN or IN_PROGRESS recommendation of the same category for the finding.
+    - Returns: (recommendations_list, created_count, reused_count).
     - Records append-only CREATED audit log linked to finding detection.
     """
     clean_finding_id = finding_id.strip()
@@ -580,43 +594,167 @@ def generate_recommendations_from_finding(
     else:
         rec_priority = "LOW"
 
+    time_window = (
+        finding.last_detected_at.strftime("%Y-%m-%d %H:%M")
+        if finding.last_detected_at
+        else "Unknown"
+    )
+
     if "POWER_FACTOR" in atype:
         target_category = "POWER_FACTOR_CORRECTION"
         rec_priority = "HIGH" if finding.severity in ("CRITICAL", "HIGH") else "MEDIUM"
+        assigned_team = "Facilities"
         title = f"Inspect Capacitor Bank and Power Factor Correction on {entity_str}"
-        description = (
-            f"Power factor deficit detected on {entity_str}. "
-            f"Inspect capacitor bank stages, automatic power factor controller (APFC) switching relays, "
-            f"and check for excessive inductive motor idling."
+        observed_cond = (
+            f"Plant {finding.plant_id}, meter {finding.meter_id or 'main'}: measured power factor of "
+            f"{finding.current_actual_value or 'unavailable'} fell below the engineering monitoring benchmark "
+            f"(threshold: 0.90 lag, deficit: {finding.current_deviation_score or 'unavailable'}) around {time_window}."
         )
-    elif "STANDBY" in atype or "ZERO_PRODUCTION" in atype:
+        comp_evidence = (
+            f"Power factor monitored against CEA / IEEE 519 standard utility threshold (0.90 lag). "
+            f"Total occurrences recorded: {finding.occurrence_count}. "
+            f"Source record: {latest_occ.source_record_id if latest_occ else 'Unavailable'}."
+        )
+        possible_causes = [
+            "[HYPOTHESIS-FACILITIES: APFC Controller or Capacitor Stage Failure] "
+            "Automatic power factor controller relay stuck or capacitor step degraded.",
+            "[HYPOTHESIS-PRODUCTION: Inductive Motor Light-Load Idling] "
+            "Pumps, fans, or conveyor drives operating without load during transition.",
+            "[LIMITATION-BILLING: Tariff Penalty Structure Unsupplied] "
+            "Dataset does not include utility billing contract or penalty slab formulas.",
+        ]
+        condition_to_check = (
+            "Verify line motor operating status and equipment load schedule before adjusting capacitor bank steps or APFC settings."
+        )
+        action_item = "Inspect capacitor bank steps and APFC relay status for degradation or disconnection."
+
+    elif "STOPPAGE" in atype or "RESTART" in atype or "STANDBY" in atype or "ZERO_PRODUCTION" in atype:
         target_category = "STANDBY_SHUTDOWN"
-        title = f"Enforce Non-Operational Standby Shutdown Protocols on {entity_str}"
-        description = (
-            f"Active energy consumption was recorded during scheduled zero-production intervals on {entity_str}. "
-            f"Verify shift handover isolation procedures, auxiliary equipment interlocks, and master breaker disconnects."
+        assigned_team = "Production"
+        title = f"Investigate Zero-Output Stoppage and Standby Consumption on {entity_str}"
+        observed_cond = (
+            f"Plant {finding.plant_id}, line {finding.line_id or entity_str}: "
+            f"{finding.current_explanation or 'Zero-output stoppage energy draw recorded'} around {time_window}. "
+            f"Measured process electricity: {finding.current_actual_value or 'unavailable'} kWh."
         )
+        comp_evidence = (
+            f"Evaluated against historical completed stoppage episodes on same line. "
+            f"Occurrence count: {finding.occurrence_count}. "
+            f"Source record: {latest_occ.source_record_id if latest_occ else 'Unavailable'}."
+        )
+        possible_causes = [
+            "[HYPOTHESIS-PRODUCTION: Extended Stoppage & Changeover Delay] "
+            "Line remained unpowered down during zero-output stoppage exceeding typical duration.",
+            "[HYPOTHESIS-FACILITIES: Auxiliary Standby Draw] "
+            "Heaters, pumps, conveyors, or testing stations held in standby during stoppage.",
+            "[LIMITATION-METERING: Dedicated Process Meter Boundary] "
+            "Readings reflect line aggregate; subcomponents cannot be decoupled without submetering.",
+        ]
+        condition_to_check = (
+            "Verify line mechanical safety, changeover completion, and upstream buffer readiness before adjusting electrical power, heaters, or auxiliaries."
+        )
+        action_item = "Audit stoppage root cause, line changeover handover, and auxiliary equipment idle isolation."
+
+    elif "BASELOAD" in atype:
+        target_category = "MAINTENANCE_INSPECTION"
+        assigned_team = "Facilities"
+        title = f"Investigate Persistent Baseload Electricity Shift on {entity_str}"
+        observed_cond = (
+            f"Plant {finding.plant_id}, meter {finding.meter_id or 'main'}: persistent shift in electricity consumption "
+            f"(deviation: {finding.current_deviation_score}%) observed across consecutive intervals around {time_window}. "
+            f"Observed rate: {finding.current_actual_value or 'unavailable'} kWh/h vs baseline {finding.current_baseline_value or 'unavailable'} kWh/h."
+        )
+        comp_evidence = (
+            f"Screened against 14-day comparable historical baseline. "
+            f"Occurrence count: {finding.occurrence_count}. "
+            f"Source record: {latest_occ.source_record_id if latest_occ else 'Unavailable'}."
+        )
+        possible_causes = [
+            "[HYPOTHESIS-FACILITIES: Auxiliary Equipment Setpoint Drift] "
+            "Chiller setpoint shifted, compressor air leak, or ventilation operating continuously.",
+            "[HYPOTHESIS-PRODUCTION: Shift Handover Idle Draw] "
+            "Equipment left powered on between production shifts.",
+            "[LIMITATION-METEOROLOGICAL: Ambient Conditions Unmeasured] "
+            "External weather and temperature telemetry are not tracked.",
+        ]
+        condition_to_check = (
+            "Verify plant compressed air pressure and cleanroom temperature bounds before altering auxiliary equipment schedules."
+        )
+        action_item = "Audit compressed air lines, HVAC setpoints, and chiller operating profile."
+
     elif "PEAK" in atype or "DEMAND" in atype:
         target_category = "LOAD_BALANCING"
-        title = f"Review Peak Demand Load Scheduling for {entity_str}"
-        description = (
-            f"Significant demand peak observed on {entity_str}. "
-            f"Coordinate high-load equipment startup sequences and consider staggering motor starts to balance demand."
+        assigned_team = "Production"
+        title = f"Review Peak Hourly Consumption Scheduling for {entity_str}"
+        observed_cond = (
+            f"Plant {finding.plant_id}, meter {finding.meter_id or 'main'}: elevated peak hourly consumption of "
+            f"{finding.current_actual_value or 'unavailable'} kWh around {time_window}."
         )
+        comp_evidence = (
+            f"Peak consumption compared against historical baseline mean {finding.current_baseline_value or 'unavailable'} kWh. "
+            f"Source record: {latest_occ.source_record_id if latest_occ else 'Unavailable'}."
+        )
+        possible_causes = [
+            "[HYPOTHESIS-PRODUCTION: Coincident Line Startup] Simultaneous motor or thermal ramp-up.",
+            "[LIMITATION-MEASUREMENT: Derived Demand] Derived demand_kw is not independently measured kW peak.",
+        ]
+        condition_to_check = (
+            "Verify line production schedule and motor startup interlocks before re-sequencing start times."
+        )
+        action_item = "Review equipment startup sequencing to avoid coincident peak hours."
+
     elif "INTENSITY" in atype or "SEC" in atype:
         target_category = "OPERATIONAL_TUNING"
-        title = f"Tune Specific Energy Consumption Operating Parameters on {entity_str}"
-        description = (
-            f"Energy consumption per production unit deviated from baseline on {entity_str}. "
-            f"Audit operating speed, batch sizing, thermal losses, and mechanical friction on the line."
+        assigned_team = "Production"
+        title = f"Investigate Specific Energy Consumption Deviation on {entity_str}"
+        observed_cond = (
+            f"Plant {finding.plant_id}, line {finding.line_id or entity_str}: specific energy consumption "
+            f"reached {finding.current_actual_value or 'unavailable'} around {time_window}."
         )
+        comp_evidence = (
+            f"Compared against baseline SEC target of {finding.current_baseline_value or 'unavailable'}. "
+            f"Source record: {latest_occ.source_record_id if latest_occ else 'Unavailable'}."
+        )
+        possible_causes = [
+            "[HYPOTHESIS-PRODUCTION: Reduced Throughput / High Scrap] Lower good output with fixed process electricity.",
+            "[LIMITATION-ATTRIBUTION: Process Meter Aggregate] Process SEC reflects entire line, not individual stations.",
+        ]
+        condition_to_check = (
+            "Verify product mix, operating speed, and scrap reject counts before re-tuning line parameters."
+        )
+        action_item = "Review line operating speed, batch sizing, and scrap reject rates."
+
     else:
         target_category = "MAINTENANCE_INSPECTION"
+        assigned_team = "Facilities"
         title = f"Conduct Mechanical & Electrical Inspection on {entity_str}"
-        description = (
-            f"Operational energy anomaly '{finding.anomaly_type}' flagged on {entity_str}. "
-            f"Perform thermal imaging, check connection tightness, and verify sensor calibration."
+        observed_cond = (
+            f"Plant {finding.plant_id}, entity {entity_str}: anomaly '{finding.anomaly_type}' "
+            f"(value: {finding.current_actual_value or 'unavailable'}) detected around {time_window}."
         )
+        comp_evidence = (
+            f"Telemetry flagged deviation against historical baseline. "
+            f"Source record: {latest_occ.source_record_id if latest_occ else 'Unavailable'}."
+        )
+        possible_causes = [
+            "[HYPOTHESIS-FACILITIES: Telemetry or Mechanical Excursion] Sensor calibration drift or mechanical wear.",
+            "[LIMITATION-INSPECTION: Physical Access Required] In-person inspection needed to isolate cause.",
+        ]
+        condition_to_check = (
+            "Verify machine safety interlocks before opening electrical panels or servicing sensors."
+        )
+        action_item = "Perform thermal imaging and sensor calibration verification."
+
+    # Formulate structured description with the 4 sections
+    description = (
+        f"### 1. Observed Condition\n{observed_cond}\n\n"
+        f"### 2. Comparison and Evidence\n{comp_evidence}\n\n"
+        f"### 3. Possible Causes and Limitations\n" + "\n".join(f"- {p}" for p in possible_causes) + "\n\n"
+        f"### 4. Suggested Investigation\n"
+        f"- Responsible Team: {assigned_team}\n"
+        f"- Condition to Check Before Modifying State: {condition_to_check}\n"
+        f"- Recommended Action: {action_item}"
+    )
 
     # Application-level active deduplication check
     existing_active = session.execute(
@@ -631,12 +769,12 @@ def generate_recommendations_from_finding(
 
     if existing_active:
         logger.info(
-            "Active recommendation '%s' in category %s already exists for finding %s. Returning existing.",
+            "Active recommendation '%s' in category %s already exists for finding %s. Reusing existing.",
             existing_active.recommendation_id,
             target_category,
             finding.finding_id,
         )
-        return [existing_active]
+        return [existing_active], 0, 1
 
     # Assemble factual evidence context without fabricated savings
     evidence_context: Dict[str, Any] = {
@@ -655,6 +793,7 @@ def generate_recommendations_from_finding(
         "source_explanation": finding.current_explanation,
     }
 
+    source_records = None
     if latest_occ:
         c_flags: Dict[str, Any] = {}
         if latest_occ.context_flags_json:
@@ -684,6 +823,17 @@ def generate_recommendations_from_finding(
             evidence_context["source_records"] = source_records
     else:
         evidence_context["lineage_status"] = "UNAVAILABLE"
+
+    evidence_context["investigation_sections"] = {
+        "observed_condition": observed_cond,
+        "comparison_and_evidence": comp_evidence,
+        "possible_causes_and_limitations": possible_causes,
+        "suggested_investigation": {
+            "responsible_team": assigned_team,
+            "production_condition_to_check": condition_to_check,
+            "action_item": action_item,
+        },
+    }
 
     rec_id = generate_recommendation_id(finding.plant_id)
     evidence_json = json.dumps(evidence_context, default=str)
@@ -733,14 +883,59 @@ def generate_recommendations_from_finding(
         ),
     )
 
+    action_id = generate_action_id()
+    limitation_note = (
+        f"Meter {finding.meter_id} measures aggregate electrical circuits for {finding.line_id or 'area'}; "
+        f"submetering is required to isolate individual subcomponent loads."
+        if finding.meter_id else None
+    )
+    pinned_json = json.dumps(source_records) if source_records else None
+
+    action = CorrectiveAction(
+        action_id=action_id,
+        recommendation_id=rec_id,
+        title=f"{assigned_team}: {action_item}",
+        description=f"Actionable investigation for {assigned_team}.\n\nCondition to check before modifying state: {condition_to_check}\n\nObserved Condition: {observed_cond}",
+        status="OPEN",
+        owner=assigned_team,
+        due_date=now + timedelta(days=7),
+        plant_id=finding.plant_id,
+        finding_id=finding.finding_id,
+        occurrence_id=latest_occ.occurrence_id if latest_occ else None,
+        pinned_evidence_json=pinned_json,
+        affected_equipment=finding.line_id or finding.meter_id,
+        measurement_meter_id=finding.meter_id,
+        shared_meter_limitation=limitation_note,
+        responsible_team=assigned_team,
+        review_status="PENDING_REVIEW",
+        assessment_status="NONE",
+        created_at=now,
+        updated_at=now,
+    )
+    action_audit = ActionAuditLog(
+        audit_id=generate_audit_id("ACT"),
+        action_id=action_id,
+        entity_id=action_id,
+        recommendation_id=rec_id,
+        action="CREATED",
+        from_status=None,
+        to_status="OPEN",
+        performed_at=now,
+        comment=f"Initial actionable investigation task assigned to {assigned_team}.",
+        changed_fields_json=json.dumps({"status": {"old": None, "new": "OPEN"}, "owner": {"old": None, "new": assigned_team}}, default=str),
+        audit_metadata_json=build_audit_metadata(caller_attribution=caller_attribution, source="DETECTOR_AUTOMATION"),
+    )
+
     try:
         with session.begin_nested():
             session.add(recommendation)
             session.add(audit)
+            session.add(action)
+            session.add(action_audit)
             session.flush()
         session.commit()
         session.refresh(recommendation)
-        return [recommendation]
+        return [recommendation], 1, 0
     except IntegrityError:
         session.rollback()
         # Concurrently committed active recommendation exists now. Retrieve and return gracefully.
@@ -760,7 +955,7 @@ def generate_recommendations_from_finding(
                 concurrent_rec.recommendation_id,
                 finding.finding_id,
             )
-            return [concurrent_rec]
+            return [concurrent_rec], 0, 1
         raise
 
 
@@ -1118,3 +1313,256 @@ def update_corrective_action(
     except Exception:
         session.rollback()
         raise
+
+
+def draft_trial_plan_from_recommendation(
+    session: Session,
+    recommendation_id: str,
+    break_duration_minutes: Optional[float] = None,
+    restart_readiness_minutes: Optional[float] = None,
+    caller_attribution: Optional[str] = None,
+    target_equipment: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Draft an energy-saving trial plan prefilled from recommendation and finding data.
+    Answers Questions 2, 3, and 4 before physical execution:
+    - What specific operating change could we try?
+    - Under what conditions could we try it while protecting production?
+    - What dual-boundary measurement windows and guardrails will be used?
+
+    Evaluates suitability:
+    - If break duration is less than restart readiness, flags trial as unsuitable.
+    - If equipment data is missing, recommends equipment audit/submetering (evidence gathering).
+    - If suitable, returns prefilled CreateMeasurementPlanRequest with dual boundary & guardrails.
+    """
+    rec = get_recommendation_detail(session, recommendation_id)
+    if not rec:
+        raise ValueError(f"Operational recommendation '{recommendation_id}' not found.")
+
+    finding: Optional[OperationalFinding] = None
+    if rec.finding_id:
+        finding = session.execute(
+            select(OperationalFinding).where(OperationalFinding.finding_id == rec.finding_id)
+        ).scalars().first()
+
+    plant_id = rec.plant_id or (finding.plant_id if finding else "IN-TN-01")
+    line_id = (finding.line_id if finding else None) or "FAL-L2"
+    meter_id = (finding.meter_id if finding else None) or "MTR-FAL-01"
+
+    if not target_equipment and finding:
+        target_equipment = getattr(finding, "machine_id", None) or getattr(finding, "equipment_id", None)
+
+    break_min = float(break_duration_minutes) if break_duration_minutes is not None else 60.0
+    restart_min = float(restart_readiness_minutes) if restart_readiness_minutes is not None else 10.0
+
+    # 1. Suitability check: break duration vs restart readiness
+    if break_duration_minutes is not None and restart_readiness_minutes is not None and break_min < restart_min:
+        return {
+            "is_suitable": False,
+            "unsuitable_reason": (
+                f"Operating change unsuitable for trial: Planned break duration ({break_min:.0f} min) "
+                f"is shorter than equipment restart readiness ({restart_min:.0f} min). "
+                f"Powering down equipment would risk delaying production restart and breaching availability guardrails."
+            ),
+            "recommendation_type": "OPERATIONAL_TRIAL",
+            "audit_recommendation": None,
+            "plan_draft": None,
+            "break_duration_minutes": break_min,
+            "restart_readiness_minutes": restart_min,
+            "target_equipment": target_equipment,
+            "suggested_operating_change": None,
+            "operating_window": None,
+            "why_saves_electricity": None,
+            "production_dependencies": None,
+            "restart_requirements": None,
+            "stop_conditions": None,
+            "inference_source": "RULE_BASED_FALLBACK",
+            "agent_execution_trace": {
+                "provider": "Domo AI Services",
+                "model": "offline",
+                "tools_called": ["evaluate_trial_suitability"],
+                "status": "COMPLETED",
+            },
+        }
+
+    # 2. Shared utility check (e.g. central compressor, chiller, HVAC)
+    corr_id = f"corr-trial-{hashlib.sha256((rec.recommendation_id + str(break_min)).encode()).hexdigest()[:12]}"
+    is_shared_compressor = bool(
+        "COMPRESSOR" in str(meter_id).upper()
+        or "COMPRESSOR" in str(getattr(rec, "affected_equipment", "") or "").upper()
+        or "COMPRESSOR" in str(rec.title or "").upper()
+    )
+    is_shared_utility = is_shared_compressor or bool(
+        "CHILLER" in str(meter_id).upper()
+        or "CHILLER" in str(getattr(rec, "affected_equipment", "") or "").upper()
+    )
+    if is_shared_utility:
+        return {
+            "is_suitable": True,
+            "is_equipment_trial_blocked": True,
+            "unsuitable_reason": None,
+            "recommendation_type": "EVIDENCE_GATHERING",
+            "audit_recommendation": (
+                f"Meter '{meter_id}' supplies shared utility services across multiple production lines whose individual pneumatic dependencies and demand are unknown. "
+                f"Because another operating line may still require compressed air or cooling while Line {line_id or 'process'} is on break, "
+                f"shutting down or modulating the utility load without line-level isolation creates a severe risk of starving active production. "
+                f"Recommend measuring demand first with dedicated line-level flow submeters or pressure loggers. "
+                f"Physical equipment-change trials are strictly blocked until line dependencies are resolved."
+            ),
+            "plan_draft": None,
+            "break_duration_minutes": break_min,
+            "restart_readiness_minutes": restart_min,
+            "target_equipment": target_equipment or "Central Utility System",
+            "suggested_operating_change": "Conduct distribution audit and install dedicated line isolation valves before staging utility power-down trials.",
+            "operating_window": "Pre-trial pneumatic/cooling distribution audit window",
+            "why_saves_electricity": "Distinguishes background header leakage from legitimate compressed air or cooling demand of adjacent operating lines.",
+            "production_dependencies": "Central receiver header pressure must remain >= 6.5 bar for active production lines.",
+            "restart_requirements": "Confirm full header pressure reaches 7.0 bar before initiating downstream machine cycles.",
+            "stop_conditions": "Immediately abort audit or test and open isolation bypass if receiver pressure drops below 6.0 bar.",
+            "inference_source": "RULE_GENERATED_DRAFT",
+            "agent_execution_trace": {
+                "provider": "Domo AI Services",
+                "correlation_id": corr_id,
+                "workflow_step": "PROPOSE_TRIAL",
+                "model": "offline",
+                "tools_called": ["audit_shared_utility_topology"],
+                "status": "COMPLETED",
+            },
+        }
+
+    # 3. Evidence gathering check: missing equipment data on aggregate line meter
+    if not target_equipment:
+        return {
+            "is_suitable": True,
+            "is_equipment_trial_blocked": False,
+            "unsuitable_reason": None,
+            "recommendation_type": "EVIDENCE_GATHERING",
+            "audit_recommendation": (
+                f"Process meter '{meter_id}' measures line aggregate consumption. "
+                f"Line-level meter cannot isolate machine draw without submetering. "
+                f"Conduct equipment-level log audit and install temporary IoT submeters to isolate "
+                f"candidate auxiliary loads before staging an operational trial."
+            ),
+            "plan_draft": None,
+            "break_duration_minutes": break_min,
+            "restart_readiness_minutes": restart_min,
+            "target_equipment": None,
+            "suggested_operating_change": "Conduct equipment audit and attach temporary submeters to identify candidate standby loads.",
+            "operating_window": "Pre-trial equipment submetering audit window",
+            "why_saves_electricity": "Identifies which auxiliary subsystem draws parasitic power during zero-production stoppage intervals.",
+            "production_dependencies": "Submeter installation must not interrupt active production power buses.",
+            "restart_requirements": "Verify electrical phase balance and voltage drop before line startup.",
+            "stop_conditions": "Abort submeter installation if ground fault or breaker trip occurs.",
+            "inference_source": "RULE_GENERATED_DRAFT",
+            "agent_execution_trace": {
+                "provider": "Domo AI Services",
+                "correlation_id": corr_id,
+                "workflow_step": "PROPOSE_TRIAL",
+                "model": "offline",
+                "tools_called": ["audit_submeter_coverage"],
+                "status": "COMPLETED",
+            },
+        }
+
+    # 4. Formulate prefilled trial plan
+    now = datetime.utcnow()
+    ref_ts = (finding.last_detected_at if finding and finding.last_detected_at else now).replace(minute=0, second=0, microsecond=0)
+
+    b_start = ref_ts - timedelta(days=1)
+    b_end = b_start + timedelta(hours=2)
+    p_start = ref_ts
+    p_end = p_start + timedelta(hours=2)
+
+    intended_change = "Activate plant-approved standby mode for nonessential line auxiliaries during planned breaks exceeding restart readiness."
+    operating_window = f"Planned break [{b_start.strftime('%H:%M')}–{(b_start + timedelta(hours=1)).strftime('%H:%M')}) with restart buffer of {restart_min:.0f} minutes"
+    why_saves_electricity = "De-energizing nonessential idle heaters, auxiliary pumps, and conveyor drives avoids standby parasitic draw during zero-production intervals."
+    production_dependencies = "Upstream buffer inventory must be verified; downstream packing line must be cleared."
+    restart_requirements = f"Pre-restart sequence must initiate at least {restart_min:.0f} minutes prior to shift start to achieve thermal/pneumatic operating thresholds."
+    stop_conditions = "Immediately restore normal power if line startup is called early or safety interlocks trip."
+
+    inference_source = "RULE_BASED_FALLBACK"
+    agent_trace = {
+        "provider": "Domo AI Services",
+        "model": "offline",
+        "tools_called": ["draft_measurement_plan_parameters"],
+        "status": "COMPLETED",
+    }
+
+    from app.schemas.interventions import CreateMeasurementPlanRequest
+    plan_draft = CreateMeasurementPlanRequest(
+        intended_change=intended_change,
+        implementation_owner="Shift Production Lead",
+        plant_id=plant_id,
+        process_or_line=line_id,
+        eligible_meters=[meter_id],
+        production_denominator="Good finished units",
+        production_unit="units",
+        baseline_start=b_start,
+        baseline_end=b_end,
+        post_start=p_start,
+        post_end=p_end,
+        guardrail_output_min=100.0,
+        guardrail_output_unit="units",
+        guardrail_output_direction="GREATER_OR_EQUAL",
+        guardrail_output_source="Approved Production Schedule",
+        guardrail_output_reason="Maintain minimum production target of 100 good units",
+        guardrail_reject_max=10.0,
+        guardrail_reject_unit="units",
+        guardrail_reject_direction="LESS_OR_EQUAL",
+        guardrail_reject_source="Quality Specification Limit",
+        guardrail_reject_reason="Keep scrap rejects below 10 units",
+        guardrail_downtime_max_min=15.0,
+        guardrail_downtime_unit="minutes",
+        guardrail_downtime_direction="LESS_OR_EQUAL",
+        guardrail_downtime_source="Target Line Availability",
+        guardrail_downtime_reason="Ensure unplanned downtime does not exceed 15 minutes",
+        guardrail_restart_max_min=12.0,
+        guardrail_restart_unit="minutes",
+        guardrail_restart_direction="LESS_OR_EQUAL",
+        guardrail_restart_source="Target Line Availability / Restart Envelope",
+        guardrail_restart_reason="Restart and ramp-up must complete within 12 minutes",
+        comparison_method="DUAL_STOPPAGE_AND_RESTART",
+        min_coverage_pct=90.0,
+        success_criterion="Achieve net electricity reduction >= 5% across stoppage and restart while satisfying all production guardrails",
+        success_criterion_metric="AVOIDED_KWH",
+        success_criterion_threshold_pct=-5.0,
+        has_dual_boundary=True,
+        boundary_type="DUAL_STOPPAGE_AND_RESTART",
+        boundary_a_config={
+            "name": "Boundary A: Stoppage Electricity",
+            "baseline_start": b_start.isoformat(),
+            "baseline_end": (b_start + timedelta(hours=1)).isoformat(),
+            "post_start": p_start.isoformat(),
+            "post_end": (p_start + timedelta(hours=1)).isoformat(),
+            "eligible_meters": [meter_id],
+        },
+        boundary_b_config={
+            "name": "Boundary B: Restart & Productive Shift",
+            "baseline_start": (b_start + timedelta(hours=1)).isoformat(),
+            "baseline_end": b_end.isoformat(),
+            "post_start": (p_start + timedelta(hours=1)).isoformat(),
+            "post_end": p_end.isoformat(),
+            "eligible_meters": [meter_id],
+        },
+        is_retrospective=False,
+        created_by=caller_attribution or "SYSTEM_OPERATIONS",
+    )
+
+    return {
+        "is_suitable": True,
+        "unsuitable_reason": None,
+        "recommendation_type": "OPERATIONAL_TRIAL",
+        "audit_recommendation": None,
+        "plan_draft": plan_draft,
+        "break_duration_minutes": break_min,
+        "restart_readiness_minutes": restart_min,
+        "target_equipment": target_equipment or "Line Auxiliaries & Heating Stations",
+        "suggested_operating_change": intended_change,
+        "operating_window": operating_window,
+        "why_saves_electricity": why_saves_electricity,
+        "production_dependencies": production_dependencies,
+        "restart_requirements": restart_requirements,
+        "stop_conditions": stop_conditions,
+        "inference_source": inference_source,
+        "agent_execution_trace": agent_trace,
+    }

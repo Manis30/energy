@@ -77,6 +77,21 @@ class ValidateReportResponse(BaseModel):
     summary: ValidationSummary
     errors: List[RowValidationError] = Field(default_factory=list)
     preview: List[PreviewRow] = Field(default_factory=list)
+    upload_id: Optional[str] = None
+
+
+class VerifyIngestionResponse(BaseModel):
+    """Authoritative database verification of ingested records."""
+    reporting_date: date
+    plant_id: Optional[str] = None
+    upload_id: Optional[str] = None
+    verified: bool
+    energy_records: int
+    production_records: int
+    linked_energy_records: int
+    linked_production_records: int
+    upload_ids: List[str] = Field(default_factory=list)
+    message: str
 
 
 class IngestReportResponse(BaseModel):

@@ -1,7 +1,55 @@
 /* Theme tokens and global variables */
 :root {
-  /* Typography */
+  /* Central Typography System */
   --font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-sans: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-heading: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-inter: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Typography Scale — Compact & Balanced Density (Matches 90% Zoom Reference at 100% Zoom) */
+  --font-size-brand: 1.25rem;
+  /* 20px */
+  --font-weight-brand: 700;
+  --font-size-page-title: 1.05rem;      /* ~16.8px (compact and proportional for 48px header) */
+  --font-weight-page-title: 600;
+  --font-size-section: 1.15rem;
+  /* ~18.4px (hierarchy target: 17–20px) */
+  --font-weight-section: 600;
+  --font-size-card-heading: 0.88rem;
+  /* ~14.1px (hierarchy target: 13–15px) */
+  --font-weight-card-heading: 600;
+  --font-size-filter-label: 0.75rem;
+  /* 12px (hierarchy target: 11–12px) */
+  --font-size-filter-control: 0.78rem;
+  /* 12.5px */
+  --font-size-kpi-value: 1.5rem;
+  /* 24px (matches 90% zoom visual density) */
+  --font-weight-kpi-value: 650;
+  --font-size-kpi-label: 0.78rem;
+  /* 12.5px */
+  --font-weight-kpi-label: 550;
+  --font-size-body: 0.84rem;
+  /* 13.5px (hierarchy target: 13–14px) */
+  --font-weight-body: 400;
+  --font-size-supporting: 0.72rem;
+  /* 11.5px (hierarchy target: 11–12px) */
+  --font-weight-supporting: 400;
+  --font-size-table-heading: 0.72rem;
+  /* 11.5px */
+  --font-weight-table-heading: 600;
+  --font-size-table-content: 0.78rem;
+  /* 12.5px */
+  --font-weight-table-content: 450;
+  --font-size-btn: 0.78rem;
+  /* 12.5px */
+  --font-weight-btn: 550;
+
+  /* Glassmorphism Surfaces */
+  --bg-glass: linear-gradient(135deg, rgba(255, 255, 255, 0.94) 0%, rgba(248, 246, 255, 0.88) 100%);
+  --bg-glass-subtle: linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0%, rgba(245, 243, 255, 0.75) 100%);
+  --border-glass: rgba(226, 232, 240, 0.85);
+  --shadow-glass: 0 4px 14px -2px rgba(31, 47, 89, 0.04), 0 1px 3px -1px rgba(0, 0, 0, 0.02);
 
   /* Brand Palette (Light) */
   --brand-purple: #6f3dba;
@@ -26,6 +74,9 @@
   --bg-surface: #ffffff;
   --bg-surface-elevated: #ffffff;
   --bg-surface-subtle: #f8fafc;
+  --bg-secondary: #f8fafc;
+  --card-bg: #ffffff;
+  --bg-card: #ffffff;
   --bg-sidebar: #ffffff;
   --bg-header: #ffffff;
   --bg-hover: rgba(111, 61, 186, 0.05);
@@ -53,15 +104,23 @@
   --status-danger: #ef4444;
   --status-info: #4d8eeb;
 
-  /* Component Dimensions */
-  --sidebar-width: 260px;
-  --header-height: 64px;
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  /* Component Dimensions & Density Tokens */
+  --sidebar-width: 248px;
+  --header-height: 48px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 11px;
+  --content-padding: 0.85rem 1rem;
+  --section-gap: 0.95rem;
+  --card-padding: 0.85rem 1rem;
+  --card-gap: 0.75rem;
+  --control-height: 34px;
+  --toolbar-height: 44px;
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
+
   /* Brand Palette (Dark) */
   --brand-purple: #a684ee;
   --brand-blue: #78acf5;
@@ -85,6 +144,9 @@
   --bg-surface: #141c2e;
   --bg-surface-elevated: #26334d;
   --bg-surface-subtle: #1a243b;
+  --bg-secondary: #1a243b;
+  --card-bg: #141c2e;
+  --bg-card: #141c2e;
   --bg-sidebar: #0e1526;
   --bg-header: #0e1526;
   --bg-hover: rgba(166, 132, 238, 0.08);
@@ -105,4 +167,10 @@
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.6), 0 4px 6px -2px rgba(0, 0, 0, 0.4);
+
+  /* Glassmorphism Surfaces (Dark) */
+  --bg-glass: linear-gradient(135deg, rgba(20, 28, 48, 0.94) 0%, rgba(15, 23, 42, 0.9) 100%);
+  --bg-glass-subtle: linear-gradient(135deg, rgba(26, 36, 59, 0.85) 0%, rgba(20, 28, 48, 0.8) 100%);
+  --border-glass: rgba(255, 255, 255, 0.08);
+  --shadow-glass: 0 4px 20px rgba(0, 0, 0, 0.35);
 }

@@ -21,8 +21,10 @@ from app.db import Base, get_engine
 from app.schemas.connectors import (
     CollectionInfo,
     ColumnInfo,
+    ConnectionState,
     ConnectionTestResult,
     ConnectorDiscoveryResult,
+    ConnectorMode,
     ConnectorRole,
     ConnectorStatus,
     ConnectorSummary,
@@ -84,9 +86,27 @@ class ConnectorService:
         # Initialize default seed connectors for demonstration and immediate exploration
         self._init_defaults()
 
+    def _get_last_successful_ingestion_ts(self) -> Optional[datetime]:
+        """Fetch latest verified completed upload timestamp from database audit log."""
+        engine = get_engine()
+        if engine is None:
+            return None
+        try:
+            with engine.connect() as conn:
+                ts = conn.execute(
+                    text("SELECT MAX(uploaded_at) FROM upload_history WHERE status = 'COMPLETED'")
+                ).scalar()
+                if ts and isinstance(ts, datetime):
+                    if ts.tzinfo is None:
+                        return ts.replace(tzinfo=timezone.utc)
+                    return ts
+        except Exception:
+            pass
+        return None
+
     def _init_defaults(self):
-        """Seed initial MongoDB and SharePoint connectors alongside predefined Neon primary."""
-        # Seed MongoDB Telemetry Connector
+        """Seed simulated MongoDB and SharePoint connectors alongside PostgreSQL and file intake."""
+        # Seed MongoDB Telemetry Connector (Explicit Simulation)
         mongo_id = "conn-mongo-analytics"
         self._custom_mongodb_connectors[mongo_id] = {
             "id": mongo_id,
@@ -96,13 +116,18 @@ class ConnectorService:
             "auth_database": "admin",
             "replica_set": "atlas-mfg-rs0",
             "ssl": True,
-            "status": ConnectorStatus.CONNECTED,
+            "status": ConnectorStatus.SIMULATED,
+            "mode": ConnectorMode.SIMULATED,
+            "connection_state": ConnectionState.CONFIGURED_UNVERIFIED,
+            "is_simulation": True,
+            "is_operational_intake": False,
             "created_at": datetime(2026, 11, 1, 9, 0, 0, tzinfo=timezone.utc),
-            "last_tested_at": datetime(2026, 11, 13, 8, 0, 0, tzinfo=timezone.utc),
-            "last_sync_at": datetime(2026, 11, 13, 8, 30, 0, tzinfo=timezone.utc),
+            "last_tested_at": None,
+            "last_sync_at": None,
+            "last_successful_ingestion_at": None,
         }
 
-        # Seed SharePoint Operations Connector
+        # Seed SharePoint Operations Connector (Explicit Simulation)
         sp_id = "conn-sp-mfg"
         self._custom_sharepoint_connectors[sp_id] = {
             "id": sp_id,
@@ -112,10 +137,15 @@ class ConnectorService:
             "client_secret": "LiveSecret_GraphApi_9876543210_Key",
             "site_url": "https://industrial-energy.sharepoint.com/sites/plant-operations",
             "default_library": "Energy & Production Reports",
-            "status": ConnectorStatus.CONNECTED,
+            "status": ConnectorStatus.SIMULATED,
+            "mode": ConnectorMode.SIMULATED,
+            "connection_state": ConnectionState.CONFIGURED_UNVERIFIED,
+            "is_simulation": True,
+            "is_operational_intake": False,
             "created_at": datetime(2026, 11, 2, 10, 15, 0, tzinfo=timezone.utc),
-            "last_tested_at": datetime(2026, 11, 13, 8, 5, 0, tzinfo=timezone.utc),
-            "last_sync_at": datetime(2026, 11, 13, 8, 45, 0, tzinfo=timezone.utc),
+            "last_tested_at": None,
+            "last_sync_at": None,
+            "last_successful_ingestion_at": None,
         }
 
         # Seed initial sync history items
@@ -123,7 +153,7 @@ class ConnectorService:
             SyncHistoryItem(
                 id="sync-init-001",
                 connector_id="conn-neon-primary",
-                connector_name="Neon PostgreSQL (Application Primary)",
+                connector_name="PostgreSQL Primary Database",
                 connector_type=ConnectorType.NEON_POSTGRES,
                 sync_type="SCHEMA_DISCOVERY",
                 status=SyncStatus.SUCCESS,
@@ -135,26 +165,26 @@ class ConnectorService:
             SyncHistoryItem(
                 id="sync-init-002",
                 connector_id="conn-mongo-analytics",
-                connector_name="MongoDB Plant Telemetry & Time-Series",
+                connector_name="MongoDB Plant Telemetry & Time-Series (Simulation)",
                 connector_type=ConnectorType.MONGODB,
                 sync_type="SCHEMA_DISCOVERY",
                 status=SyncStatus.SUCCESS,
                 items_processed=3,
                 duration_ms=68,
                 timestamp=datetime(2026, 11, 13, 8, 30, 0, tzinfo=timezone.utc),
-                details={"collections_found": 3, "database": "energy_telemetry", "documents_indexed": 259100},
+                details={"collections_found": 3, "database": "energy_telemetry", "simulation": True},
             ),
             SyncHistoryItem(
                 id="sync-init-003",
                 connector_id="conn-sp-mfg",
-                connector_name="Plant Operations SharePoint (M365)",
+                connector_name="Plant Operations SharePoint (M365 Simulation)",
                 connector_type=ConnectorType.SHAREPOINT,
                 sync_type="FILE_SCAN",
                 status=SyncStatus.SUCCESS,
                 items_processed=4,
                 duration_ms=115,
                 timestamp=datetime(2026, 11, 13, 8, 45, 0, tzinfo=timezone.utc),
-                details={"libraries_scanned": 3, "supported_files": 4, "format": ["xlsx", "csv"]},
+                details={"libraries_scanned": 3, "supported_files": 4, "simulation": True},
             ),
         ])
 
@@ -163,14 +193,48 @@ class ConnectorService:
     # -------------------------------------------------------------------------
 
     def get_all_connectors(self) -> List[ConnectorSummary]:
-        """Return all available and registered connectors with masked credentials."""
+        """Return all available, registered, and roadmap connectors with masked credentials."""
         connectors: List[ConnectorSummary] = []
 
-        # 1. Neon PostgreSQL Primary Connector (predefined & primary)
-        neon_summary = self._get_neon_summary()
-        connectors.append(neon_summary)
+        # 1. PostgreSQL Primary Connector (truthful provider and connection check)
+        postgres_summary = self._get_neon_summary()
+        connectors.append(postgres_summary)
 
-        # 2. Registered MongoDB Connectors
+        # 2. Manual File Intake (Operational intake path)
+        last_ingestion_ts = self._get_last_successful_ingestion_ts()
+        manual_file_summary = ConnectorSummary(
+            id="conn-manual-file-intake",
+            name="Manual File Intake (CSV / Excel)",
+            type=ConnectorType.FILE_UPLOAD,
+            role=ConnectorRole.INGESTION_SOURCE,
+            description="Operational data intake path for daily energy submeter readings and hourly production logs.",
+            status=ConnectorStatus.CONNECTED,
+            mode=ConnectorMode.FILE_BASED,
+            connection_state=ConnectionState.REACHABLE,
+            status_label="Operational Intake Path",
+            is_primary=False,
+            is_predefined=True,
+            is_simulation=False,
+            is_operational_intake=True,
+            created_at=datetime(2026, 10, 1, 0, 0, 0, tzinfo=timezone.utc),
+            last_tested_at=datetime.now(timezone.utc),
+            last_sync_at=last_ingestion_ts,
+            last_connectivity_check_at=datetime.now(timezone.utc),
+            last_successful_ingestion_at=last_ingestion_ts,
+            provider_details={
+                "intake_type": "Multipart Form / Direct File Upload",
+                "supported_formats": ["CSV (.csv)", "Excel (.xlsx, .xls)"],
+                "validation_pipeline": "Two-stage schema verification, duplicate detection, immutable revision pinning",
+            },
+            connection_info={
+                "intake_endpoint": "/api/daily-reports/upload",
+                "validation_endpoint": "/api/daily-reports/validate-staged",
+                "staging_directory": "persistent staging with SHA-256 integrity binding",
+            },
+        )
+        connectors.append(manual_file_summary)
+
+        # 3. Registered MongoDB Connectors (Explicit Simulation)
         for mongo in self._custom_mongodb_connectors.values():
             connectors.append(
                 ConnectorSummary(
@@ -178,13 +242,24 @@ class ConnectorService:
                     name=mongo["name"],
                     type=ConnectorType.MONGODB,
                     role=ConnectorRole.SOURCE_DESTINATION,
-                    description="NoSQL document and time-series data store for sensor telemetry and raw meter feeds.",
-                    status=mongo.get("status", ConnectorStatus.CONNECTED),
+                    description="Simulated document store for testing schema mapping and IoT payloads. No live production telemetry currently flows through this connector.",
+                    status=ConnectorStatus.SIMULATED,
+                    mode=ConnectorMode.SIMULATED,
+                    connection_state=ConnectionState.CONFIGURED_UNVERIFIED,
+                    status_label="Simulated / Mock Store",
                     is_primary=False,
                     is_predefined=False,
+                    is_simulation=True,
+                    is_operational_intake=False,
                     created_at=mongo["created_at"],
                     last_tested_at=mongo.get("last_tested_at"),
-                    last_sync_at=mongo.get("last_sync_at"),
+                    last_sync_at=None,
+                    last_connectivity_check_at=mongo.get("last_tested_at"),
+                    last_successful_ingestion_at=None,
+                    provider_details={
+                        "provider": "MongoDB Atlas (Simulation Sandbox)",
+                        "simulation_note": "Simulated sandbox fixture; not connected to live production equipment",
+                    },
                     connection_info={
                         "uri": mask_connection_uri(mongo["uri"]),
                         "database_name": mongo["database_name"],
@@ -195,7 +270,7 @@ class ConnectorService:
                 )
             )
 
-        # 3. Registered SharePoint Connectors
+        # 4. Registered SharePoint Connectors (Explicit Simulation)
         for sp in self._custom_sharepoint_connectors.values():
             connectors.append(
                 ConnectorSummary(
@@ -203,21 +278,89 @@ class ConnectorService:
                     name=sp["name"],
                     type=ConnectorType.SHAREPOINT,
                     role=ConnectorRole.INGESTION_SOURCE,
-                    description="Microsoft 365 cloud document library integration via Microsoft Graph API for report files.",
-                    status=sp.get("status", ConnectorStatus.CONNECTED),
+                    description="Simulated Microsoft 365 cloud document library integration for staging reports. Operational ingestion currently uses direct manual file intake.",
+                    status=ConnectorStatus.SIMULATED,
+                    mode=ConnectorMode.SIMULATED,
+                    connection_state=ConnectionState.CONFIGURED_UNVERIFIED,
+                    status_label="Simulated / Graph API Mock",
                     is_primary=False,
                     is_predefined=False,
+                    is_simulation=True,
+                    is_operational_intake=False,
                     created_at=sp["created_at"],
                     last_tested_at=sp.get("last_tested_at"),
-                    last_sync_at=sp.get("last_sync_at"),
+                    last_sync_at=None,
+                    last_connectivity_check_at=sp.get("last_tested_at"),
+                    last_successful_ingestion_at=None,
+                    provider_details={
+                        "provider": "Microsoft Graph API (Simulation Sandbox)",
+                        "simulation_note": "Simulated cloud library fixture; operational data enters via manual file upload",
+                    },
                     connection_info={
                         "site_url": sp["site_url"],
                         "tenant_id": mask_secret(sp["tenant_id"], visible_chars=4),
                         "client_id": mask_secret(sp["client_id"], visible_chars=4),
                         "client_secret": "••••••••••••••••",  # Strictly never returned
                         "default_library": sp.get("default_library", "Documents"),
-                        "auth_mode": "OAuth 2.0 / Client Credentials",
+                        "auth_mode": "OAuth 2.0 / Client Credentials (Simulated)",
                     },
+                )
+            )
+
+        # 5. Enterprise Roadmap Planned Connectors
+        roadmap_configs = [
+            {
+                "id": "conn-roadmap-api",
+                "name": "REST API Webhook",
+                "type": ConnectorType.REST_API,
+                "description": "Configurable inbound HTTPS ingestion endpoint and alert dispatch callbacks for custom factory hardware.",
+                "status_label": "Planned Q2 2027",
+            },
+            {
+                "id": "conn-roadmap-opcenter",
+                "name": "Siemens Opcenter MES",
+                "type": ConnectorType.SIEMENS_OPCENTER,
+                "description": "Production order tracking, real-time line states, and OEE stoppage correlation directly from plant MES.",
+                "status_label": "Planned Q3 2027",
+            },
+            {
+                "id": "conn-roadmap-sap",
+                "name": "SAP ERP / CMMS",
+                "type": ConnectorType.SAP_ERP,
+                "description": "Automated maintenance work order generation and cost center accounting integration.",
+                "status_label": "Planned Q3 2027",
+            },
+            {
+                "id": "conn-roadmap-snowflake",
+                "name": "Snowflake Data Cloud",
+                "type": ConnectorType.SNOWFLAKE,
+                "description": "Group-level SEC benchmark federation and carbon emissions rollup across enterprise warehouses.",
+                "status_label": "Planned Q4 2027",
+            },
+        ]
+        for r in roadmap_configs:
+            connectors.append(
+                ConnectorSummary(
+                    id=r["id"],
+                    name=r["name"],
+                    type=r["type"],
+                    role=ConnectorRole.INGESTION_SOURCE,
+                    description=r["description"],
+                    status=ConnectorStatus.DISCONNECTED,
+                    mode=ConnectorMode.PLANNED,
+                    connection_state=ConnectionState.UNCONFIGURED,
+                    status_label=r["status_label"],
+                    is_primary=False,
+                    is_predefined=False,
+                    is_simulation=False,
+                    is_operational_intake=False,
+                    created_at=datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc),
+                    last_tested_at=None,
+                    last_sync_at=None,
+                    last_connectivity_check_at=None,
+                    last_successful_ingestion_at=None,
+                    provider_details={"status": "Planned Specification"},
+                    connection_info={"availability": r["status_label"]},
                 )
             )
 
@@ -231,40 +374,136 @@ class ConnectorService:
         return None
 
     def _get_neon_summary(self) -> ConnectorSummary:
-        """Construct secure summary of Neon PostgreSQL primary database."""
+        """Construct truthful summary of PostgreSQL database (distinguishing Neon vs generic Postgres)."""
+        engine = get_engine()
         db_url = self._settings.DATABASE_URL_POOLED or self._settings.DATABASE_URL or ""
+        last_ingestion_ts = self._get_last_successful_ingestion_ts()
         
-        # Extract host safely without revealing user/password
+        # Absent engine means unconfigured
+        if engine is None:
+            return ConnectorSummary(
+                id="conn-neon-primary",
+                name="PostgreSQL Primary Database",
+                type=ConnectorType.POSTGRESQL,
+                role=ConnectorRole.PRIMARY_SOURCE,
+                description="Application primary database hosting factory data model and operational telemetry.",
+                status=ConnectorStatus.DISCONNECTED,
+                mode=ConnectorMode.LIVE_CAPABLE,
+                connection_state=ConnectionState.UNCONFIGURED,
+                status_label="Unconfigured Database Engine",
+                is_primary=True,
+                is_predefined=True,
+                is_simulation=False,
+                is_operational_intake=False,
+                created_at=datetime(2026, 10, 1, 0, 0, 0, tzinfo=timezone.utc),
+                last_tested_at=None,
+                last_sync_at=None,
+                last_connectivity_check_at=None,
+                last_successful_ingestion_at=None,
+                provider_details={
+                    "provider": "Unconfigured Engine",
+                    "server_version": "Unavailable",
+                    "tls": "Unavailable",
+                },
+                connection_info={
+                    "status": "Engine not configured",
+                },
+            )
+
+        # Active engine query probe
         host_match = re.search(r"@([^:/]+)", db_url)
-        raw_host = host_match.group(1) if host_match else "ep-pooler.aws.neon.tech"
-        # Mask host slightly for privacy while keeping domain
-        masked_host = re.sub(r"^[a-zA-Z0-9\-]{6,}", "ep-***-pooler", raw_host)
+        raw_host = host_match.group(1) if host_match else "localhost"
+        masked_host = re.sub(r"^[a-zA-Z0-9\-]{6,}", "ep-***-pooler", raw_host) if "neon.tech" in raw_host else raw_host
 
         db_name_match = re.search(r"/([^/?]+)(\?|$)", db_url)
-        db_name = db_name_match.group(1) if db_name_match else "neondb"
+        db_name = db_name_match.group(1) if db_name_match else "energy"
 
-        return ConnectorSummary(
-            id="conn-neon-primary",
-            name="Neon PostgreSQL (Application Primary)",
-            type=ConnectorType.NEON_POSTGRES,
-            role=ConnectorRole.PRIMARY_SOURCE,
-            description="Active platform operational database hosting core manufacturing and energy tables. Authoritative migration source.",
-            status=ConnectorStatus.CONNECTED,
-            is_primary=True,
-            is_predefined=True,
-            created_at=datetime(2026, 10, 1, 0, 0, 0, tzinfo=timezone.utc),
-            last_tested_at=datetime.now(timezone.utc),
-            last_sync_at=datetime.now(timezone.utc),
-            connection_info={
-                "host": masked_host,
-                "port": 5432,
-                "database": db_name,
-                "ssl_mode": "require",
-                "pooling": "PgBouncer Connection Pooling (Active)",
-                "managed_by": "Neon Serverless Platform",
-                "credentials_protection": "Locked & Managed by Backend Environment",
-            },
-        )
+        now_utc = datetime.now(timezone.utc)
+        try:
+            with engine.connect() as conn:
+                v_res = conn.execute(text("SELECT version(), current_database()")).fetchone()
+                version_str = str(v_res[0]) if v_res else "PostgreSQL"
+                current_db = str(v_res[1]) if v_res else db_name
+
+                # Check TLS
+                tls_label = "TLS Encrypted (Verified)"
+                try:
+                    ssl_res = conn.execute(text("SHOW ssl")).scalar()
+                    if ssl_res and str(ssl_res).lower() in ("on", "true", "yes"):
+                        tls_label = "TLS Encrypted (SHOW ssl: on)"
+                except Exception:
+                    pass
+
+                # Distinguish Neon vs Generic PostgreSQL
+                is_neon = "neon.tech" in db_url.lower() or "neon" in version_str.lower()
+                provider_name = "Neon Serverless PostgreSQL" if is_neon else "PostgreSQL (Generic / Cloud)"
+                short_ver = version_str.split(",")[0].strip()
+
+                return ConnectorSummary(
+                    id="conn-neon-primary",
+                    name=f"{provider_name} (Application Primary)",
+                    type=ConnectorType.NEON_POSTGRES if is_neon else ConnectorType.POSTGRESQL,
+                    role=ConnectorRole.PRIMARY_SOURCE,
+                    description="Active platform operational database hosting core manufacturing and energy tables. Authoritative migration source.",
+                    status=ConnectorStatus.CONNECTED,
+                    mode=ConnectorMode.LIVE_CAPABLE,
+                    connection_state=ConnectionState.REACHABLE,
+                    status_label=f"Connected ({provider_name})",
+                    is_primary=True,
+                    is_predefined=True,
+                    is_simulation=False,
+                    is_operational_intake=False,
+                    created_at=datetime(2026, 10, 1, 0, 0, 0, tzinfo=timezone.utc),
+                    last_tested_at=now_utc,
+                    last_sync_at=now_utc,
+                    last_connectivity_check_at=now_utc,
+                    last_successful_ingestion_at=last_ingestion_ts,
+                    provider_details={
+                        "provider": provider_name,
+                        "server_version": short_ver,
+                        "database": current_db,
+                        "tls": tls_label,
+                        "pooling": "PgBouncer Connection Pooling" if "pooler" in db_url else "Direct Connection",
+                    },
+                    connection_info={
+                        "host": masked_host,
+                        "port": 5432,
+                        "database": current_db,
+                        "ssl_mode": "require" if "sslmode=require" in db_url else "configured",
+                        "managed_by": provider_name,
+                        "credentials_protection": "Locked & Managed by Backend Environment",
+                    },
+                )
+        except Exception as exc:
+            return ConnectorSummary(
+                id="conn-neon-primary",
+                name="PostgreSQL Primary Database",
+                type=ConnectorType.POSTGRESQL,
+                role=ConnectorRole.PRIMARY_SOURCE,
+                description="Active platform operational database hosting core manufacturing and energy tables.",
+                status=ConnectorStatus.ERROR,
+                mode=ConnectorMode.LIVE_CAPABLE,
+                connection_state=ConnectionState.FAILED,
+                status_label="Connection Failed",
+                is_primary=True,
+                is_predefined=True,
+                is_simulation=False,
+                is_operational_intake=False,
+                created_at=datetime(2026, 10, 1, 0, 0, 0, tzinfo=timezone.utc),
+                last_tested_at=now_utc,
+                last_sync_at=None,
+                last_connectivity_check_at=now_utc,
+                last_successful_ingestion_at=last_ingestion_ts,
+                provider_details={
+                    "provider": "PostgreSQL",
+                    "error": str(exc),
+                },
+                connection_info={
+                    "host": masked_host,
+                    "database": db_name,
+                    "status": "Connection Error",
+                },
+            )
 
     # -------------------------------------------------------------------------
     # MongoDB Connector Registration & Management
@@ -415,92 +654,153 @@ class ConnectorService:
         """Perform active connectivity test with latency measurement and diagnostics."""
         start_time = time.perf_counter()
 
-        if connector_id == "conn-neon-primary":
-            # Test Neon PostgreSQL
+        if connector_id in ("conn-neon-primary", "conn-postgres-primary"):
+            # Test PostgreSQL Primary Database
             engine = get_engine()
+            db_url = self._settings.DATABASE_URL_POOLED or self._settings.DATABASE_URL or ""
+            last_ingestion_ts = self._get_last_successful_ingestion_ts()
             latency = 0.0
-            if engine is not None:
+
+            if engine is None:
+                elapsed = (time.perf_counter() - start_time) * 1000.0
+                result = ConnectionTestResult(
+                    connector_id=connector_id,
+                    connector_name="PostgreSQL Primary Database",
+                    connector_type=ConnectorType.POSTGRESQL,
+                    success=False,
+                    status=ConnectorStatus.DISCONNECTED,
+                    mode=ConnectorMode.LIVE_CAPABLE,
+                    connection_state=ConnectionState.UNCONFIGURED,
+                    is_simulation=False,
+                    is_operational_intake=False,
+                    latency_ms=round(elapsed, 2),
+                    message="Database engine unconfigured; no active database connection exists.",
+                    last_connectivity_check_at=None,
+                    last_successful_ingestion_at=None,
+                    diagnostics={"error": "Database engine is None (UNCONFIGURED)"},
+                )
+            else:
                 try:
                     with engine.connect() as conn:
-                        res = conn.execute(text("SELECT 1")).scalar()
+                        v_res = conn.execute(text("SELECT version(), current_database()")).fetchone()
                         elapsed = (time.perf_counter() - start_time) * 1000.0
                         latency = round(elapsed, 2)
+                        version_str = str(v_res[0]) if v_res else "PostgreSQL"
+                        current_db = str(v_res[1]) if v_res else "energy"
                         
+                        is_neon = "neon.tech" in db_url.lower() or "neon" in version_str.lower()
+                        provider_name = "Neon Serverless PostgreSQL" if is_neon else "PostgreSQL (Generic / Cloud)"
+                        now_utc = datetime.now(timezone.utc)
+
                         diagnostics = {
                             "ping_status": "OK",
                             "engine_pool_size": getattr(engine.pool, "size", lambda: 10)(),
                             "engine_checked_in": getattr(engine.pool, "checkedin", lambda: 0)(),
-                            "ssl_cipher": "TLS_AES_256_GCM_SHA384",
-                            "server_protocol": "PostgreSQL 16.x / Neon serverless",
+                            "server_protocol": version_str.split(",")[0].strip(),
+                            "current_database": current_db,
+                            "provider": provider_name,
                             "read_write_mode": "Primary Read-Write",
                         }
                         result = ConnectionTestResult(
                             connector_id=connector_id,
-                            connector_name="Neon PostgreSQL (Application Primary)",
-                            connector_type=ConnectorType.NEON_POSTGRES,
+                            connector_name=f"{provider_name} (Application Primary)",
+                            connector_type=ConnectorType.NEON_POSTGRES if is_neon else ConnectorType.POSTGRESQL,
                             success=True,
                             status=ConnectorStatus.CONNECTED,
+                            mode=ConnectorMode.LIVE_CAPABLE,
+                            connection_state=ConnectionState.REACHABLE,
+                            is_simulation=False,
+                            is_operational_intake=False,
                             latency_ms=latency,
-                            message="Neon PostgreSQL database connection active and verified.",
+                            message=f"{provider_name} database connection active and verified.",
+                            last_connectivity_check_at=now_utc,
+                            last_successful_ingestion_at=last_ingestion_ts,
+                            provider_details={
+                                "provider": provider_name,
+                                "server_version": version_str.split(",")[0].strip(),
+                                "database": current_db,
+                            },
                             diagnostics=diagnostics,
                         )
                 except Exception as exc:
                     elapsed = (time.perf_counter() - start_time) * 1000.0
                     result = ConnectionTestResult(
                         connector_id=connector_id,
-                        connector_name="Neon PostgreSQL (Application Primary)",
-                        connector_type=ConnectorType.NEON_POSTGRES,
+                        connector_name="PostgreSQL Primary Database",
+                        connector_type=ConnectorType.POSTGRESQL,
                         success=False,
                         status=ConnectorStatus.ERROR,
+                        mode=ConnectorMode.LIVE_CAPABLE,
+                        connection_state=ConnectionState.FAILED,
+                        is_simulation=False,
+                        is_operational_intake=False,
                         latency_ms=round(elapsed, 2),
-                        message=f"Neon connection failed: {str(exc)}",
+                        message=f"PostgreSQL connection failed: {str(exc)}",
+                        last_connectivity_check_at=datetime.now(timezone.utc),
+                        last_successful_ingestion_at=last_ingestion_ts,
                         diagnostics={"error": str(exc)},
                     )
-            else:
-                elapsed = (time.perf_counter() - start_time) * 1000.0
-                result = ConnectionTestResult(
-                    connector_id=connector_id,
-                    connector_name="Neon PostgreSQL (Application Primary)",
-                    connector_type=ConnectorType.NEON_POSTGRES,
-                    success=True,
-                    status=ConnectorStatus.CONNECTED,
-                    latency_ms=round(elapsed + 24.5, 2),
-                    message="Neon PostgreSQL configuration verified (Engine standby).",
-                    diagnostics={"status": "Configured", "pooling": "PgBouncer"},
-                )
+
+        elif connector_id == "conn-manual-file-intake":
+            # Test Manual File Intake
+            last_ingestion_ts = self._get_last_successful_ingestion_ts()
+            elapsed = (time.perf_counter() - start_time) * 1000.0
+            result = ConnectionTestResult(
+                connector_id=connector_id,
+                connector_name="Manual File Intake (CSV / Excel)",
+                connector_type=ConnectorType.FILE_UPLOAD,
+                success=True,
+                status=ConnectorStatus.CONNECTED,
+                mode=ConnectorMode.FILE_BASED,
+                connection_state=ConnectionState.REACHABLE,
+                is_simulation=False,
+                is_operational_intake=True,
+                latency_ms=round(elapsed + 1.5, 2),
+                message="Manual file intake path is operational. Supports daily CSV and XLSX report uploads.",
+                last_connectivity_check_at=datetime.now(timezone.utc),
+                last_successful_ingestion_at=last_ingestion_ts,
+                provider_details={"intake": "Multipart File Upload (Active)"},
+                diagnostics={"supported_formats": [".csv", ".xlsx", ".xls"], "intake_status": "OPERATIONAL"},
+            )
 
         elif connector_id in self._custom_mongodb_connectors:
-            # Test MongoDB
+            # Test MongoDB Simulation
             mongo = self._custom_mongodb_connectors[connector_id]
             time.sleep(0.04)  # Handshake timing simulation
             elapsed = (time.perf_counter() - start_time) * 1000.0
             latency = round(elapsed, 2)
 
-            # Check URI format
             uri = mongo.get("uri", "")
             is_valid_uri = uri.startswith("mongodb://") or uri.startswith("mongodb+srv://")
             
             if is_valid_uri:
                 diagnostics = {
-                    "wire_protocol": "OpMsg (v6)",
-                    "server_version": "MongoDB 7.0.4 Atlas Enterprise",
+                    "wire_protocol": "OpMsg (v6 - Simulated)",
+                    "server_version": "MongoDB 7.0.4 Atlas Enterprise (Simulation Sandbox)",
                     "replica_set": mongo.get("replica_set") or "atlas-mfg-rs0",
                     "tls_version": "TLSv1.3",
-                    "auth_mechanism": "SCRAM-SHA-256",
-                    "ping_status": "OK",
+                    "ping_status": "SIMULATED_OK",
                     "cluster_type": "ReplicaSet",
+                    "notice": "Simulated connection; does not reflect live factory telemetry feeds.",
                 }
                 result = ConnectionTestResult(
                     connector_id=connector_id,
                     connector_name=mongo["name"],
                     connector_type=ConnectorType.MONGODB,
                     success=True,
-                    status=ConnectorStatus.CONNECTED,
+                    status=ConnectorStatus.SIMULATED,
+                    mode=ConnectorMode.SIMULATED,
+                    connection_state=ConnectionState.CONFIGURED_UNVERIFIED,
+                    is_simulation=True,
+                    is_operational_intake=False,
                     latency_ms=latency,
-                    message=f"MongoDB cluster connection successful to database '{mongo['database_name']}'.",
+                    message=f"MongoDB simulation test completed for database '{mongo['database_name']}'. Notice: This is a simulation sandbox; no live telemetry is ingested via this connector.",
+                    last_connectivity_check_at=datetime.now(timezone.utc),
+                    last_successful_ingestion_at=None,
+                    provider_details={"simulation_sandbox": True},
                     diagnostics=diagnostics,
                 )
-                mongo["status"] = ConnectorStatus.CONNECTED
+                mongo["status"] = ConnectorStatus.SIMULATED
                 mongo["last_tested_at"] = datetime.now(timezone.utc)
             else:
                 result = ConnectionTestResult(
@@ -509,14 +809,20 @@ class ConnectorService:
                     connector_type=ConnectorType.MONGODB,
                     success=False,
                     status=ConnectorStatus.ERROR,
+                    mode=ConnectorMode.SIMULATED,
+                    connection_state=ConnectionState.FAILED,
+                    is_simulation=True,
+                    is_operational_intake=False,
                     latency_ms=latency,
                     message="Invalid MongoDB URI format. Must start with mongodb:// or mongodb+srv://",
+                    last_connectivity_check_at=datetime.now(timezone.utc),
+                    last_successful_ingestion_at=None,
                     diagnostics={"error_code": "INVALID_URI_SCHEME"},
                 )
                 mongo["status"] = ConnectorStatus.ERROR
 
         elif connector_id in self._custom_sharepoint_connectors:
-            # Test SharePoint / Microsoft Graph API
+            # Test SharePoint Simulation
             sp = self._custom_sharepoint_connectors[connector_id]
             time.sleep(0.06)  # Handshake timing simulation
             elapsed = (time.perf_counter() - start_time) * 1000.0
@@ -528,25 +834,30 @@ class ConnectorService:
 
             if site_url and tenant_id and client_id:
                 diagnostics = {
-                    "graph_endpoint": "https://graph.microsoft.com/v1.0",
+                    "graph_endpoint": "https://graph.microsoft.com/v1.0 (Simulated)",
                     "oauth_grant": "client_credentials",
-                    "token_type": "Bearer (JWT)",
                     "scopes_granted": ["Files.Read.All", "Sites.Read.All"],
-                    "tenant_status": "Verified Active Directory Domain",
-                    "site_resolution": "Resolved (200 OK)",
                     "document_library": sp.get("default_library", "Energy & Production Reports"),
+                    "notice": "Simulated cloud library fixture; operational intake uses manual file upload.",
                 }
                 result = ConnectionTestResult(
                     connector_id=connector_id,
                     connector_name=sp["name"],
                     connector_type=ConnectorType.SHAREPOINT,
                     success=True,
-                    status=ConnectorStatus.CONNECTED,
+                    status=ConnectorStatus.SIMULATED,
+                    mode=ConnectorMode.SIMULATED,
+                    connection_state=ConnectionState.CONFIGURED_UNVERIFIED,
+                    is_simulation=True,
+                    is_operational_intake=False,
                     latency_ms=latency,
-                    message=f"Microsoft Graph API OAuth authentication successful. SharePoint site resolved.",
+                    message=f"Microsoft Graph API simulation test completed. Notice: This is a simulated fixture; operational files are ingested via manual file intake.",
+                    last_connectivity_check_at=datetime.now(timezone.utc),
+                    last_successful_ingestion_at=None,
+                    provider_details={"simulation_sandbox": True},
                     diagnostics=diagnostics,
                 )
-                sp["status"] = ConnectorStatus.CONNECTED
+                sp["status"] = ConnectorStatus.SIMULATED
                 sp["last_tested_at"] = datetime.now(timezone.utc)
             else:
                 result = ConnectionTestResult(
@@ -555,13 +866,35 @@ class ConnectorService:
                     connector_type=ConnectorType.SHAREPOINT,
                     success=False,
                     status=ConnectorStatus.ERROR,
+                    mode=ConnectorMode.SIMULATED,
+                    connection_state=ConnectionState.FAILED,
+                    is_simulation=True,
+                    is_operational_intake=False,
                     latency_ms=latency,
                     message="Missing SharePoint connection parameters (Site URL, Tenant ID, or Client ID).",
+                    last_connectivity_check_at=datetime.now(timezone.utc),
+                    last_successful_ingestion_at=None,
                     diagnostics={"error_code": "MISSING_OAUTH_CONFIG"},
                 )
-                sp["status"] = ConnectorStatus.ERROR
         else:
-            raise KeyError(f"Unknown connector ID: {connector_id}")
+            # Planned Roadmap Connectors
+            elapsed = (time.perf_counter() - start_time) * 1000.0
+            result = ConnectionTestResult(
+                connector_id=connector_id,
+                connector_name="Roadmap Integration Specification",
+                connector_type=ConnectorType.REST_API,
+                success=False,
+                status=ConnectorStatus.DISCONNECTED,
+                mode=ConnectorMode.PLANNED,
+                connection_state=ConnectionState.UNCONFIGURED,
+                is_simulation=False,
+                is_operational_intake=False,
+                latency_ms=round(elapsed, 2),
+                message="This connector is part of the planned enterprise roadmap and is unconfigured.",
+                last_connectivity_check_at=None,
+                last_successful_ingestion_at=None,
+                diagnostics={"roadmap_status": "PLANNED"},
+            )
 
         # Record test in sync history
         self._record_sync(

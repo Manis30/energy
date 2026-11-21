@@ -40,5 +40,16 @@ export const energyIntensityApi = {
    * @param {string} [params.end_date]
    */
   getZeroProductionEnergy: (params = {}) => apiRequest('/api/energy-intensity/zero-production', { params }),
+
+  /**
+   * Get energy intensity, cost intensity, emissions intensity trends and coverage.
+   * @param {object} [params]
+   * @param {string} [params.plant_id]
+   * @param {string} [params.start_date] - YYYY-MM-DD
+   * @param {string} [params.end_date] - YYYY-MM-DD
+   * @param {string} [params.grain] - 'daily' or 'monthly'
+   * @param {boolean} [params.group_by_plant]
+   */
+  getTrends: (params = {}) => apiRequest('/api/energy-intensity/trends', { params }),
 };
 

@@ -1,8 +1,34 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { recommendationsApi } from '../../services/recommendationsApi';
-import { formatDateTime, formatNumber } from '../../utils/formatters';
+import { formatDateTime, formatNumber, formatFindingTitle } from '../../utils/formatters';
 import { CompactProvenanceSummary } from '../findings/ProvenanceExplorer';
+
+function formatDateClean(ts) {
+  if (!ts) return '—';
+  try {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return ts;
+    const day = String(d.getDate()).padStart(2, '0');
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = months[d.getMonth()];
+    const year = d.getFullYear();
+    return `${day} ${month} ${year}`;
+  } catch {
+    return ts;
+  }
+}
+
+function formatTimeClean(ts) {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch {
+    return '';
+  }
+}
 
 /**
  * Slide-out detail drawer for viewing and managing an operational recommendation,
@@ -15,6 +41,7 @@ export default function RecommendationDrawer({
   onStatusTransition,
   onAddAction,
   onEditAction,
+  onOpenWorkflow,
   onRecommendationUpdated,
 }) {
   const navigate = useNavigate();
@@ -144,7 +171,7 @@ export default function RecommendationDrawer({
         </header>
 
         {/* Inner Navigation Tabs */}
-        <div style={{ display: 'flex', gap: '0.5rem', padding: '0.65rem 1.5rem 0', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface)' }}>
+        <nav className="recommendations-drawer-tabs" aria-label="Recommendation Details Navigation">
           <button
             type="button"
             className={`recommendations-drawer-tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
@@ -166,7 +193,7 @@ export default function RecommendationDrawer({
           >
             Audit Trail ({auditTrail.length})
           </button>
-        </div>
+        </nav>
 
         {/* Drawer Body Content */}
         <div className="recommendations-drawer-body">
@@ -288,7 +315,9 @@ export default function RecommendationDrawer({
                         </div>
                         <div className="recommendations-detail-field">
                           <label>Anomaly Type</label>
-                          <span>{rec.source_finding.anomaly_type}</span>
+                          <span title={`Detector code: ${rec.source_finding.anomaly_type}`}>
+                            {formatFindingTitle(rec.source_finding.anomaly_type)}
+                          </span>
                         </div>
                         <div className="recommendations-detail-field">
                           <label title="Statistical anomaly severity measured by detector">Anomaly Severity</label>
@@ -398,13 +427,25 @@ export default function RecommendationDrawer({
                               </span>
                             </div>
 
-                            <button
-                              type="button"
-                              className="btn-rec btn-rec-secondary btn-rec-sm"
-                              onClick={() => onEditAction(act, rec)}
-                            >
-                              Update Action
-                            </button>
+                            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                className="btn-rec btn-rec-secondary btn-rec-sm"
+                                onClick={() => onEditAction(act, rec)}
+                              >
+                                Update Action
+                              </button>
+                              {onOpenWorkflow && (
+                                <button
+                                  type="button"
+                                  className="btn-rec btn-rec-primary btn-rec-sm"
+                                  style={{ fontSize: '0.72rem' }}
+                                  onClick={() => onOpenWorkflow(act)}
+                                >
+                                  M&amp;V Workflow &rarr;
+                                </button>
+                              )}
+                            </div>
                           </div>
 
                           <p style={{ margin: '0.4rem 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
@@ -469,63 +510,169 @@ export default function RecommendationDrawer({
                       <p>No audit log records recorded yet.</p>
                     </div>
                   ) : (
-                    <div className="recommendations-table-section">
-                      <table className="recommendations-table" style={{ fontSize: '0.78rem' }}>
-                        <thead>
-                          <tr>
-                            <th>Timestamp</th>
-                            <th>Action</th>
-                            <th>State Transition</th>
-                            <th>Attribution</th>
-                            <th>Comment / Notes</th>
-                            <th>Changed Fields</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {auditTrail.map((log) => {
-                            const changed = log.changed_fields || {};
-                            const hasChanges = Object.keys(changed).length > 0;
-                            return (
-                              <tr key={log.audit_id || log.id}>
-                                <td style={{ whiteSpace: 'nowrap' }}>{formatDateTime(log.performed_at)}</td>
-                                <td><strong>{log.action}</strong></td>
-                                <td>
-                                  {log.from_status
-                                    ? `${log.from_status} → ${log.to_status}`
-                                    : log.to_status || '—'}
-                                </td>
-                                <td>
-                                  <span
-                                    className={`badge-actor ${log.actor_type === 'SYSTEM_AUTOMATION' ? 'system' : 'unverified'}`}
-                                    title="Unverified client attribution; not an authenticated identity"
-                                  >
-                                    {log.actor_attribution ? `${log.actor_type}: ${log.actor_attribution}` : log.actor_type}
-                                  </span>
-                                </td>
-                                <td style={{ maxWidth: '240px' }}>
-                                  {log.comment || '—'}
-                                </td>
-                                <td style={{ maxWidth: '240px', fontSize: '0.72rem' }}>
-                                  {hasChanges ? (
-                                    <table className="audit-diff-table">
-                                      <tbody>
+                    <div className="audit-trail-section">
+                      {/* Desktop Table View */}
+                      <div className="audit-trail-container audit-trail-table-view">
+                        <table className="audit-trail-table" aria-label="Recommendation Audit Trail Table">
+                          <thead>
+                            <tr>
+                              <th style={{ width: '14%', minWidth: '110px' }}>Timestamp</th>
+                              <th style={{ width: '12%', minWidth: '95px' }}>Action</th>
+                              <th style={{ width: '15%', minWidth: '115px' }}>State Transition</th>
+                              <th style={{ width: '18%', minWidth: '135px' }}>Attribution</th>
+                              <th style={{ width: '25%', minWidth: '180px' }}>Comment / Notes</th>
+                              <th style={{ width: '16%', minWidth: '125px' }}>Changed Fields</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {auditTrail.map((log) => {
+                              const changed = log.changed_fields || {};
+                              const hasChanges = Object.keys(changed).length > 0;
+                              return (
+                                <tr key={log.audit_id || log.id}>
+                                  <td className="audit-time-cell">
+                                    <span className="audit-date-main">{formatDateClean(log.performed_at)}</span>
+                                    <span className="audit-time-sub">{formatTimeClean(log.performed_at)}</span>
+                                  </td>
+                                  <td>
+                                    <span className={`badge-audit-action action-${(log.action || '').toLowerCase().replace(/_/g, '-')}`}>
+                                      {log.action}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    {(log.from_status || log.to_status) ? (
+                                      <div className="audit-state-flow">
+                                        {log.from_status && (
+                                          <>
+                                            <span className={`badge-rec-status-sm ${(log.from_status || '').toLowerCase().replace(/_/g, '-')}`}>
+                                              {log.from_status.replace(/_/g, ' ')}
+                                            </span>
+                                            <span className="audit-flow-arrow">→</span>
+                                          </>
+                                        )}
+                                        <span className={`badge-rec-status-sm ${(log.to_status || 'open').toLowerCase().replace(/_/g, '-')}`}>
+                                          {(log.to_status || '—').replace(/_/g, ' ')}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <span style={{ color: 'var(--text-muted)' }}>—</span>
+                                    )}
+                                  </td>
+                                  <td>
+                                    <div className="audit-actor-box">
+                                      <span
+                                        className={`badge-actor ${log.actor_type === 'SYSTEM_AUTOMATION' ? 'system' : 'unverified'}`}
+                                        title="Actor attribution"
+                                      >
+                                        {log.actor_type || 'SYSTEM'}
+                                      </span>
+                                      {log.actor_attribution && (
+                                        <span className="audit-actor-sub" title={log.actor_attribution}>
+                                          {log.actor_attribution}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="audit-comment-cell">
+                                    {log.comment || '—'}
+                                  </td>
+                                  <td className="audit-changed-cell">
+                                    {hasChanges ? (
+                                      <div className="audit-changes-container">
                                         {Object.entries(changed).map(([key, diff]) => (
-                                          <tr key={key}>
-                                            <td style={{ color: 'var(--text-muted)' }}>{key}:</td>
-                                            <td>{String(diff.old ?? 'null')} → {String(diff.new ?? 'null')}</td>
-                                          </tr>
+                                          <div key={key} className="audit-diff-tag">
+                                            <span className="diff-key">{key.replace(/_/g, ' ')}:</span>
+                                            <span className="diff-val-old">{String(diff.old ?? 'null')}</span>
+                                            <span className="diff-arrow">→</span>
+                                            <span className="diff-val-new">{String(diff.new ?? 'null')}</span>
+                                          </div>
                                         ))}
-                                      </tbody>
-                                    </table>
-                                  ) : (
-                                    '—'
+                                      </div>
+                                    ) : (
+                                      <span style={{ color: 'var(--text-muted)' }}>—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Narrow Screens Stacked View */}
+                      <div className="audit-trail-stacked-view">
+                        {auditTrail.map((log) => {
+                          const changed = log.changed_fields || {};
+                          const hasChanges = Object.keys(changed).length > 0;
+                          return (
+                            <div key={log.audit_id || log.id} className="audit-stacked-card">
+                              <div className="audit-stacked-header">
+                                <span className={`badge-audit-action action-${(log.action || '').toLowerCase().replace(/_/g, '-')}`}>
+                                  {log.action}
+                                </span>
+                                <span className="audit-stacked-time">
+                                  {formatDateTime(log.performed_at)}
+                                </span>
+                              </div>
+
+                              {(log.from_status || log.to_status) && (
+                                <div className="audit-stacked-row">
+                                  <span className="audit-stacked-label">State:</span>
+                                  <div className="audit-state-flow">
+                                    {log.from_status && (
+                                      <>
+                                        <span className={`badge-rec-status-sm ${(log.from_status || '').toLowerCase().replace(/_/g, '-')}`}>
+                                          {log.from_status.replace(/_/g, ' ')}
+                                        </span>
+                                        <span className="audit-flow-arrow">→</span>
+                                      </>
+                                    )}
+                                    <span className={`badge-rec-status-sm ${(log.to_status || 'open').toLowerCase().replace(/_/g, '-')}`}>
+                                      {(log.to_status || '—').replace(/_/g, ' ')}
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
+
+                              <div className="audit-stacked-row">
+                                <span className="audit-stacked-label">Attribution:</span>
+                                <div className="audit-actor-box">
+                                  <span className={`badge-actor ${log.actor_type === 'SYSTEM_AUTOMATION' ? 'system' : 'unverified'}`}>
+                                    {log.actor_type || 'SYSTEM'}
+                                  </span>
+                                  {log.actor_attribution && (
+                                    <span className="audit-actor-sub" title={log.actor_attribution}>
+                                      {log.actor_attribution}
+                                    </span>
                                   )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                                </div>
+                              </div>
+
+                              {log.comment && (
+                                <div className="audit-stacked-comment">
+                                  {log.comment}
+                                </div>
+                              )}
+
+                              {hasChanges && (
+                                <div className="audit-stacked-changes">
+                                  <span className="audit-stacked-label">Changed:</span>
+                                  <div className="audit-changes-container">
+                                    {Object.entries(changed).map(([key, diff]) => (
+                                      <div key={key} className="audit-diff-tag">
+                                        <span className="diff-key">{key.replace(/_/g, ' ')}:</span>
+                                        <span className="diff-val-old">{String(diff.old ?? 'null')}</span>
+                                        <span className="diff-arrow">→</span>
+                                        <span className="diff-val-new">{String(diff.new ?? 'null')}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>

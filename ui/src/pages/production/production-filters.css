@@ -1,0 +1,727 @@
+/* ==========================================================================
+   Production Analytics Compact Filter Toolbar
+   Modern single-row horizontal layout with glassmorphism styling
+   Exact logical order: Plant -> Line -> Product -> Shift -> Month -> Date -> Reset
+   ========================================================================== */
+
+.production-filter-panel {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.65rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 246, 255, 0.92) 100%);
+  border: 1px solid var(--border-glass, rgba(226, 232, 240, 0.85));
+  border-radius: var(--radius-md, 8px);
+  box-shadow: 0 4px 18px -2px rgba(31, 47, 89, 0.04), 0 1px 3px rgba(0, 0, 0, 0.02);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.85rem;
+  position: relative;
+  z-index: 25;
+  flex-wrap: nowrap;
+}
+
+/* ==========================================================================
+   Filter Items & Flexible Proportions
+   Order: Plant (~17%) | Line (~17%) | Product (~15%) | Shift (~14%) | Month (~13%) | Date (~15%) | Reset (~9%)
+   ========================================================================== */
+
+.prod-filter-item {
+  position: relative;
+  min-width: 0;
+  display: flex;
+}
+
+.plant-item {
+  flex: 17 1 0%;
+  min-width: 110px;
+}
+
+.line-item {
+  flex: 17 1 0%;
+  min-width: 110px;
+}
+
+.product-item {
+  flex: 15 1 0%;
+  min-width: 105px;
+}
+
+.shift-item {
+  flex: 14 1 0%;
+  min-width: 95px;
+}
+
+.month-item {
+  flex: 13 1 0%;
+  min-width: 95px;
+}
+
+.date-item {
+  flex: 15 1 0%;
+  min-width: 115px;
+}
+
+.reset-item {
+  flex: 9 0 auto;
+  min-width: 72px;
+}
+
+/* When a popover is open, elevate its stacking context */
+.prod-filter-item.is-open {
+  z-index: 100;
+}
+
+/* ==========================================================================
+   Trigger Buttons
+   ========================================================================== */
+
+.prod-filter-trigger {
+  width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0 0.55rem;
+  background-color: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-secondary, #475569);
+  font-family: var(--font-family-base, 'Montserrat', sans-serif);
+  font-size: 0.76rem;
+  font-weight: 550;
+  cursor: pointer;
+  outline: none;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+}
+
+.prod-filter-trigger:hover {
+  border-color: #cbd5e1;
+  background-color: #ffffff;
+  color: var(--text-primary, #0f172a);
+}
+
+.prod-filter-trigger:focus,
+.prod-filter-trigger.is-active {
+  border-color: var(--brand-purple, #6f3dba);
+  background-color: #ffffff;
+  box-shadow: 0 0 0 3px rgba(111, 61, 186, 0.12);
+  color: var(--text-primary, #0f172a);
+}
+
+/* Filter Active (non-empty selection) */
+.prod-filter-trigger.has-filter {
+  background-color: rgba(111, 61, 186, 0.05);
+  border-color: rgba(111, 61, 186, 0.35);
+  color: var(--brand-purple, #6f3dba);
+  font-weight: 600;
+}
+
+.prod-filter-trigger.has-filter:hover {
+  border-color: var(--brand-purple, #6f3dba);
+  background-color: rgba(111, 61, 186, 0.08);
+}
+
+/* Sub-elements inside trigger */
+.prod-filter-trigger .trigger-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  flex-shrink: 0;
+  transition: color 0.15s ease;
+}
+
+.prod-filter-trigger.has-filter .trigger-icon,
+.prod-filter-trigger.is-active .trigger-icon {
+  color: var(--brand-purple, #6f3dba);
+}
+
+.prod-filter-trigger .trigger-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prod-filter-trigger .trigger-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  flex-shrink: 0;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), color 0.15s ease;
+}
+
+.prod-filter-trigger.is-active .trigger-chevron {
+  transform: rotate(180deg);
+  color: var(--brand-purple, #6f3dba);
+}
+
+/* ==========================================================================
+   Dropdown Popovers (Plant, Line, Product, Shift)
+   ========================================================================== */
+
+.prod-dropdown-popover {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  min-width: 210px;
+  max-width: 320px;
+  max-height: 290px;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 10px;
+  box-shadow: 0 10px 25px -5px rgba(31, 47, 89, 0.12), 0 4px 10px -2px rgba(0, 0, 0, 0.04);
+  z-index: 1050;
+  padding: 4px;
+  animation: prodPopoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes prodPopoverFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.prod-dropdown-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 7px 10px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: #334155;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.prod-dropdown-option:hover {
+  background-color: rgba(111, 61, 186, 0.08);
+  color: #0f172a;
+}
+
+.prod-dropdown-option.is-selected {
+  background-color: rgba(111, 61, 186, 0.12);
+  color: var(--brand-purple, #6f3dba);
+  font-weight: 600;
+}
+
+.prod-dropdown-option .option-check {
+  color: var(--brand-purple, #6f3dba);
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Month & Year Popover
+   ========================================================================== */
+
+.prod-month-popover {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  width: 230px;
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 10px;
+  box-shadow: 0 10px 25px -5px rgba(31, 47, 89, 0.12), 0 4px 10px -2px rgba(0, 0, 0, 0.04);
+  z-index: 1050;
+  padding: 10px;
+  animation: prodPopoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.month-popover-year-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.popover-year-label {
+  font-weight: 650;
+  font-size: 0.85rem;
+  color: #1e293b;
+}
+
+.year-nav-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 6px;
+  cursor: pointer;
+  color: #64748b;
+  transition: all 0.15s ease;
+}
+
+.year-nav-btn:hover:not(:disabled) {
+  background-color: rgba(111, 61, 186, 0.08);
+  color: var(--brand-purple, #6f3dba);
+  border-color: rgba(111, 61, 186, 0.25);
+}
+
+.year-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.month-popover-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.month-cell-btn {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.76rem;
+  font-weight: 550;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.month-cell-btn:hover {
+  background-color: rgba(111, 61, 186, 0.08);
+  color: var(--brand-purple, #6f3dba);
+}
+
+.month-cell-btn.is-selected {
+  background-color: var(--brand-purple, #6f3dba);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2px 6px rgba(111, 61, 186, 0.3);
+}
+
+/* ==========================================================================
+   Calendar Popover (Single Selected Month & Year Only)
+   Anchored right to avoid viewport edge overflow
+   ========================================================================== */
+
+.prod-calendar-popover {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  left: auto;
+  width: 275px;
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 10px;
+  box-shadow: 0 10px 25px -5px rgba(31, 47, 89, 0.12), 0 4px 10px -2px rgba(0, 0, 0, 0.04);
+  z-index: 1050;
+  padding: 10px;
+  animation: prodPopoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cal-popover-header {
+  margin-bottom: 8px;
+}
+
+.cal-all-days-btn {
+  width: 100%;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  background-color: rgba(111, 61, 186, 0.06);
+  border: 1px solid rgba(111, 61, 186, 0.2);
+  border-radius: 6px;
+  color: var(--brand-purple, #6f3dba);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cal-all-days-btn:hover {
+  background-color: rgba(111, 61, 186, 0.12);
+  border-color: rgba(111, 61, 186, 0.35);
+}
+
+.cal-all-days-btn.is-active {
+  background-color: var(--brand-purple, #6f3dba);
+  color: #ffffff;
+  border-color: var(--brand-purple, #6f3dba);
+  box-shadow: 0 2px 6px rgba(111, 61, 186, 0.25);
+}
+
+.cal-month-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  padding: 2px 2px;
+}
+
+.cal-month-title {
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: #1e293b;
+}
+
+.cal-scope-hint {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: #94a3b8;
+}
+
+.cal-weekdays-row {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.cal-weekday-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  padding: 2px 0;
+}
+
+.cal-days-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.cal-cell-empty {
+  height: 32px;
+  visibility: hidden;
+}
+
+.cal-day-cell {
+  height: 32px;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.cal-day-cell:hover {
+  background-color: rgba(111, 61, 186, 0.1);
+  color: var(--brand-purple, #6f3dba);
+}
+
+.cal-day-cell.is-selected {
+  background-color: var(--brand-purple, #6f3dba);
+  color: #ffffff;
+  font-weight: 650;
+  box-shadow: 0 2px 6px rgba(111, 61, 186, 0.35);
+}
+
+/* ==========================================================================
+   Reset Button
+   ========================================================================== */
+
+.prod-reset-btn {
+  width: 100%;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0 0.65rem;
+  background-color: rgba(111, 61, 186, 0.07);
+  border: 1px solid rgba(111, 61, 186, 0.22);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--brand-purple, #6f3dba);
+  font-family: var(--font-family-base, 'Montserrat', sans-serif);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.prod-reset-btn:hover {
+  background-color: rgba(111, 61, 186, 0.14);
+  border-color: rgba(111, 61, 186, 0.4);
+  color: #552799;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(111, 61, 186, 0.14);
+}
+
+.prod-reset-btn:active {
+  transform: translateY(0);
+}
+
+.prod-reset-btn .reset-icon {
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.prod-reset-btn:hover .reset-icon {
+  transform: rotate(-90deg);
+}
+
+/* ==========================================================================
+   Responsive Adaptations
+   ========================================================================== */
+
+@media (max-width: 1180px) {
+  .production-filter-panel {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.65rem 0.75rem;
+  }
+
+  /* First row: Plant, Line, Product, Shift */
+  .plant-item,
+  .line-item,
+  .product-item,
+  .shift-item {
+    flex: 1 1 calc(25% - 0.5rem);
+    min-width: 120px;
+  }
+
+  /* Second row: Month, Date, Reset */
+  .month-item {
+    flex: 1 1 calc(38% - 0.5rem);
+    min-width: 120px;
+  }
+
+  .date-item {
+    flex: 1 1 calc(42% - 0.5rem);
+    min-width: 130px;
+  }
+
+  .reset-item {
+    flex: 1 1 calc(20% - 0.5rem);
+    min-width: 80px;
+  }
+}
+
+@media (max-width: 768px) {
+  .production-filter-panel {
+    gap: 0.5rem;
+    padding: 0.6rem;
+  }
+
+  .plant-item,
+  .line-item,
+  .product-item,
+  .shift-item,
+  .month-item,
+  .date-item {
+    flex: 1 1 calc(50% - 0.35rem);
+    min-width: 130px;
+  }
+
+  .reset-item {
+    flex: 1 1 100%;
+  }
+
+  .prod-calendar-popover {
+    right: auto;
+    left: 0;
+    width: 100%;
+    max-width: 290px;
+  }
+}
+
+@media (max-width: 480px) {
+  .plant-item,
+  .line-item,
+  .product-item,
+  .shift-item,
+  .month-item,
+  .date-item,
+  .reset-item {
+    flex: 1 1 100%;
+  }
+}
+
+/* ==========================================================================
+   Dark Theme Overrides ([data-theme="dark"])
+   ========================================================================== */
+
+[data-theme="dark"] .production-filter-panel {
+  background: linear-gradient(135deg, rgba(20, 28, 48, 0.95) 0%, rgba(15, 23, 42, 0.92) 100%);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.45), 0 2px 6px -1px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .prod-filter-trigger {
+  background-color: #1a243b;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .prod-filter-trigger:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background-color: #1f2d47;
+  color: #ffffff;
+}
+
+[data-theme="dark"] .prod-filter-trigger:focus,
+[data-theme="dark"] .prod-filter-trigger.is-active {
+  border-color: var(--brand-purple, #a684ee);
+  background-color: #1a243b;
+  box-shadow: 0 0 0 3px rgba(166, 132, 238, 0.22);
+  color: #ffffff;
+}
+
+[data-theme="dark"] .prod-filter-trigger.has-filter {
+  background-color: rgba(166, 132, 238, 0.12);
+  border-color: rgba(166, 132, 238, 0.4);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .prod-filter-trigger .trigger-icon {
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .prod-filter-trigger.has-filter .trigger-icon,
+[data-theme="dark"] .prod-filter-trigger.is-active .trigger-icon {
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .prod-dropdown-popover,
+[data-theme="dark"] .prod-month-popover,
+[data-theme="dark"] .prod-calendar-popover {
+  background: rgba(20, 28, 48, 0.98);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 4px 10px -2px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .prod-dropdown-option {
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .prod-dropdown-option:hover {
+  background-color: rgba(166, 132, 238, 0.12);
+  color: #ffffff;
+}
+
+[data-theme="dark"] .prod-dropdown-option.is-selected {
+  background-color: rgba(166, 132, 238, 0.18);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .prod-dropdown-option .option-check {
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .popover-year-label,
+[data-theme="dark"] .cal-month-title {
+  color: #f1f5f9;
+}
+
+[data-theme="dark"] .year-nav-btn {
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .year-nav-btn:hover:not(:disabled) {
+  background-color: rgba(166, 132, 238, 0.15);
+  color: #c4b5fd;
+  border-color: rgba(166, 132, 238, 0.35);
+}
+
+[data-theme="dark"] .month-popover-year-bar {
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] .month-cell-btn {
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .month-cell-btn:hover {
+  background-color: rgba(166, 132, 238, 0.12);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .month-cell-btn.is-selected {
+  background-color: #8b5cf6;
+  color: #ffffff;
+}
+
+[data-theme="dark"] .cal-all-days-btn {
+  background-color: rgba(166, 132, 238, 0.12);
+  border-color: rgba(166, 132, 238, 0.3);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .cal-all-days-btn:hover {
+  background-color: rgba(166, 132, 238, 0.18);
+  border-color: rgba(166, 132, 238, 0.45);
+}
+
+[data-theme="dark"] .cal-all-days-btn.is-active {
+  background-color: #8b5cf6;
+  color: #ffffff;
+  border-color: #8b5cf6;
+}
+
+[data-theme="dark"] .cal-day-cell {
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .cal-day-cell:hover {
+  background-color: rgba(166, 132, 238, 0.15);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .cal-day-cell.is-selected {
+  background-color: #8b5cf6;
+  color: #ffffff;
+}
+
+[data-theme="dark"] .prod-reset-btn {
+  background-color: rgba(166, 132, 238, 0.12);
+  border-color: rgba(166, 132, 238, 0.3);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .prod-reset-btn:hover {
+  background-color: rgba(166, 132, 238, 0.22);
+  border-color: rgba(166, 132, 238, 0.5);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
