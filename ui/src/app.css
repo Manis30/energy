@@ -6298,15 +6298,23 @@ optgroup {
    PREMIUM EXECUTIVE DASHBOARD DESIGN SYSTEM (ENTERPRISE ANALYTICS)
    ===================================================================== */
 
-/* Scoped page title override for Dashboard: 20-22px / weight 600 */
+/* Scoped page title override for Dashboard: 18px / weight 600 */
 body:has(.dashboard-container) .top-header .page-title,
 body:has(.dashboard-view) .top-header .page-title,
+.route-dashboard .page-title,
 .dashboard-container .page-title,
 .dashboard-view .page-title {
-  font-size: 21px !important;
+  font-size: 18px !important;
   font-weight: 600 !important;
   line-height: 1.25 !important;
   letter-spacing: -0.01em !important;
+}
+
+body:has(.dashboard-container) .top-header .system-badge,
+body:has(.dashboard-view) .top-header .system-badge,
+.route-dashboard .system-badge {
+  font-size: 12px !important;
+  font-weight: 500 !important;
 }
 
 /* 1. Header & Integrated Filter Bar (34-36px controls, 8px gaps, 10-12px padding) */
@@ -6549,10 +6557,13 @@ body:has(.dashboard-view) .top-header .page-title,
 }
 
 @keyframes pulseHealth {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 1;
     transform: scale(1);
   }
+
   50% {
     opacity: 0.6;
     transform: scale(0.85);
@@ -6749,6 +6760,30 @@ body:has(.dashboard-view) .top-header .page-title,
   box-sizing: border-box;
 }
 
+/* 1. Intensity row: align 2-line title height, top-align title & icon, baseline numbers */
+.dashboard-container .intensity-kpi-card .kpi-card-header {
+  align-items: flex-start;
+}
+
+.dashboard-container .intensity-kpi-card .kpi-title {
+  min-height: 33px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* 2. Totals row: reduce excess empty space between numbers and bottom sparkline */
+.dashboard-container .totals-kpi-grid .kpi-card,
+.dashboard-container .totals-kpi-card {
+  min-height: 84px;
+}
+
+.dashboard-container .totals-kpi-grid .kpi-card-content,
+.dashboard-container .totals-kpi-card .kpi-card-content {
+  padding: 10px 14px 2px 14px;
+  flex: 0 0 auto;
+}
+
 .dashboard-container .kpi-card-content {
   padding: 12px 14px 4px 14px;
   display: flex;
@@ -6769,6 +6804,10 @@ body:has(.dashboard-view) .top-header .page-title,
   font-weight: 500;
   color: var(--text-secondary, #475569);
   line-height: 1.25;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  word-break: normal;
 }
 
 .dashboard-container .kpi-icon-badge {
@@ -6799,7 +6838,7 @@ body:has(.dashboard-view) .top-header .page-title,
 }
 
 .dashboard-container .kpi-value {
-  font-size: 22px;
+  font-size: 19px !important;
   font-weight: 600;
   color: var(--text-primary, #0f172a);
   line-height: 1.15;
@@ -6974,6 +7013,10 @@ body:has(.dashboard-view) .top-header .page-title,
   font-variant-numeric: tabular-nums;
 }
 
+.dashboard-container .health-block-value {
+  font-size: 17px !important;
+}
+
 .health-block-value.val-danger {
   color: #dc2626;
 }
@@ -7038,6 +7081,10 @@ body:has(.dashboard-view) .top-header .page-title,
   white-space: nowrap;
 }
 
+.dashboard-container .chart-title-wrap .chart-card-title {
+  font-size: 14px;
+}
+
 .executive-chart-wrapper {
   flex: 1;
   display: flex;
@@ -7046,6 +7093,46 @@ body:has(.dashboard-view) .top-header .page-title,
   width: 100%;
   min-height: 215px;
   margin-bottom: 0;
+}
+
+/* Compact Chart Tooltip on Dashboard */
+.dashboard-container .custom-chart-tooltip,
+.dashboard-container .exec-chart-tooltip {
+  padding: 10px 12px;
+  width: max-content;
+  max-width: 240px;
+  box-sizing: border-box;
+}
+
+.dashboard-container .custom-chart-tooltip .tooltip-title,
+.dashboard-container .exec-chart-tooltip .tooltip-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  padding-bottom: 3px;
+}
+
+.dashboard-container .custom-chart-tooltip .tooltip-row,
+.dashboard-container .exec-chart-tooltip .tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.dashboard-container .custom-chart-tooltip .tooltip-label,
+.dashboard-container .exec-chart-tooltip .tooltip-label {
+  text-align: left;
+  font-size: 12px;
+}
+
+.dashboard-container .custom-chart-tooltip .tooltip-val,
+.dashboard-container .exec-chart-tooltip .tooltip-val {
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .chart-header-action {
@@ -7179,6 +7266,10 @@ body:has(.dashboard-view) .top-header .page-title,
   letter-spacing: -0.01em;
 }
 
+.dashboard-container .section-title {
+  font-size: 14px;
+}
+
 .section-subtitle {
   font-family: var(--font-family);
   font-size: 12px;
@@ -7210,9 +7301,9 @@ body:has(.dashboard-view) .top-header .page-title,
 
 .alert-list-row {
   display: grid;
-  grid-template-columns: 68px minmax(0, 1fr) 190px 100px;
+  grid-template-columns: max-content minmax(0, 1fr) 180px 96px;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   background: var(--bg-surface-elevated, #f8fafc);
   border: 1px solid var(--border-color, #e2e8f0);
   border-radius: 6px;
@@ -7370,11 +7461,13 @@ body:has(.dashboard-view) .top-header .page-title,
   font-size: 12px;
   font-weight: 500;
   height: 30px;
+  width: 96px;
+  justify-content: center;
   color: var(--brand-purple, #6f3dba);
   background: transparent;
   border: 1px solid rgba(111, 61, 186, 0.25);
   border-radius: 5px;
-  padding: 4px 10px;
+  padding: 4px 8px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;

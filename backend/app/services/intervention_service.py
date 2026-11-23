@@ -527,7 +527,7 @@ def create_measurement_plan(
         merged_operating_conditions["comparison_method"] = req.comparison_method.strip()
 
     # Dual Boundary Architecture (Requirement Item 1)
-    if req.has_dual_boundary:
+    if req.has_dual_boundary or req.comparison_method in ("DUAL_STOPPAGE_AND_RESTART", "DUAL_BOUNDARY"):
         merged_operating_conditions["has_dual_boundary"] = True
         merged_operating_conditions["boundary_type"] = req.boundary_type or "DUAL_STOPPAGE_AND_RESTART"
         if req.boundary_a_config:
@@ -648,9 +648,38 @@ def approve_measurement_plan(
     plan.approved_by = approver_label
     plan.approved_at = now
 
+    audit = None
+    if action:
+        audit = ActionAuditLog(
+            audit_id=generate_audit_id("ACT"),
+            action_id=action.action_id,
+            recommendation_id=action.recommendation_id,
+            entity_id=plan.plan_id,
+            action="PLAN_APPROVED_FROZEN",
+            from_status=action.status,
+            to_status=action.status,
+            performed_at=now,
+            comment=f"Measurement plan v{plan.version} approved and frozen by {approver_label}.",
+            changed_fields_json=json.dumps({
+                "plan_id": plan.plan_id,
+                "version": plan.version,
+                "is_frozen": True,
+                "approved_at": now.isoformat(),
+                "approved_by": approver_label,
+            }, default=str),
+            audit_metadata_json=build_audit_metadata(
+                caller_attribution=caller_attribution or (approver_label if is_authenticated else None),
+                source="PLAN_APPROVAL",
+                details={"plan_id": plan.plan_id, "version": plan.version, "is_authenticated": is_authenticated},
+                is_authenticated=is_authenticated,
+            ),
+        )
+
     try:
         with session.begin_nested():
             session.add(plan)
+            if audit:
+                session.add(audit)
             session.flush()
         session.commit()
         session.refresh(plan)
@@ -1062,11 +1091,6 @@ def sign_off_assessment(
             is_demo_origin = True
         if plan.is_retrospective:
             is_demo_origin = True
-        if action and action.implemented_at and plan.approved_at:
-            plan_app = plan.approved_at.replace(tzinfo=None) if plan.approved_at.tzinfo else plan.approved_at
-            act_impl = action.implemented_at.replace(tzinfo=None) if action.implemented_at.tzinfo else action.implemented_at
-            if act_impl < plan_app:
-                is_demo_origin = True
 
     asm.signed_off_by = reviewer_label if is_authenticated else f"{reviewer_label} [Demo / Unauthenticated]"
     asm.signed_off_at = now
@@ -1085,6 +1109,8 @@ def sign_off_assessment(
         if not is_authenticated:
             # Operational identity unavailable: preserve demo workflow, but exclude from verified totals
             asm.savings_claim_status = "NOT_VERIFIED"
+            asm.verified_electricity_savings_kwh = None
+            asm.verified_monetary_savings_inr = None
             asm.status_reason = (
                 f"Operational verification unavailable: Sign-off was recorded in demo mode without an authenticated session. "
                 f"Operational verification strictly requires an authenticated session with an authorized operational role "
@@ -1101,6 +1127,8 @@ def sign_off_assessment(
         elif not is_authorized_verifier:
             # Authenticated session exists, but role or plant scope is unauthorized
             asm.savings_claim_status = "NOT_VERIFIED"
+            asm.verified_electricity_savings_kwh = None
+            asm.verified_monetary_savings_inr = None
             asm.status_reason = (
                 f"Operational verification rejected: Caller '{auth_user}' (role: {auth_role}) "
                 f"is not authorized to verify savings for plant '{plan.plant_id if plan else 'Unknown'}'. "
@@ -1111,6 +1139,8 @@ def sign_off_assessment(
         elif is_demo_origin:
             # A later authenticated sign-off must NEVER promote a scripted / demo intervention into verified factory totals
             asm.savings_claim_status = "NOT_VERIFIED"
+            asm.verified_electricity_savings_kwh = None
+            asm.verified_monetary_savings_inr = None
             asm.status_reason = (
                 f"Operational sign-off recorded by authenticated reviewer {reviewer_label}, but savings cannot be verified: "
                 f"the intervention originated from a demo or scripted workflow. A later authenticated sign-off cannot "
@@ -1124,56 +1154,200 @@ def sign_off_assessment(
                     f"Operational sign-off completed by {reviewer_label}. "
                     f"Savings claim status remains NOT_VERIFIED: intervention originated in demo/scripted mode."
                 )
-        elif (
-            (asm.objective_outcome == "IMPROVED" or (asm.objective_outcome == "INCONCLUSIVE" and asm.monetary_savings_basis in ("APPROVED_CONTRACT_TARIFF", "ESTIMATED_AVOIDED_COST_VERSIONED_TARIFF")))
-            and asm.electricity_savings_kwh is not None
-            and asm.electricity_savings_kwh > 0
-            and asm.monetary_savings_basis not in ("DISQUALIFIED_COMPARISON", "ATTRIBUTION_UNSUPPORTED", "INCONCLUSIVE_HIGH_UNCERTAINTY")
-            and not (asm.output_guardrail_met is False or asm.quality_guardrail_met is False or asm.downtime_guardrail_met is False)
-        ):
-            # Physical electricity savings is verified! Missing tariff approval does not suppress qualified physical kWh.
-            asm.savings_claim_status = "VERIFIED"
-            if factor_approved:
-                asm.verified_monetary_savings_inr = asm.avoided_cost_inr
-                asm.status_reason = (
-                    f"Verified by authenticated reviewer {reviewer_label} on {now.strftime('%Y-%m-%d')}. "
-                    f"Electricity savings verified at {asm.electricity_savings_kwh:.4f} kWh and monetary savings "
-                    f"verified at ₹{asm.verified_monetary_savings_inr:.2f} under approved contract tariff."
-                )
-            else:
-                asm.verified_monetary_savings_inr = None
-                asm.status_reason = (
-                    f"Physical electricity savings verified at {asm.electricity_savings_kwh:.4f} kWh by authenticated "
-                    f"reviewer {reviewer_label} on {now.strftime('%Y-%m-%d')}. Monetary savings unverified "
-                    f"(tariff assumption status: '{factor_status}', not an approved contract)."
-                )
-            if action:
-                action.status = "COMPLETED"
-                action.completed_at = now
-                action.assessment_status = "VERIFIED"
-                action.resolution_notes = (
-                    f"Verified savings outcome approved by {reviewer_label}. "
-                    f"Objective: {asm.objective_outcome}. Notes: {req.notes or 'None'}"
-                )
         else:
-            # Physical / mathematical criteria or guardrail limits not met
-            asm.savings_claim_status = "NOT_VERIFIED"
-            asm.verified_monetary_savings_inr = None
-            if asm.output_guardrail_met is False or asm.quality_guardrail_met is False or asm.downtime_guardrail_met is False:
-                asm.status_reason = (
-                    f"Operational sign-off recorded by authenticated reviewer {reviewer_label}, but savings cannot be verified: "
-                    f"one or more preapproved production guardrails were breached during observation. Production was not protected."
-                )
+            # Check guardrails summary for production protection (including restart, unassessable, output, quality, downtime)
+            guardrails_summary = []
+            if asm.guardrails_summary_json:
+                try:
+                    guardrails_summary = json.loads(asm.guardrails_summary_json)
+                except Exception:
+                    guardrails_summary = []
+            has_guardrail_breach = any(g.get("status") == "BREACHED" or g.get("passed") is False for g in guardrails_summary)
+            has_guardrail_unassessable = any(g.get("status") == "UNASSESSABLE" for g in guardrails_summary)
+            production_limits_met = (
+                not has_guardrail_breach
+                and not has_guardrail_unassessable
+                and not (asm.output_guardrail_met is False or asm.quality_guardrail_met is False or asm.downtime_guardrail_met is False)
+            )
+
+            # Requirement 1: Recorded approval/freeze timestamp MUST strictly precede action implementation timestamp
+            plan_app_ts = plan.approved_at.replace(tzinfo=None) if (plan and plan.approved_at) else None
+            act_impl_ts = action.implemented_at.replace(tzinfo=None) if (action and action.implemented_at) else None
+
+            approval_precedes_implementation = False
+            timing_denial_reason = None
+
+            if plan_app_ts and act_impl_ts:
+                if plan_app_ts < act_impl_ts:
+                    approval_precedes_implementation = True
+                elif plan_app_ts == act_impl_ts:
+                    # Timestamps are equal: require independent ActionAuditLog evidence establishing prior plan freeze
+                    # for the EXACT same plan revision (an older revision freeze cannot authorize a newer plan revision).
+                    freeze_audit = None
+                    impl_audit = None
+                    if action and plan:
+                        stmt_freeze = (
+                            select(ActionAuditLog)
+                            .where(
+                                and_(
+                                    ActionAuditLog.action_id == action.action_id,
+                                    ActionAuditLog.entity_id == plan.plan_id,
+                                    ActionAuditLog.action.in_(("PLAN_APPROVED_FROZEN", "PLAN_APPROVED", "PLAN_FROZEN")),
+                                )
+                            )
+                            .order_by(ActionAuditLog.performed_at.asc())
+                        )
+                        candidate_freezes = session.execute(stmt_freeze).scalars().all()
+                        for fa in candidate_freezes:
+                            fa_ver = None
+                            if fa.changed_fields_json:
+                                try:
+                                    cf = json.loads(fa.changed_fields_json)
+                                    fa_ver = cf.get("version")
+                                except Exception:
+                                    pass
+                            if fa_ver is None and fa.audit_metadata_json:
+                                try:
+                                    am = json.loads(fa.audit_metadata_json)
+                                    fa_ver = (am.get("details") or {}).get("version")
+                                except Exception:
+                                    pass
+                            if fa_ver is None and fa.comment and f"v{plan.version}" in fa.comment:
+                                fa_ver = plan.version
+
+                            # Verify exact plan revision match
+                            if fa_ver is not None:
+                                if fa_ver == plan.version:
+                                    freeze_audit = fa
+                                    break
+                            elif plan.version == 1:
+                                # Default to v1 only if plan itself is version 1
+                                freeze_audit = fa
+                                break
+
+                        stmt_impl = (
+                            select(ActionAuditLog)
+                            .where(
+                                and_(
+                                    ActionAuditLog.action_id == action.action_id,
+                                    ActionAuditLog.action == "IMPLEMENTED",
+                                )
+                            )
+                            .order_by(ActionAuditLog.performed_at.asc())
+                        )
+                        impl_audit = session.execute(stmt_impl).scalars().first()
+
+                    if freeze_audit and impl_audit and freeze_audit.performed_at < impl_audit.performed_at:
+                        approval_precedes_implementation = True
+                    else:
+                        approval_precedes_implementation = False
+                        if not freeze_audit:
+                            timing_denial_reason = (
+                                f"Non-prospective timing: Plan approval timestamp ({plan_app_ts.isoformat()}) "
+                                f"equals implementation timestamp ({act_impl_ts.isoformat()}) without independent audit trail "
+                                f"evidence establishing prior plan freeze for the exact plan revision v{plan.version if plan else '?'}. "
+                                f"An older revision freeze cannot authorize a newer revision. Unverified sequence denies verified savings."
+                            )
+                        else:
+                            timing_denial_reason = (
+                                f"Non-prospective timing: Plan approval timestamp ({plan_app_ts.isoformat()}) "
+                                f"equals implementation timestamp ({act_impl_ts.isoformat()}) without independent audit trail "
+                                f"evidence establishing prior plan freeze before action implementation. Unverified sequence denies verified savings."
+                            )
+                else:
+                    approval_precedes_implementation = False
+                    timing_denial_reason = (
+                        f"Non-prospective timing: Plan approval timestamp ({plan_app_ts.isoformat()}) "
+                        f"did not precede action implementation timestamp ({act_impl_ts.isoformat()}). "
+                        f"Approval after implementation denies verified savings."
+                    )
             else:
-                asm.status_reason = (
-                    f"Sign-off recorded as {decision_norm} by authenticated reviewer {reviewer_label}, but savings cannot be verified: "
-                    f"objective outcome is '{asm.objective_outcome}', basis is '{asm.monetary_savings_basis}', "
-                    f"and avoided electricity is null. Human sign-off cannot override an undefined metric or disqualified comparison."
+                approval_precedes_implementation = False
+                timing_denial_reason = (
+                    f"Non-prospective timing: Missing plan approval timestamp "
+                    f"({plan_app_ts.isoformat() if plan_app_ts else 'MISSING'}) or implementation timestamp "
+                    f"({act_impl_ts.isoformat() if act_impl_ts else 'MISSING'}); savings cannot be verified. Verification denied."
                 )
-            if action:
-                action.assessment_status = "NOT_VERIFIED"
-            if action:
-                action.assessment_status = "NOT_VERIFIED"
+
+            prospective_implementation = bool(
+                plan
+                and plan.is_frozen
+                and not plan.is_retrospective
+                and action
+                and action.implemented_at
+                and approval_precedes_implementation
+            )
+
+            if (
+                (asm.objective_outcome == "IMPROVED" or (asm.objective_outcome == "INCONCLUSIVE" and asm.monetary_savings_basis in ("APPROVED_CONTRACT_TARIFF", "ESTIMATED_AVOIDED_COST_VERSIONED_TARIFF")))
+                and asm.electricity_savings_kwh is not None
+                and asm.electricity_savings_kwh > 0
+                and asm.monetary_savings_basis not in ("DISQUALIFIED_COMPARISON", "ATTRIBUTION_UNSUPPORTED", "INCONCLUSIVE_HIGH_UNCERTAINTY")
+                and production_limits_met
+                and prospective_implementation
+                and not is_demo_origin
+            ):
+                # Physical electricity savings is verified! Missing tariff approval does not suppress qualified physical kWh.
+                asm.savings_claim_status = "VERIFIED"
+                asm.verified_electricity_savings_kwh = asm.electricity_savings_kwh
+                if factor_approved:
+                    asm.verified_monetary_savings_inr = asm.avoided_cost_inr
+                    asm.status_reason = (
+                        f"Verified by authenticated reviewer {reviewer_label} on {now.strftime('%Y-%m-%d')}. "
+                        f"Electricity savings verified at {asm.electricity_savings_kwh:.4f} kWh and monetary savings "
+                        f"verified at ₹{asm.verified_monetary_savings_inr:.2f} under approved contract tariff."
+                    )
+                else:
+                    asm.verified_monetary_savings_inr = None
+                    asm.status_reason = (
+                        f"Physical electricity savings verified at {asm.electricity_savings_kwh:.4f} kWh by authenticated "
+                        f"reviewer {reviewer_label} on {now.strftime('%Y-%m-%d')}. Monetary savings unverified "
+                        f"(tariff assumption status: '{factor_status}', not an approved contract)."
+                    )
+                if action:
+                    action.status = "COMPLETED"
+                    action.completed_at = now
+                    action.assessment_status = "VERIFIED"
+                    action.resolution_notes = (
+                        f"Verified savings outcome approved by {reviewer_label}. "
+                        f"Objective: {asm.objective_outcome}. Notes: {req.notes or 'None'}"
+                    )
+            else:
+                asm.savings_claim_status = "NOT_VERIFIED"
+                asm.verified_electricity_savings_kwh = None
+                asm.verified_monetary_savings_inr = None
+                if not prospective_implementation:
+                    if not approval_precedes_implementation:
+                        asm.status_reason = timing_denial_reason or (
+                            f"Non-prospective timing: Plan approval timestamp did not precede action implementation timestamp."
+                        )
+                    elif not plan or not plan.is_frozen:
+                        asm.status_reason = "Measurement plan is not frozen on server; un-frozen plan denies verified savings."
+                    elif plan and plan.is_retrospective:
+                        asm.status_reason = "Measurement plan is retrospective; retrospective plans are ineligible for verified savings."
+                    elif not action or not action.implemented_at:
+                        asm.status_reason = "Corrective action implementation timestamp is missing; verification requires recorded implementation."
+                elif not production_limits_met:
+                    if has_guardrail_breach:
+                        asm.status_reason = "Production limit breached during observation window; verified savings disqualified (null / ₹0)."
+                    else:
+                        asm.status_reason = "Production limits unassessable during observation window; verified savings disqualified (null / ₹0)."
+                elif is_demo_origin:
+                    asm.status_reason = "Intervention originated from scripted or demo workflow; cannot promote to verified factory totals."
+                elif asm.electricity_savings_kwh is None or asm.electricity_savings_kwh <= 0:
+                    asm.status_reason = "No positive attributable electricity savings observed during trial."
+                else:
+                    asm.status_reason = (
+                        f"Sign-off recorded as {decision_norm} by authenticated reviewer {reviewer_label}, but savings cannot be verified: "
+                        f"objective outcome is '{asm.objective_outcome}', basis is '{asm.monetary_savings_basis}', "
+                        f"and avoided electricity is null. Human sign-off cannot override an undefined metric or disqualified comparison."
+                    )
+
+                if action:
+                    action.status = "COMPLETED"
+                    action.completed_at = now
+                    action.assessment_status = "NOT_VERIFIED"
+                    action.resolution_notes = asm.status_reason
 
     elif decision_norm == "REJECTED":
         asm.savings_claim_status = "NOT_VERIFIED"
@@ -1279,6 +1453,23 @@ def is_claim_eligible_for_verified_savings(asm: Any) -> Tuple[bool, str]:
     if basis == "DISQUALIFIED_COMPARISON":
         return False, "Comparison is disqualified"
 
+    guardrails_summary = []
+    if getattr(asm, "guardrails_summary_json", None):
+        try:
+            guardrails_summary = json.loads(asm.guardrails_summary_json)
+        except Exception:
+            guardrails_summary = []
+    if any(g.get("status") == "BREACHED" or g.get("passed") is False for g in guardrails_summary):
+        return False, "Production limits were breached during observation window"
+    if any(g.get("status") == "UNASSESSABLE" for g in guardrails_summary):
+        return False, "Production limits were unassessable during observation window"
+    if (
+        getattr(asm, "output_guardrail_met", None) is False
+        or getattr(asm, "quality_guardrail_met", None) is False
+        or getattr(asm, "downtime_guardrail_met", None) is False
+    ):
+        return False, "Production output, quality, or downtime limits were breached"
+
     return True, "Eligible for verified factory rollup"
 
 
@@ -1306,6 +1497,7 @@ def list_savings_ledger(
     session: Session,
     plant_id: Optional[str] = None,
     savings_claim_status: Optional[str] = None,
+    include_stale: bool = False,
     limit: int = 50,
     offset: int = 0,
 ) -> SavingsLedgerListResponse:
@@ -1318,6 +1510,8 @@ def list_savings_ledger(
     query = select(InterventionAssessment).order_by(desc(InterventionAssessment.evaluated_at))
 
     filters = []
+    if not include_stale:
+        filters.append(InterventionAssessment.is_stale_flag == False)
     if savings_claim_status:
         filters.append(InterventionAssessment.savings_claim_status == savings_claim_status.strip().upper())
     if plant_id:
@@ -1334,7 +1528,19 @@ def list_savings_ledger(
     all_items = session.execute(query).scalars().all()
     total_count = len(all_items)
 
-    eligible_items = [it for it in all_items if is_claim_eligible_for_verified_savings(it)[0]]
+    # Deduplicate eligible items by action_id to ensure repeated sign-offs count once.
+    # Exclude stale or superseded revisions (only the highest non-stale revision can qualify).
+    raw_eligible_items = [
+        it for it in all_items
+        if not getattr(it, "is_stale_flag", False) and is_claim_eligible_for_verified_savings(it)[0]
+    ]
+    seen_action_ids = set()
+    eligible_items = []
+    for it in sorted(raw_eligible_items, key=lambda x: getattr(x, "assessment_revision", 1), reverse=True):
+        act_id = it.action_id or it.assessment_id
+        if act_id not in seen_action_ids:
+            seen_action_ids.add(act_id)
+            eligible_items.append(it)
     verified_count = len(eligible_items)
     not_verified_count = sum(1 for it in all_items if it.savings_claim_status == "NOT_VERIFIED" and not it.is_stale_flag)
     inconclusive_count = sum(1 for it in all_items if it.savings_claim_status in ("INCONCLUSIVE", "PENDING_REVIEW") and not it.is_stale_flag)

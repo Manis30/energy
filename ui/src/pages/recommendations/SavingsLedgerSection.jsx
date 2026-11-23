@@ -292,33 +292,32 @@ export default function SavingsLedgerSection({ onInspectAction }) {
                     </div>
                   </td>
                   <td>
-                    {item.verified_electricity_savings_kwh != null ? (
+                    {item.savings_claim_status === 'VERIFIED' && item.verified_electricity_savings_kwh != null ? (
                       <strong style={{ color: '#10b981' }}>{formatNumber(item.verified_electricity_savings_kwh)} kWh</strong>
-                    ) : item.electricity_savings_kwh != null ? (
+                    ) : item.electricity_savings_kwh != null && item.savings_claim_status !== 'NOT_VERIFIED' ? (
                       <div>
                         <strong style={{ color: '#eab308' }}>{formatNumber(item.electricity_savings_kwh)} kWh</strong>
                         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Pending sign-off</div>
                       </div>
                     ) : (
-                      <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Unavailable</span>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Unverified</span>
                     )}
                   </td>
                   <td>
                     <div style={{ fontSize: '0.78rem' }}>
                       <div>
-                        <span style={{ color: 'var(--text-muted)' }}>Est avoided: </span>
-                        <strong>{item.estimated_avoided_cost_inr != null ? formatCurrency(item.estimated_avoided_cost_inr) : (item.avoided_cost_inr != null ? formatCurrency(item.avoided_cost_inr) : '—')}</strong>
-                      </div>
-                      <div style={{ fontSize: '0.69rem', color: 'var(--text-secondary)' }}>
-                        {item.estimated_avoided_cost_assumption || item.monetary_savings_basis}
-                      </div>
-                      <div style={{ marginTop: '0.2rem' }}>
                         <span style={{ color: 'var(--text-muted)' }}>Verified: </span>
-                        {item.verified_monetary_savings_inr != null ? (
+                        {item.savings_claim_status === 'VERIFIED' && item.verified_monetary_savings_inr != null ? (
                           <strong style={{ color: '#10b981' }}>{formatCurrency(item.verified_monetary_savings_inr)}</strong>
                         ) : (
-                          <span style={{ color: '#9ca3af', fontStyle: 'italic', fontSize: '0.71rem' }}>Pending contract approval</span>
+                          <span style={{ color: '#9ca3af', fontStyle: 'italic', fontSize: '0.71rem' }}>Unverified</span>
                         )}
+                      </div>
+                      <div style={{ marginTop: '0.2rem', color: 'var(--text-muted)', fontSize: '0.71rem' }}>
+                        Ledger: <strong>{item.savings_claim_status === 'VERIFIED' && item.verified_monetary_savings_inr != null ? formatCurrency(item.verified_monetary_savings_inr) : '₹0 ledger contribution'}</strong>
+                      </div>
+                      <div style={{ fontSize: '0.69rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                        {item.estimated_avoided_cost_assumption || item.monetary_savings_basis}
                       </div>
                     </div>
                   </td>

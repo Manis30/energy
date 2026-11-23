@@ -199,6 +199,77 @@ async def ingest_report(
         )
 
 
+@router.post(
+    "/upload",
+    summary="Direct upload endpoint for telemetry files (including utility CSV)",
+    description="Ingests daily telemetry files directly into fact tables, creating upload audit history and source revisions.",
+)
+async def upload_telemetry_file(
+    file: UploadFile = File(..., description="Telemetry file to upload (Utility CSV, Energy CSV/XLSX, or Production CSV/XLSX)"),
+    report_type: Optional[str] = Form(None, description="'UTILITY', 'ENERGY', or 'PRODUCTION' (auto-detected if omitted)"),
+    plant_id: Optional[str] = Form("IN-TN-01", description="Plant identifier"),
+    mode: str = Form("INCREMENTAL", description="'INCREMENTAL' or 'OVERWRITE_CORRECTION'"),
+    db: Session = Depends(get_db_session),
+):
+    try:
+        content = await read_uploaded_file_safely(file)
+        safe_filename = os.path.basename(file.filename or "upload.csv")
+
+        # Detect if utility CSV
+        is_utility = False
+        if report_type and report_type.upper() == "UTILITY":
+            is_utility = True
+        else:
+            first_line = content[:1024].decode("utf-8-sig", errors="replace").lower()
+            if "utility_reading_id" in first_line or "flow_rate" in first_line or "pressure_bar" in first_line:
+                is_utility = True
+
+        if is_utility:
+            from app.services.upload_service import ingest_utility_telemetry_file
+            result = ingest_utility_telemetry_file(
+                session=db,
+                filename=safe_filename,
+                file_bytes=content,
+                plant_id=plant_id,
+                mode=mode,
+            )
+            return result
+
+        # Fallback to standard validation & ingestion for ENERGY or PRODUCTION
+        norm_type = report_type.upper() if report_type else None
+        v_res = validate_report_file(
+            session=db,
+            filename=safe_filename,
+            file_bytes=content,
+            report_type=norm_type,
+            mode=mode.upper(),
+        )
+        resolved_type = v_res["summary"].report_type
+        target_date = v_res["summary"].confirmed_date or v_res["summary"].detected_date or date.today()
+        gen_upload_id = f"UPL-{target_date.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+
+        ingest_res = ingest_validated_report(
+            session=db,
+            filename=safe_filename,
+            file_bytes=content,
+            report_type=resolved_type,
+            reporting_date=target_date,
+            mode=mode.upper(),
+            upload_id=gen_upload_id,
+            plant_id=plant_id,
+        )
+        return ingest_res
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Telemetry upload failed: {str(e)}",
+        )
+
+
 @router.get(
     "/history",
     response_model=List[UploadHistoryItem],

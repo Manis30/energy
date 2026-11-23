@@ -600,9 +600,6 @@ export default function DailyReports() {
         <div className="daily-ops-controls-row" role="toolbar" aria-label="Daily Operations Controls">
           {/* 1. Reporting Date */}
           <div className="daily-ops-control-item daily-ops-date-item">
-            <label className="daily-ops-label" htmlFor="daily-ops-date">
-              Reporting Date
-            </label>
             <div className="daily-ops-input-wrap">
               <input
                 id="daily-ops-date"
@@ -619,9 +616,6 @@ export default function DailyReports() {
 
           {/* 2. Plant Selector */}
           <div className="daily-ops-control-item daily-ops-plant-item">
-            <label className="daily-ops-label" htmlFor="daily-ops-plant">
-              Plant
-            </label>
             <div className="daily-ops-select-wrap">
               <select
                 id="daily-ops-plant"
@@ -641,66 +635,69 @@ export default function DailyReports() {
             </div>
           </div>
 
-          {/* 3. Refresh Status Action Button */}
-          <div className="daily-ops-action-item">
-            <button
-              type="button"
-              className="daily-ops-btn daily-ops-btn-secondary"
-              onClick={() => fetchStatus(reportingDate)}
-              disabled={loadingStatus}
-              title="Refresh telemetry and pipeline execution status"
-              aria-label="Refresh Status"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                className={loadingStatus ? 'spin-icon' : ''}
+          {/* Action Buttons Group on the Right */}
+          <div className="daily-ops-actions-group">
+            {/* 3. Refresh Status Action Button */}
+            <div className="daily-ops-action-item">
+              <button
+                type="button"
+                className="daily-ops-btn daily-ops-btn-secondary"
+                onClick={() => fetchStatus(reportingDate)}
+                disabled={loadingStatus}
+                title="Refresh telemetry and pipeline execution status"
+                aria-label="Refresh Status"
               >
-                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19" />
-              </svg>
-              <span>{loadingStatus ? 'Refreshing…' : 'Refresh Status'}</span>
-            </button>
-          </div>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  className={loadingStatus ? 'spin-icon' : ''}
+                >
+                  <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19" />
+                </svg>
+                <span>{loadingStatus ? 'Refreshing…' : 'Refresh Status'}</span>
+              </button>
+            </div>
 
-          {/* 4. Run Downstream Pipeline Action Button */}
-          <div className="daily-ops-action-item">
-            <button
-              type="button"
-              className="daily-ops-btn daily-ops-btn-primary"
-              onClick={handleRunDownstream}
-              disabled={runningDownstream || !pipelineState?.database_state?.has_data}
-              title={
-                !pipelineState?.database_state?.has_data
-                  ? 'Database records required before running downstream stages'
-                  : 'Execute Reconciliation, Analytics, Report, Anomalies, and Investigation Handoff'
-              }
-              aria-label="Run Downstream Pipeline"
-            >
-              {runningDownstream ? (
-                <>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="spin-icon">
-                    <line x1="12" y1="2" x2="12" y2="6" />
-                    <line x1="12" y1="18" x2="12" y2="22" />
-                    <line x1="4.93" y1="4.93" x2="7.76" y2="7.76" />
-                    <line x1="16.24" y1="16.24" x2="19.07" y2="19.07" />
-                    <line x1="2" y1="12" x2="6" y2="12" />
-                    <line x1="18" y1="12" x2="22" y2="12" />
-                  </svg>
-                  <span>Processing Pipeline…</span>
-                </>
-              ) : (
-                <>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-                    <polygon points="5 3 19 12 5 21 5 3" />
-                  </svg>
-                  <span>Run Downstream Pipeline</span>
-                </>
-              )}
-            </button>
+            {/* 4. Run Downstream Pipeline Action Button */}
+            <div className="daily-ops-action-item">
+              <button
+                type="button"
+                className="daily-ops-btn daily-ops-btn-primary"
+                onClick={handleRunDownstream}
+                disabled={runningDownstream || !pipelineState?.database_state?.has_data}
+                title={
+                  !pipelineState?.database_state?.has_data
+                    ? 'Database records required before running downstream stages'
+                    : 'Execute Reconciliation, Analytics, Report, Anomalies, and Investigation Handoff'
+                }
+                aria-label="Run Downstream Pipeline"
+              >
+                {runningDownstream ? (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="spin-icon">
+                      <line x1="12" y1="2" x2="12" y2="6" />
+                      <line x1="12" y1="18" x2="12" y2="22" />
+                      <line x1="4.93" y1="4.93" x2="7.76" y2="7.76" />
+                      <line x1="16.24" y1="16.24" x2="19.07" y2="19.07" />
+                      <line x1="2" y1="12" x2="6" y2="12" />
+                      <line x1="18" y1="12" x2="22" y2="12" />
+                    </svg>
+                    <span>Processing Pipeline…</span>
+                  </>
+                ) : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                      <polygon points="5 3 19 12 5 21 5 3" />
+                    </svg>
+                    <span>Run Downstream Pipeline</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 

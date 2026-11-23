@@ -307,60 +307,191 @@ class ConnectorService:
                 )
             )
 
-        # 5. Enterprise Roadmap Planned Connectors
-        roadmap_configs = [
+        # 5. Enterprise Roadmap Planned & Specialized Connectors
+        specialized_configs = [
             {
-                "id": "conn-roadmap-api",
-                "name": "REST API Webhook",
-                "type": ConnectorType.REST_API,
-                "description": "Configurable inbound HTTPS ingestion endpoint and alert dispatch callbacks for custom factory hardware.",
-                "status_label": "Planned Q2 2027",
+                "id": "conn-tariff-bill",
+                "name": "Tariff & Utility Billing Integration",
+                "type": ConnectorType.TARIFF_BILL,
+                "role": ConnectorRole.PRIMARY_SOURCE,
+                "description": "Contract tariff schedule resolver and utility electricity billing integration.",
+                "status": ConnectorStatus.CONNECTED,
+                "mode": ConnectorMode.LIVE_CAPABLE,
+                "connection_state": ConnectionState.REACHABLE,
+                "status_label": "Fixture Approved Contract (Deterministic Resolver Implemented)",
+                "is_simulation": False,
+                "provider_details": {
+                    "status": "Fixture Approved Contract",
+                    "implemented_input_path": "Deterministic interval tariff resolver (compute_window_interval_cost) pinned to approved contract versions in DatasetFactorAssumption",
+                    "exact_missing_dependency": "Automated utility EDI/PDF bill scraper and real-time open-access exchange (IEX) rate feed",
+                },
+                "connection_info": {
+                    "implemented_intake": "contracts/tariffs.json & DatasetFactorAssumption table",
+                    "missing_dependency": "Utility EDI/PDF invoice parser & IEX settlement API",
+                },
+            },
+            {
+                "id": "conn-iot-sensors",
+                "name": "IoT Sensor Telemetry Mesh",
+                "type": ConnectorType.IOT_SENSORS,
+                "role": ConnectorRole.INGESTION_SOURCE,
+                "description": "High-frequency IoT sensor telemetry and submeter feeds.",
+                "status": ConnectorStatus.SIMULATED,
+                "mode": ConnectorMode.SIMULATED,
+                "connection_state": ConnectionState.CONFIGURED_UNVERIFIED,
+                "status_label": "Simulated Sandbox (Staged Ingestion Implemented)",
+                "is_simulation": True,
+                "provider_details": {
+                    "status": "Simulated Sandbox Fixture",
+                    "implemented_input_path": "Staged file intake and MongoDB time-series collection",
+                    "exact_missing_dependency": "MQTT / CoAP TLS message broker and edge device provisioning certificates",
+                },
+                "connection_info": {
+                    "implemented_intake": "MongoDB telemetry sandbox & staged files",
+                    "missing_dependency": "MQTT broker & X.509 device certificates",
+                },
+            },
+            {
+                "id": "conn-scada-bms",
+                "name": "SCADA / BMS Industrial Protocol Gateway",
+                "type": ConnectorType.SCADA_BMS,
+                "role": ConnectorRole.INGESTION_SOURCE,
+                "description": "Industrial plant SCADA and building management system telemetry intake.",
+                "status": ConnectorStatus.DISCONNECTED,
+                "mode": ConnectorMode.PLANNED,
+                "connection_state": ConnectionState.CONFIGURED_UNVERIFIED,
+                "status_label": "Planned Q3 2027 (Staged File Intake Implemented)",
+                "is_simulation": False,
+                "provider_details": {
+                    "status": "Planned Specification",
+                    "implemented_input_path": "Staged CSV/Excel telemetry file intake (/api/daily-reports/upload) mapping to FactEnergyMeterHourly & FactUtilityTelemetryHourly",
+                    "exact_missing_dependency": "Live OPC UA / BACnet / Modbus TCP gateway daemon and real-time polling service",
+                },
+                "connection_info": {
+                    "implemented_intake": "/api/daily-reports/upload",
+                    "missing_dependency": "OPC UA / BACnet protocol daemon",
+                },
             },
             {
                 "id": "conn-roadmap-opcenter",
                 "name": "Siemens Opcenter MES",
                 "type": ConnectorType.SIEMENS_OPCENTER,
+                "role": ConnectorRole.INGESTION_SOURCE,
                 "description": "Production order tracking, real-time line states, and OEE stoppage correlation directly from plant MES.",
-                "status_label": "Planned Q3 2027",
+                "status": ConnectorStatus.DISCONNECTED,
+                "mode": ConnectorMode.PLANNED,
+                "connection_state": ConnectionState.UNCONFIGURED,
+                "status_label": "Planned Q3 2027 (Fact Production Ingestion Implemented)",
+                "is_simulation": False,
+                "provider_details": {
+                    "status": "Planned Specification",
+                    "implemented_input_path": "FactHourlyProduction log intake and downtime event correlation",
+                    "exact_missing_dependency": "Siemens Opcenter direct Webhook / OPC-DA listener for live dispatch order tracking",
+                },
+                "connection_info": {
+                    "implemented_intake": "FactHourlyProduction daily staging",
+                    "missing_dependency": "Opcenter REST API / OPC-DA listener",
+                },
             },
             {
                 "id": "conn-roadmap-sap",
-                "name": "SAP ERP / CMMS",
+                "name": "SAP ERP / CMMS Cost-Centre",
                 "type": ConnectorType.SAP_ERP,
+                "role": ConnectorRole.INGESTION_SOURCE,
                 "description": "Automated maintenance work order generation and cost center accounting integration.",
-                "status_label": "Planned Q3 2027",
+                "status": ConnectorStatus.DISCONNECTED,
+                "mode": ConnectorMode.PLANNED,
+                "connection_state": ConnectionState.UNCONFIGURED,
+                "status_label": "Planned Q3 2027 (Staged Allocation Rules Implemented)",
+                "is_simulation": False,
+                "provider_details": {
+                    "status": "Planned Specification",
+                    "implemented_input_path": "Line-to-cost-centre allocation metadata and scheduled rate tables",
+                    "exact_missing_dependency": "SAP BAPI / RFC connector credentials and direct cost accounting journal interface",
+                },
+                "connection_info": {
+                    "implemented_intake": "Line topology and static cost-centre tables",
+                    "missing_dependency": "SAP BAPI / NetWeaver RFC credentials",
+                },
+            },
+            {
+                "id": "conn-sql-server",
+                "name": "Microsoft SQL Server Plant DB",
+                "type": ConnectorType.SQL_SERVER,
+                "role": ConnectorRole.SOURCE_DESTINATION,
+                "description": "Legacy plant historian and SCADA data warehouse integration via Microsoft SQL Server.",
+                "status": ConnectorStatus.DISCONNECTED,
+                "mode": ConnectorMode.PLANNED,
+                "connection_state": ConnectionState.UNCONFIGURED,
+                "status_label": "Planned Q4 2027 (Staged Export Intake Implemented)",
+                "is_simulation": False,
+                "provider_details": {
+                    "status": "Planned Specification",
+                    "implemented_input_path": "Staged CSV database export ingestion and schema migration preview",
+                    "live_adapter": "pyodbc with Microsoft ODBC Driver 18 for SQL Server",
+                    "source_views": "v_hourly_energy_meter_telemetry, v_hourly_utility_telemetry",
+                    "read_access": "Read-Only (db_datareader)",
+                    "exact_missing_dependency": "Microsoft ODBC Driver 18 for SQL Server on application host, TCP port 1433 firewall routing from plant network, and read-only db_datareader SQL credentials",
+                },
+                "connection_info": {
+                    "implemented_intake": "Staged CSV database dump ingestion",
+                    "missing_dependency": "ODBC Driver 18, TCP 1433 firewall clearance, and read-only SQL Server login",
+                    "port": 1433,
+                    "auth_mode": "SQL Server Authentication (db_datareader)",
+                },
+            },
+            {
+                "id": "conn-roadmap-api",
+                "name": "REST API Webhook",
+                "type": ConnectorType.REST_API,
+                "role": ConnectorRole.INGESTION_SOURCE,
+                "description": "Configurable inbound HTTPS ingestion endpoint and alert dispatch callbacks for custom factory hardware.",
+                "status": ConnectorStatus.DISCONNECTED,
+                "mode": ConnectorMode.PLANNED,
+                "connection_state": ConnectionState.UNCONFIGURED,
+                "status_label": "Planned Q2 2027",
+                "is_simulation": False,
+                "provider_details": {"status": "Planned Specification"},
+                "connection_info": {"availability": "Planned Q2 2027"},
             },
             {
                 "id": "conn-roadmap-snowflake",
                 "name": "Snowflake Data Cloud",
                 "type": ConnectorType.SNOWFLAKE,
+                "role": ConnectorRole.INGESTION_SOURCE,
                 "description": "Group-level SEC benchmark federation and carbon emissions rollup across enterprise warehouses.",
+                "status": ConnectorStatus.DISCONNECTED,
+                "mode": ConnectorMode.PLANNED,
+                "connection_state": ConnectionState.UNCONFIGURED,
                 "status_label": "Planned Q4 2027",
+                "is_simulation": False,
+                "provider_details": {"status": "Planned Specification"},
+                "connection_info": {"availability": "Planned Q4 2027"},
             },
         ]
-        for r in roadmap_configs:
+        for r in specialized_configs:
             connectors.append(
                 ConnectorSummary(
                     id=r["id"],
                     name=r["name"],
                     type=r["type"],
-                    role=ConnectorRole.INGESTION_SOURCE,
+                    role=r.get("role", ConnectorRole.INGESTION_SOURCE),
                     description=r["description"],
-                    status=ConnectorStatus.DISCONNECTED,
-                    mode=ConnectorMode.PLANNED,
-                    connection_state=ConnectionState.UNCONFIGURED,
+                    status=r.get("status", ConnectorStatus.DISCONNECTED),
+                    mode=r.get("mode", ConnectorMode.PLANNED),
+                    connection_state=r.get("connection_state", ConnectionState.UNCONFIGURED),
                     status_label=r["status_label"],
-                    is_primary=False,
-                    is_predefined=False,
-                    is_simulation=False,
-                    is_operational_intake=False,
+                    is_primary=r.get("is_primary", False),
+                    is_predefined=r.get("is_predefined", False),
+                    is_simulation=r.get("is_simulation", False),
+                    is_operational_intake=r.get("is_operational_intake", False),
                     created_at=datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc),
-                    last_tested_at=None,
+                    last_tested_at=datetime.now(timezone.utc) if r.get("status") == ConnectorStatus.CONNECTED else None,
                     last_sync_at=None,
-                    last_connectivity_check_at=None,
+                    last_connectivity_check_at=datetime.now(timezone.utc) if r.get("status") == ConnectorStatus.CONNECTED else None,
                     last_successful_ingestion_at=None,
-                    provider_details={"status": "Planned Specification"},
-                    connection_info={"availability": r["status_label"]},
+                    provider_details=r.get("provider_details", {"status": "Planned Specification"}),
+                    connection_info=r.get("connection_info", {"availability": r["status_label"]}),
                 )
             )
 
@@ -1654,6 +1785,83 @@ class ConnectorService:
             items=sorted_items[:limit],
             total=len(self._sync_history),
         )
+
+    @staticmethod
+    def get_factory_telemetry_lineage() -> Dict[str, Any]:
+        """
+        Document input coverage and lineage for utility streams (fuel, delivered-air, electricity)
+        from ingestion adapter to operator screen, distinguishing seed fixture, implemented file-upload path, and live feed.
+        """
+        return {
+            "delivered_air_record_trace": {
+                "utility_name": "Compressed Air Delivery",
+                "utility_type": "COMPRESSED_AIR",
+                "flow_rate_unit": "Nm3/h",
+                "calculated_volume_unit": "Nm3 (only when calculated over known duration: volume = flow_rate * duration_hours)",
+                "pressure_unit": "bar",
+                "three_tiers": {
+                    "seed_fixture": {
+                        "status": "SEED_FIXTURE",
+                        "description": "Static demo and unit-test rows seeded into fact_utility_telemetry_hourly during database initialization.",
+                    },
+                    "implemented_file_upload_path": {
+                        "status": "IMPLEMENTED_BATCH_UPLOAD",
+                        "parser": "DailyReportParser.parse_utility_telemetry_csv in backend/app/services/upload_service.py",
+                        "database_write": "SQLAlchemy ORM inserts into fact_utility_telemetry_hourly (columns: plant_id, utility_type='COMPRESSED_AIR', timestamp, flow_rate, pressure_bar, consumption_unit='Nm3/h', upload_id, source_revision_id)",
+                        "operator_screen": "Daily Operations (/daily-operations: Stage 1 upload dropzone and Stages 2-8 operational pipeline) & Investigation Centre (/investigation-centre)",
+                        "operational_read_access": "Read-only SQLAlchemy queries via Session.execute()",
+                    },
+                    "live_feed": {
+                        "status": "PLANNED",
+                        "description": "Direct OPC UA / BACnet / Modbus TCP gateway daemon continuously polling compressor PLC or mass flow meters.",
+                        "exact_missing_dependency": "Edge IoT protocol gateway, TLS device certificates, and industrial network firewall rule.",
+                    },
+                },
+                "plant_mapping": "plant_id = 'IN-TN-01'",
+                "equipment_mapping": "equipment_id = 'MTR-COMPRESSOR' (or 'COMP-01')",
+                "timestamp_field": "timestamp (hourly half-open interval [start, end))",
+            },
+            "fuel_record_trace": {
+                "utility_name": "Diesel Generator Fuel Consumption",
+                "utility_type": "DIESEL_GENERATOR_FUEL",
+                "volume_unit": "L (Liters)",
+                "three_tiers": {
+                    "seed_fixture": {
+                        "status": "SEED_FIXTURE",
+                        "description": "Synthetic demonstration rows seeded in fact_utility_telemetry_hourly for backup generator MTR-DG-01.",
+                    },
+                    "implemented_file_upload_path": {
+                        "status": "IMPLEMENTED_BATCH_UPLOAD",
+                        "parser": "DailyReportParser.parse_utility_telemetry_csv in backend/app/services/upload_service.py",
+                        "database_write": "SQLAlchemy ORM inserts into fact_utility_telemetry_hourly (columns: plant_id, utility_type='DIESEL_GENERATOR_FUEL', timestamp, flow_rate, consumption_unit='L', upload_id, source_revision_id)",
+                        "operator_screen": "Energy Analytics (/energy-analytics utility tab) & Utility Telemetry API endpoint",
+                        "operational_read_access": "Read-only SQLAlchemy queries via Session.execute()",
+                    },
+                    "live_feed": {
+                        "status": "PLANNED",
+                        "description": "Automatic tank gauging (ATG) system or digital fuel flow meter telemetry streaming via RS-485 / Modbus.",
+                        "exact_missing_dependency": "Tank sensor level transmitter and ATG console network integration.",
+                    },
+                },
+                "plant_mapping": "plant_id = 'IN-TN-01'",
+                "equipment_mapping": "equipment_id = 'MTR-DG-01' (Diesel Generator 1)",
+                "timestamp_field": "timestamp (hourly half-open interval [start, end))",
+            },
+            "sql_server_connector_trace": {
+                "connector_type": "SQL_SERVER",
+                "status": "PLANNED",
+                "live_adapter": "pyodbc with Microsoft ODBC Driver 18 for SQL Server",
+                "connection_string_format": "Driver={ODBC Driver 18 for SQL Server};Server=tcp:<host>,1433;Database=PlantHistorian;Uid=<readonly_user>;Pwd=<password>;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;",
+                "source_views": "v_hourly_energy_meter_telemetry, v_hourly_utility_telemetry",
+                "read_access": "Read-Only (SELECT permissions, db_datareader)",
+                "exact_live_dependencies": [
+                    "Microsoft ODBC Driver 18 for SQL Server installed on host",
+                    "TCP port 1433 bidirectional routing through plant IT/OT firewall",
+                    "Read-only SQL Server authentication credentials with db_datareader role",
+                ],
+                "implemented_fallback_path": "Staged CSV/parquet database dump intake (/api/daily-reports/upload)",
+            },
+        }
 
     def _record_sync(
         self,

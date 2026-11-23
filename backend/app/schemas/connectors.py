@@ -26,6 +26,12 @@ class ConnectorType(str, Enum):
     ORACLE = "oracle"
     SNOWFLAKE = "snowflake"
     MS_TEAMS = "ms_teams"
+    SCADA_BMS = "scada_bms"
+    IOT_SENSORS = "iot_sensors"
+    TARIFF_BILL = "tariff_bill"
+    SQL_SERVER = "sql_server"
+    MES = "mes"
+    ERP_COST_CENTRE = "erp_cost_centre"
 
 
 class ConnectorMode(str, Enum):

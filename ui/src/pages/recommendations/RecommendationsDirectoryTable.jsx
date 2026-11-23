@@ -282,7 +282,6 @@ export default function RecommendationsDirectoryTable({
         <div className="rec-toolbar-row">
           {/* Widest Field: Search */}
           <div className="rec-toolbar-item rec-toolbar-search">
-            <label htmlFor="rec-filter-search-input">Search</label>
             <div className="rec-search-input-wrap">
               <svg className="rec-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="11" cy="11" r="8" />
@@ -297,7 +296,8 @@ export default function RecommendationsDirectoryTable({
                   setOffset(0);
                   setExpandedRecId(null);
                 }}
-                placeholder="Search recommendations, IDs, findings…"
+                placeholder="Search recommendation"
+                aria-label="Search recommendations"
               />
               {searchTerm && (
                 <button
@@ -318,7 +318,6 @@ export default function RecommendationsDirectoryTable({
 
           {/* Plant Filter */}
           <div className="rec-toolbar-item rec-toolbar-plant">
-            <label htmlFor="rec-filter-plant-input">Plant</label>
             <input
               id="rec-filter-plant-input"
               type="text"
@@ -329,12 +328,12 @@ export default function RecommendationsDirectoryTable({
                 setExpandedRecId(null);
               }}
               placeholder="e.g. IN-TN-01"
+              aria-label="Filter by Plant"
             />
           </div>
 
           {/* Status Filter */}
           <div className="rec-toolbar-item rec-toolbar-status">
-            <label htmlFor="rec-filter-status-select">Status</label>
             <select
               id="rec-filter-status-select"
               value={statusFilter}
@@ -343,6 +342,7 @@ export default function RecommendationsDirectoryTable({
                 setOffset(0);
                 setExpandedRecId(null);
               }}
+              aria-label="Filter by Status"
             >
               {REC_STATUS_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -354,7 +354,6 @@ export default function RecommendationsDirectoryTable({
 
           {/* Priority Filter */}
           <div className="rec-toolbar-item rec-toolbar-priority">
-            <label htmlFor="rec-filter-priority-select">Priority</label>
             <select
               id="rec-filter-priority-select"
               value={priorityFilter}
@@ -363,6 +362,7 @@ export default function RecommendationsDirectoryTable({
                 setOffset(0);
                 setExpandedRecId(null);
               }}
+              aria-label="Filter by Priority"
             >
               {REC_PRIORITY_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -374,7 +374,6 @@ export default function RecommendationsDirectoryTable({
 
           {/* Category Filter */}
           <div className="rec-toolbar-item rec-toolbar-category">
-            <label htmlFor="rec-filter-category-select">Category</label>
             <select
               id="rec-filter-category-select"
               value={categoryFilter}
@@ -383,6 +382,7 @@ export default function RecommendationsDirectoryTable({
                 setOffset(0);
                 setExpandedRecId(null);
               }}
+              aria-label="Filter by Category"
             >
               {REC_CATEGORY_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>

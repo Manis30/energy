@@ -879,6 +879,78 @@ def get_operating_context_summary(
     total_target_lost = sum(ep.target_qty_lost for ep in episodes)
     total_target_shortfall = sum(ep.target_shortfall for ep in episodes)
 
+    influencing_context = {
+        "period_selection_fields": {
+            "status": "ACTIVE_SELECTION_FIELDS",
+            "count": 5,
+            "fields": [
+                {"name": "line_id", "source": "dim_production_line", "role": "Selects comparable periods: Scopes manufacturing line topology and process meters."},
+                {"name": "plant_id", "source": "fact_energy_meter_hourly", "role": "Selects comparable periods: Scopes plant jurisdiction, timezone, and versioned contract tariff."},
+                {"name": "timestamp", "source": "fact_energy_meter_hourly / fact_hourly_production", "role": "Selects comparable periods: Defines deterministic half-open [start, end) observation window."},
+                {"name": "is_working_day", "source": "dim_shift_calendar", "role": "Selects comparable periods: Filters baseline candidate days to matching operational working days."},
+                {"name": "shift_id", "source": "dim_shift_calendar", "role": "Selects comparable periods: Matches operational shifts (Morning/Evening/Night) for comparable baseline selection."},
+            ],
+            "impact": "These 5 database fields filter and select strictly comparable historical and post-intervention operational periods.",
+        },
+        "calculation_fields": {
+            "status": "ACTIVE_CALCULATION_FIELDS",
+            "count": 4,
+            "fields": [
+                {"name": "duration_hours", "source": "derived from timestamp interval [start, end)", "role": "Enters calculation: Normalizes hourly consumption rates and calculates integrated volume over known duration."},
+                {"name": "actual_qty", "source": "fact_hourly_production", "role": "Enters calculation: Production output volume used for baseline intensity and capacity validation."},
+                {"name": "good_qty", "source": "fact_hourly_production", "role": "Enters calculation: Primary denominator for electricity cost per good unit; zero yields inconclusive intensity."},
+                {"name": "downtime_min", "source": "fact_hourly_production / fact_downtime_event", "role": "Enters calculation: Calculates stoppage duration, determines zero-output states, and bounds restart windows."},
+            ],
+            "impact": "These 4 database fields directly enter mathematical calculation formulas for intensity, denominator checks, and savings.",
+        },
+        "contextual_display_fields": {
+            "status": "DISPLAY_ONLY_CONTEXT",
+            "count": 2,
+            "fields": [
+                {"name": "machine_state_alarm_code", "source": "fact_machine_telemetry_hourly / fact_utility_telemetry_hourly", "role": "Displayed as context: Displayed in operator timeline and event logs; does not change baseline selection."},
+                {"name": "downtime_reason", "source": "fact_hourly_production / fact_downtime_event", "role": "Displayed as context: Preserved for root-cause display ('Reason unspecified' if blank); does not alter mathematical calculation."},
+            ],
+            "impact": "These 2 fields provide contextual provenance for operators without altering mathematical baselines.",
+        },
+        "unrecorded_context_gaps": {
+            "status": "UNRECORDED_GAPS",
+            "fields": [
+                {"name": "product_mix", "status": "MISSING_CONTEXT", "impact": "Hourly SKU/part numbers unrecorded; intensity calculations assume nominal product mix."},
+                {"name": "weather_ambient", "status": "MISSING_CONTEXT", "impact": "Ambient temperature/humidity unrecorded; HVAC baseload uses nominal reference."},
+                {"name": "shared_utility_allocation", "status": "MISSING_CONTEXT", "impact": "Central compressors and diesel generators lack line-level submeters; routed to evidence gathering."},
+            ],
+            "impact": "These factors do NOT alter current calculations due to missing live sensor integration.",
+        },
+        "shift": {
+            "status": "ACTIVE_INFLUENCE",
+            "impact": "Shift boundaries and planned shift durations directly establish planned vs unplanned stoppage intervals and baseline hours.",
+        },
+        "operating_hours": {
+            "status": "ACTIVE_INFLUENCE",
+            "impact": "Deterministic half-open [start, end) hourly intervals bound all production and meter integrations.",
+        },
+        "machine_state": {
+            "status": "PARTIAL_INFLUENCE",
+            "impact": "Line-level running and alarm states are captured; individual machine component sub-states require dedicated asset IoT.",
+        },
+        "calendar": {
+            "status": "ACTIVE_INFLUENCE",
+            "impact": "Distinguishes working days from statutory holidays and scheduled plant maintenance shutdowns.",
+        },
+        "product_mix": {
+            "status": "MISSING_CONTEXT",
+            "impact": "Product SKU context is unrecorded at hourly intervals; baseline energy intensity assumes standard nominal production mix.",
+        },
+        "weather_ambient": {
+            "status": "MISSING_CONTEXT",
+            "impact": "Local weather station and ambient temperature feeds are unlinked; HVAC/cooling baseload adjustments use nominal standard conditions.",
+        },
+        "shared_equipment_allocation": {
+            "status": "MISSING_CONTEXT",
+            "impact": "Shared compressors and central utility headers lack submetered line allocations; routed to evidence gathering.",
+        },
+    }
+
     return OperatingContextSummaryResponse(
         plant_id=plant_id,
         line_id=line_id,
@@ -893,6 +965,7 @@ def get_operating_context_summary(
         total_stoppage_kwh=round(total_stoppage_kwh, 4),
         total_target_lost=total_target_lost,
         total_target_shortfall=total_target_shortfall,
+        influencing_inputs_and_context_gaps=influencing_context,
     )
 
 
@@ -1094,7 +1167,10 @@ def get_utility_telemetry_observations(
             "derived_volume": None,
             "derived_volume_reason": "Flow semantics are unverified; volume cannot be mathematically derived from raw flow rate",
             "derived_leak_rate": None,
-            "derived_leak_rate_reason": "Derived leak rate requires dedicated physical isolation or acoustic inspection",
+            "derived_leak_rate_type": "INFERRED_LEAKAGE",
+            "leakage_label": "INFERRED_LEAKAGE (physical leak quantification strictly requires ultrasonic acoustic inspection)",
+            "shared_equipment_routing": "SHARED_UTILITY_EVIDENCE_GATHERING (unallocated shared compressor draw requires documented allocation rule or temporary isolation evidence)",
+            "derived_leak_rate_reason": "Derived leak rate is labeled INFERRED_LEAKAGE; defensible physical quantification requires dedicated ultrasonic acoustic inspection",
             "derived_monetary_savings_inr": None,
             "derived_monetary_savings_reason": "Monetary savings cannot be derived without verified physical leak quantification and equipment performance curves",
             "pressure_bar": pres_float,

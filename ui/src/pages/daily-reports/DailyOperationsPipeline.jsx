@@ -1129,7 +1129,12 @@ export default function DailyOperationsPipeline({
                   </div>
                 ) : (
                   <div className="daily-ops-alert-banner info">
-                    <span>No anomalies detected for this date; all operating equipment is within compliance bounds.</span>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                    <span><strong>Investigation Status:</strong> No anomalies detected for this date; all operating equipment is within compliance bounds.</span>
                   </div>
                 )}
               </div>
@@ -1141,7 +1146,7 @@ export default function DailyOperationsPipeline({
       {/* OPPORTUNITIES TO REVIEW */}
       <div className="daily-ops-opportunities-section">
         <div className="daily-ops-opportunities-header">
-          <div>
+          <div className="daily-ops-opportunities-top-row">
             <div className="daily-ops-opportunities-title-row">
               <h3 className="daily-ops-opportunities-title">
                 Opportunities to Review
@@ -1156,27 +1161,34 @@ export default function DailyOperationsPipeline({
                 {opportunities.length} Surfaced
               </span>
             </div>
-            <p className="daily-ops-opportunities-subtitle">
-              Deterministic ranking based on recurrence, consumption during comparable stoppages, data coverage, and load controllability.
-            </p>
+            <button
+              type="button"
+              className="daily-ops-btn daily-ops-btn-secondary daily-ops-opportunities-action"
+              style={{ fontSize: '13px', padding: '0.35rem 0.8rem' }}
+              onClick={() => navigate(`/investigation-actions?plant_id=${encodeURIComponent(plantId)}`)}
+            >
+              Open All in Investigation Centre →
+            </button>
           </div>
-          <button
-            type="button"
-            className="daily-ops-btn daily-ops-btn-secondary"
-            style={{ fontSize: '13px', padding: '0.35rem 0.8rem' }}
-            onClick={() => navigate(`/investigation-actions?plant_id=${encodeURIComponent(plantId)}`)}
-          >
-            Open All in Investigation Centre →
-          </button>
+          <p className="daily-ops-opportunities-subtitle">
+            Deterministic ranking based on recurrence, consumption during comparable stoppages, data coverage, and load controllability.
+          </p>
         </div>
 
         {loadingOpportunities ? (
-          <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          <div className="daily-ops-opp-scanning" style={{ padding: '16px 0', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 400 }}>
             Scanning pipeline findings for trial and evidence opportunities...
           </div>
         ) : opportunities.length === 0 ? (
           <div className="daily-ops-alert-banner info" style={{ margin: 0 }}>
-            <span>No recurring standby or load opportunities requiring review for plant {plantId} on {reportingDate}.</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+            <span>
+              <strong>Opportunities Review:</strong> No recurring standby or load opportunities requiring review for plant {plantId} on {reportingDate}.
+            </span>
           </div>
         ) : (
           <div className="daily-ops-opp-grid">

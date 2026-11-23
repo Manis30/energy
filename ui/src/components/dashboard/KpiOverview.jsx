@@ -245,25 +245,43 @@ export default function KpiOverview({
   return (
     <div className="kpi-overview-container">
       {/* Management Headline Banner & Coverage */}
-      <div className="kpi-section-header">
-        <div className="kpi-section-title-group">
-          <h2 className="kpi-section-heading">Management energy intelligence</h2>
-          <span className="kpi-section-subtitle">Good finished units (FAL gate)</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '-0.25rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '13px', fontWeight: 600, textTransform: 'none', letterSpacing: 'normal', color: 'var(--text-primary, #0f172a)' }}>
+            Management energy intelligence
+          </span>
+          <span style={{ color: 'var(--text-muted, #94a3b8)', fontSize: '12px' }}>•</span>
+          <span style={{ fontSize: '12px', fontWeight: 400, color: 'var(--text-secondary, #64748b)' }}>
+            Denominator: Good finished units (FAL gate)
+          </span>
         </div>
-        <div className="kpi-coverage-badge-wrap">
-          <span className={`kpi-coverage-badge ${coverageStatus === 'FULL' ? 'is-full' : 'is-partial'}`}>
-            <span className="coverage-dot" aria-hidden="true" />
-            <span>Coverage: {coverageStatus} ({coveragePct}% • {completeHours}/{expectedHours} plant-hrs)</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.25rem',
+              padding: '0.15rem 0.5rem',
+              borderRadius: '9999px',
+              fontSize: '12px',
+              fontWeight: 500,
+              backgroundColor: coverageStatus === 'FULL' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)',
+              color: coverageStatus === 'FULL' ? '#22c55e' : '#eab308',
+              border: `1px solid ${coverageStatus === 'FULL' ? 'rgba(34, 197, 94, 0.3)' : 'rgba(234, 179, 8, 0.3)'}`,
+            }}
+          >
+            ● Coverage: {coverageStatus} ({coveragePct}% • {completeHours}/{expectedHours} plant-hrs)
           </span>
         </div>
       </div>
 
       {/* 1. Headline Intensity Cards */}
-      <KpiGrid className="kpi-grid">
+      <KpiGrid className="kpi-grid intensity-kpi-grid">
         {managementCards.map((card) => (
           <KpiCard
             key={card.id}
             id={card.id}
+            className="intensity-kpi-card"
             title={card.title}
             value={card.value}
             unit={card.unit}
@@ -276,19 +294,19 @@ export default function KpiOverview({
       </KpiGrid>
 
       {/* Sub-header for Full Scope Totals */}
-      <div className="kpi-section-header totals-header">
-        <div className="kpi-section-title-group">
-          <h2 className="kpi-section-heading">Factory full-scope totals</h2>
-          <span className="kpi-section-subtitle">All telemetry observations</span>
-        </div>
+      <div style={{ display: 'flex', alignItems: 'center', marginTop: '0.25rem', marginBottom: '-0.25rem' }}>
+        <span style={{ fontSize: '13px', fontWeight: 600, textTransform: 'none', letterSpacing: 'normal', color: 'var(--text-tertiary, #64748b)' }}>
+          Factory full-scope totals (all telemetry observations)
+        </span>
       </div>
 
       {/* 2. Full Scope Totals Cards */}
-      <KpiGrid className="kpi-grid">
+      <KpiGrid className="kpi-grid totals-kpi-grid">
         {primaryCards.map((card) => (
           <KpiCard
             key={card.id}
             id={card.id}
+            className="totals-kpi-card"
             title={card.title}
             value={card.value}
             unit={card.unit}

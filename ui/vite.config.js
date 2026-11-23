@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
   // Load environment variables from the current directory
   const env = loadEnv(mode, process.cwd(), '');
-  const backendUrl = env.VITE_BACKEND_URL || env.BACKEND_URL || 'http://127.0.0.1:8000';
+  const backendUrl = env.BACKEND_URL || env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
   const port = Number(env.VITE_PORT || 5173);
 
   return {
@@ -16,7 +16,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port,
-      host: '127.0.0.1',
+      host: true,
       watch: {
         ignored: ['**/*.zip', '**/*.tar.gz', '**/*.tmp', '**/evidence/**', '**/dist/**'],
       },

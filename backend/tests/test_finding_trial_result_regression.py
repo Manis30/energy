@@ -1358,6 +1358,233 @@ class TestFindingTrialResultRegression(unittest.TestCase):
         self.assertIn("measur", draft["audit_recommendation"].lower())
         self.assertIn("blocked", draft["audit_recommendation"].lower())
 
+    def test_acceptance_case_6_real_citation_supporting_false_number_rejected(self):
+        """
+        Acceptance Case 6a:
+        A real citation supporting a false number is rejected.
+        A real record ID attached to 'saved 999 kWh' must not make that claim valid.
+        Remove the unsupported statement or replace it with the supported fact.
+        """
+        from app.services.finding_ai_investigation_service import validate_citations_in_text
+
+        valid_cits = [
+            {"type": "METER_READING", "id": "EN-000022837", "label": "Meter Reading EN-000022837 (74.391 kWh)"},
+            {"type": "PRODUCTION", "id": "PRD-00009136", "label": "Production Record PRD-00009136 (0 good units, 60m downtime)"},
+        ]
+        evidence = {
+            "plant_id": "IN-TN-01",
+            "observed_value": 74.391,
+            "meter_reading_id": "EN-000022837",
+            "production_event_id": "PRD-00009136",
+            "good_units": 0,
+            "downtime_min": 60,
+            "local_time_window": "10:00–11:00",
+        }
+
+        # Case 1: True observation with real citation AND false claim with same real citation
+        text = "Observed 74.391 kWh [reading:EN-000022837]. Saved 999 kWh [reading:EN-000022837] during break."
+        cleaned = validate_citations_in_text(text, valid_cits, evidence)
+
+        # Factual observation with real citation is preserved
+        self.assertIn("[reading:EN-000022837]", cleaned)
+        self.assertIn("74.391 kWh", cleaned)
+
+        # Real citation supporting false number 999 kWh is REJECTED
+        self.assertNotIn("999 kWh [reading:EN-000022837]", cleaned)
+        # Unsupported claim 'Saved 999 kWh' is rejected/removed
+        self.assertNotIn("Saved 999 kWh", cleaned)
+
+    def test_acceptance_case_6_offline_fallback_reports_only_actual_work(self):
+        """
+        Acceptance Case 6b:
+        Offline fallback reports only the work that actually occurred.
+        Distinguishes backend evidence retrieval, model-invoked tools, and rule-based fallback.
+        """
+        from app.services.finding_ai_investigation_service import investigate_finding_with_ai
+
+        # Create finding with attached reading
+        fnd = OperationalFinding(
+            finding_id="FND-OFFLINE-TRACE",
+            finding_key="KEY-FND-OFFLINE-TRACE",
+            plant_id="IN-TN-01",
+            line_id="SMT-01",
+            meter_id="MTR-SMT-01",
+            anomaly_type="STANDBY_POWER_ANOMALY",
+            severity="MEDIUM",
+            status="NEW",
+            first_detected_at=datetime(2026, 11, 10, 2, 0),
+            last_detected_at=datetime(2026, 11, 10, 3, 0),
+            current_actual_value=Decimal("42.5000"),
+        )
+        self.session.add(fnd)
+        self.session.commit()
+
+        # Force offline via mock to test deterministic fallback
+        with patch("app.services.finding_ai_investigation_service.get_domo_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_client.default_model = "domogpt-large-v2.2:anthropic"
+            mock_client.generate_text.side_effect = ConnectionError("Domo API network unreachable (offline)")
+            mock_get_client.return_value = mock_client
+
+            result = investigate_finding_with_ai(self.session, fnd.finding_id)
+
+        self.assertEqual(result["inference_source"], "RULE_BASED_FALLBACK")
+        trace = result["agent_execution_trace"]
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace["model_execution"], "RULE_BASED_FALLBACK")
+        self.assertEqual(trace["status"], "FALLBACK_APPLIED")
+
+        # Tools called reports only work that actually occurred
+        self.assertIn("retrieve_occurrence_evidence", trace["tools_called"])
+        self.assertIn("rule_based_synthesis_fallback", trace["tools_called"])
+        # Did not hallucinate live model execution
+        self.assertNotIn("live_model_generation", trace["tools_called"])
+
+    def test_acceptance_case_wrong_meaning_citation_converted_to_factual_consumption(self):
+        """
+        Regression Check (Point 5): Correct number with real citation given wrong meaning.
+        A meter reading of 74.391 kWh measures gross consumption.
+        Claiming 'Saved 74.391 kWh [reading:EN-000022837]' gives consumption the wrong meaning.
+        The parser converts 'Saved' to 'Consumed' (or rejects the savings claim) while preserving
+        the real citation.
+        """
+        from app.services.finding_ai_investigation_service import validate_citations_in_text
+
+        valid_cits = [
+            {"type": "METER_READING", "id": "EN-000022837", "label": "Meter Reading EN-000022837 (74.391 kWh)"},
+        ]
+        evidence = {
+            "plant_id": "IN-TN-01",
+            "observed_value": 74.391,
+            "meter_reading_id": "EN-000022837",
+            "local_time_window": "10:00–11:00",
+        }
+
+        # Text incorrectly claims savings from gross consumption reading
+        text = "Saved 74.391 kWh [reading:EN-000022837] during the operational hour."
+        cleaned = validate_citations_in_text(text, valid_cits, evidence)
+
+        # 'Saved' must NOT remain attached to the consumption reading
+        self.assertNotIn("Saved 74.391 kWh", cleaned)
+        # Supported meaning 'Consumed' is used
+        self.assertIn("Consumed 74.391 kWh [reading:EN-000022837]", cleaned)
+
+    def test_acceptance_case_wrong_plant_citation_rejected(self):
+        """
+        Regression Check (Point 3 & 5): Real citation attached to wrong plant is regenerated or stripped.
+        Text claims 'plant IN-KA-02 [reading:EN-000022837]' when record is IN-TN-01.
+        The false plant statement CANNOT survive in the final operator-visible text.
+        """
+        from app.services.finding_ai_investigation_service import validate_citations_in_text
+
+        valid_cits = [
+            {"type": "METER_READING", "id": "EN-000022837", "label": "Meter Reading EN-000022837 (74.391 kWh)"},
+        ]
+        evidence = {
+            "plant_id": "IN-TN-01",
+            "observed_value": 74.391,
+            "meter_reading_id": "EN-000022837",
+            "local_time_window": "10:00–11:00",
+        }
+
+        text = "Observed 74.391 kWh at plant IN-KA-02 [reading:EN-000022837]."
+        cleaned = validate_citations_in_text(text, valid_cits, evidence)
+
+        # False plant IN-KA-02 CANNOT survive in the operator-visible text
+        self.assertNotIn("IN-KA-02", cleaned)
+        # Regenerated plant IN-TN-01 is present
+        self.assertIn("IN-TN-01", cleaned)
+        self.assertIn("[reading:EN-000022837]", cleaned)
+
+    def test_acceptance_case_wrong_period_citation_rejected(self):
+        """
+        Regression Check (Point 3 & 5): Real citation attached to wrong time period is regenerated or stripped.
+        Text claims '14:00–15:00 [reading:EN-000022837]' when record is 10:00–11:00.
+        The false time period CANNOT survive in the final operator-visible text.
+        """
+        from app.services.finding_ai_investigation_service import validate_citations_in_text
+
+        valid_cits = [
+            {"type": "METER_READING", "id": "EN-000022837", "label": "Meter Reading EN-000022837 (74.391 kWh)"},
+        ]
+        evidence = {
+            "plant_id": "IN-TN-01",
+            "observed_value": 74.391,
+            "meter_reading_id": "EN-000022837",
+            "local_time_window": "10:00–11:00",
+        }
+
+        text = "Observed 74.391 kWh during 14:00–15:00 [reading:EN-000022837]."
+        cleaned = validate_citations_in_text(text, valid_cits, evidence)
+
+        # False period 14:00-15:00 CANNOT survive in the operator-visible text
+        self.assertNotIn("14:00–15:00", cleaned)
+        self.assertNotIn("14:00-15:00", cleaned)
+        # Regenerated period 10:00-11:00 is present
+        self.assertIn("10:00–11:00", cleaned)
+        self.assertIn("[reading:EN-000022837]", cleaned)
+
+    def test_acceptance_case_explain_assessment_missing_tariff_contract(self):
+        """
+        Regression Check (Point 3): explain_assessment_with_ai with qualified physical kWh
+        and unapproved/missing tariff contract.
+        q3_ans displays physical kWh and states monetary savings are unverified.
+        overall_verdict is 'Verified Physical Energy Saving (Monetary Unverified)'.
+        verified_monetary_savings_inr is None.
+        """
+        from app.services.finding_ai_investigation_service import explain_assessment_with_ai
+
+        asm = InterventionAssessment(
+            assessment_id="ASM-EXPLAIN-NOTARIFF",
+            action_id="ACT-EXPLAIN-01",
+            plan_id="PLN-EXPLAIN-01",
+            plan_version=1,
+            assessment_revision=1,
+            baseline_kwh=100.0,
+            post_kwh=68.0,
+            baseline_cost_inr=825.0,
+            post_cost_inr=561.0,
+            baseline_actual_units=150,
+            baseline_good_units=150,
+            baseline_reject_units=0,
+            baseline_downtime_min=0,
+            baseline_operating_hours=2,
+            baseline_coverage_pct=100.0,
+            post_actual_units=150,
+            post_good_units=145,
+            post_reject_units=5,
+            post_downtime_min=10,
+            post_operating_hours=2,
+            post_coverage_pct=100.0,
+            monetary_savings_basis="ESTIMATED_AVOIDED_COST_VERSIONED_TARIFF",
+            objective_outcome="IMPROVED",
+            cost_intensity_change_pct=Decimal("-10.0"),
+            electricity_savings_kwh=Decimal("32.0"),
+            avoided_cost_inr=Decimal("264.0"),
+            verified_monetary_savings_inr=None,  # Missing contract tariff!
+            savings_claim_status="VERIFIED",
+            savings_claim_description="Physical savings verified without approved tariff contract",
+            status_reason="Verified physical savings",
+            signed_off_by="lead_auditor",
+            signed_off_at=datetime.utcnow(),
+            output_guardrail_met=True,
+            quality_guardrail_met=True,
+            downtime_guardrail_met=True,
+            guardrails_summary_json=json.dumps([{"metric": "OUTPUT", "status": "PASSED", "passed": True}]),
+        )
+        self.session.add(asm)
+        self.session.commit()
+
+        explanation = explain_assessment_with_ai(self.session, asm.assessment_id)
+
+        self.assertEqual(explanation["overall_verdict"], "Verified Physical Energy Saving (Monetary Unverified)")
+        q3 = explanation["question_3_attributable_savings"]
+        self.assertEqual(q3["verified_electricity_savings_kwh"], Decimal("32.0"))
+        self.assertIsNone(q3["verified_monetary_savings_inr"])
+        self.assertIn("Monetary savings unverified", q3["answer"])
+        self.assertEqual(explanation["ledger_eligibility"]["is_eligible_for_verified_kwh"], True)
+        self.assertEqual(explanation["ledger_eligibility"]["is_eligible_for_verified_cost"], False)
+
 
 if __name__ == "__main__":
     unittest.main()

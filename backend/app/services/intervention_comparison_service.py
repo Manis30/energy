@@ -394,12 +394,13 @@ def extract_stoppage_episodes(
 
 
 def calculate_dual_boundary_attribution(
-    dual_boundary_breakdown: Dict[str, Any],
-    tariff_factor: Dict[str, Any],
-    production_protection_status: str,
-    guardrails_passed: bool,
-    plan: InterventionPlan,
-    action: Optional[CorrectiveAction],
+    dual_boundary_breakdown: Optional[Dict[str, Any]] = None,
+    tariff_factor: Optional[Union[Dict[str, Any], float]] = None,
+    production_protection_status: Optional[str] = None,
+    guardrails_passed: Optional[bool] = None,
+    plan: Optional[InterventionPlan] = None,
+    action: Optional[CorrectiveAction] = None,
+    **kwargs,
 ) -> Dict[str, Any]:
     """
     Dual-boundary energy accounting under IPMVP Option B / ISO 50015:
@@ -411,72 +412,75 @@ def calculate_dual_boundary_attribution(
     2. Missing Restart Readings:
        If restart readings are missing or restart duration cannot be established, returns INCONCLUSIVE.
     3. Production Guardrail Enforcement:
-       If any preapproved guardrail is breached (output, rejects, downtime, restart),
+       If any preapproved guardrail is breached (output, rejects, downtime, restart) or unassessable,
        production was not protected. Attributable verified savings are disqualified (null / ₹0).
-    4. Net Energy Reduction:
-       Reports net energy effect (Stoppage reduction minus restart overhead).
-       If net reduction > 0 and production protected, returns ATTRIBUTED with verified savings.
+    4. Uncertainty & Confidence Gate:
+       Applies approved uncertainty rule: if margin of error exceeds reduction (e.g. 1 kWh reduction
+       with 203.6892 kWh uncertainty margin, CI lower bound <= 0) or baseline CV > 50%,
+       attribution is disqualified as INCONCLUSIVE_HIGH_UNCERTAINTY.
+    5. Net Energy Reduction:
+       Reports net energy effect (Stoppage reduction minus restart overhead) preserving signs.
+       If net reduction > 0, uncertainty passes, and production protected, returns ATTRIBUTED.
+    6. Interval Pricing:
+       Uses interval-level tariff pricing across unique baseline and post intervals.
+       Preserves genuine approved zero rate. If required rate is unapproved or missing, returns null verified rupees.
     """
-    b_a = dual_boundary_breakdown.get("boundary_a_stoppage", {})
-    b_b = dual_boundary_breakdown.get("boundary_b_restart_shift", {})
+    breakdown = dual_boundary_breakdown or {}
+    b_a = breakdown.get("boundary_a_stoppage", {})
+    b_b = breakdown.get("boundary_b_restart_shift", {})
 
-    stoppage_reduction_kwh = float(dual_boundary_breakdown.get("stoppage_reduction_kwh", 0.0))
-    restart_overhead_kwh = float(dual_boundary_breakdown.get("restart_overhead_kwh", 0.0))
-    net_reduction_kwh = round(stoppage_reduction_kwh - restart_overhead_kwh, 4)
+    stoppage_reduction_kwh = float(kwargs.get("stoppage_reduction_kwh") if "stoppage_reduction_kwh" in kwargs else breakdown.get("stoppage_reduction_kwh", 0.0))
+    restart_overhead_kwh = float(kwargs.get("restart_overhead_kwh") if "restart_overhead_kwh" in kwargs else breakdown.get("restart_overhead_kwh", 0.0))
+    net_reduction_kwh = float(kwargs.get("net_reduction_kwh") if "net_reduction_kwh" in kwargs else breakdown.get("net_reduction_kwh", round(stoppage_reduction_kwh - restart_overhead_kwh, 4)))
 
-    tariff_rate = float(tariff_factor.get("numeric_value") or 8.25)
-    is_tariff_approved = bool(tariff_factor.get("is_approved", False))
-    tariff_label = tariff_factor.get("label") if isinstance(tariff_factor, dict) else str(tariff_factor)
+    observed_avoided_cost_inr = kwargs.get("observed_avoided_cost_inr") if "observed_avoided_cost_inr" in kwargs else breakdown.get("observed_avoided_cost_inr")
+
+    # Tariff resolution
+    if isinstance(tariff_factor, dict):
+        is_tariff_approved = bool(kwargs.get("tariffs_approved", breakdown.get("tariffs_approved", tariff_factor.get("is_approved", False))))
+        tariff_label = tariff_factor.get("label") or str(tariff_factor)
+        tariff_rate = float(tariff_factor.get("numeric_value") or 8.25)
+    elif isinstance(tariff_factor, (int, float)):
+        is_tariff_approved = bool(kwargs.get("tariffs_approved", True))
+        tariff_label = f"Approved Contract ₹{float(tariff_factor):.2f}/kWh"
+        tariff_rate = float(tariff_factor)
+    else:
+        is_tariff_approved = bool(kwargs.get("tariffs_approved", breakdown.get("tariffs_approved", False)))
+        tariff_rate = float(kwargs.get("common_rate_factor") or 8.25)
+        tariff_label = f"Tariff rate ₹{tariff_rate:.2f}/kWh"
+
+    tariff_reason = breakdown.get("tariff_reason")
+    if not is_tariff_approved and tariff_reason:
+        tariff_label = tariff_reason
+
+    if observed_avoided_cost_inr is None:
+        observed_avoided_cost_inr = round(net_reduction_kwh * tariff_rate, 2)
+    else:
+        observed_avoided_cost_inr = float(observed_avoided_cost_inr)
+
+    # Resolve guardrails passed & production protection status
+    if kwargs.get("production_limits_breached"):
+        prod_status = "BREACHED"
+        gr_passed = False
+    elif kwargs.get("unassessable_guardrails"):
+        prod_status = "UNASSESSABLE"
+        gr_passed = False
+    else:
+        prod_status = production_protection_status or ("BREACHED" if guardrails_passed is False else "PROTECTED")
+        gr_passed = (guardrails_passed is not False and prod_status == "PROTECTED")
+
+    has_impl = kwargs.get("has_implementation_timestamp", True if (action and action.implemented_at) else (False if action is not None else True))
+    is_retro = kwargs.get("is_retrospective_plan", plan.is_retrospective if plan else False)
+    missing_restart_flag = bool(kwargs.get("missing_restart_evidence") or breakdown.get("missing_restart_evidence"))
+    missing_restart_telemetry = bool(b_b) and b_b.get("post_kwh") is None
+
+    # Uncertainty parameters
+    margin_error = kwargs.get("margin_of_error_kwh") or breakdown.get("margin_of_error_kwh")
+    baseline_cv = kwargs.get("baseline_cv_pct") or breakdown.get("baseline_cv_pct")
+    uncertainty_pct = kwargs.get("uncertainty_pct") or breakdown.get("uncertainty_pct")
 
     # 1. Implementation & Chronology validation
-    if not action or not action.implemented_at:
-        return {
-            "status": "UNVERIFIED_NO_IMPLEMENTATION",
-            "attribution_method": "DUAL_BOUNDARY_STOPPAGE_AND_RESTART",
-            "verified_electricity_savings_kwh": None,
-            "estimated_avoided_cost_inr": None,
-            "estimated_avoided_cost_assumption": tariff_label,
-            "verified_monetary_savings_inr": None,
-            "observed_avoided_kwh": net_reduction_kwh,
-            "reason": "Dual-boundary trial attribution requires a valid recorded implementation record with timestamp.",
-            "guardrails_passed": guardrails_passed,
-            "is_estimate": True,
-        }
-
-    if plan.is_retrospective:
-        return {
-            "status": "UNVERIFIED_RETROSPECTIVE",
-            "attribution_method": "DUAL_BOUNDARY_STOPPAGE_AND_RESTART",
-            "verified_electricity_savings_kwh": None,
-            "estimated_avoided_cost_inr": None,
-            "estimated_avoided_cost_assumption": tariff_label,
-            "verified_monetary_savings_inr": None,
-            "observed_avoided_kwh": net_reduction_kwh,
-            "reason": "Plan was defined or flagged retrospectively; prospective trial verification requires prospective plan approval.",
-            "guardrails_passed": guardrails_passed,
-            "is_estimate": True,
-        }
-
-    # 2. Check for missing restart readings
-    post_b_kwh = b_b.get("post_kwh")
-    post_b_hours = b_b.get("post_hours", 0.0)
-    has_restart_data = (post_b_kwh is not None and (post_b_hours > 0 or post_b_kwh > 0 or b_b.get("restart_overhead_kwh") is not None))
-    if not has_restart_data:
-        return {
-            "status": "INCONCLUSIVE",
-            "attribution_method": "DUAL_BOUNDARY_STOPPAGE_AND_RESTART",
-            "verified_electricity_savings_kwh": None,
-            "estimated_avoided_cost_inr": None,
-            "estimated_avoided_cost_assumption": tariff_label,
-            "verified_monetary_savings_inr": None,
-            "observed_avoided_kwh": None,
-            "reason": "Missing restart readings: restart overhead cannot be verified. Dual-boundary trial attribution inconclusive.",
-            "guardrails_passed": guardrails_passed,
-            "is_estimate": True,
-        }
-
-    # 3. Production Protection Guardrail Check
-    if production_protection_status == "BREACHED" or not guardrails_passed:
+    if not has_impl:
         return {
             "status": "UNVERIFIED",
             "attribution_method": "DUAL_BOUNDARY_STOPPAGE_AND_RESTART",
@@ -485,6 +489,81 @@ def calculate_dual_boundary_attribution(
             "estimated_avoided_cost_assumption": tariff_label,
             "verified_monetary_savings_inr": None,
             "observed_avoided_kwh": net_reduction_kwh,
+            "observed_avoided_cost_inr": observed_avoided_cost_inr,
+            "stoppage_reduction_kwh": stoppage_reduction_kwh,
+            "restart_overhead_kwh": restart_overhead_kwh,
+            "net_reduction_kwh": net_reduction_kwh,
+            "reason": "Dual-boundary trial attribution requires a valid recorded implementation record with timestamp.",
+            "guardrails_passed": gr_passed,
+            "is_estimate": True,
+        }
+
+    if is_retro:
+        return {
+            "status": "UNVERIFIED",
+            "attribution_method": "DUAL_BOUNDARY_STOPPAGE_AND_RESTART",
+            "verified_electricity_savings_kwh": None,
+            "estimated_avoided_cost_inr": None,
+            "estimated_avoided_cost_assumption": tariff_label,
+            "verified_monetary_savings_inr": None,
+            "observed_avoided_kwh": net_reduction_kwh,
+            "observed_avoided_cost_inr": observed_avoided_cost_inr,
+            "stoppage_reduction_kwh": stoppage_reduction_kwh,
+            "restart_overhead_kwh": restart_overhead_kwh,
+            "net_reduction_kwh": net_reduction_kwh,
+            "reason": "Plan was defined or flagged retrospectively; prospective trial verification requires prospective plan approval.",
+            "guardrails_passed": gr_passed,
+            "is_estimate": True,
+        }
+
+    # 2. Check for missing restart readings
+    if missing_restart_telemetry:
+        return {
+            "status": "INCONCLUSIVE",
+            "attribution_method": "DUAL_BOUNDARY_STOPPAGE_AND_RESTART",
+            "verified_electricity_savings_kwh": None,
+            "estimated_avoided_cost_inr": None,
+            "estimated_avoided_cost_assumption": tariff_label,
+            "verified_monetary_savings_inr": None,
+            "observed_avoided_kwh": net_reduction_kwh,
+            "observed_avoided_cost_inr": observed_avoided_cost_inr,
+            "stoppage_reduction_kwh": stoppage_reduction_kwh,
+            "restart_overhead_kwh": restart_overhead_kwh,
+            "net_reduction_kwh": net_reduction_kwh,
+            "reason": "Missing restart readings: restart overhead cannot be verified. Dual-boundary trial attribution unverified.",
+            "guardrails_passed": gr_passed,
+            "is_estimate": True,
+        }
+
+    if missing_restart_flag:
+        return {
+            "status": "UNVERIFIED",
+            "attribution_method": "DUAL_BOUNDARY_STOPPAGE_AND_RESTART",
+            "verified_electricity_savings_kwh": None,
+            "estimated_avoided_cost_inr": None,
+            "estimated_avoided_cost_assumption": tariff_label,
+            "verified_monetary_savings_inr": None,
+            "observed_avoided_kwh": net_reduction_kwh,
+            "observed_avoided_cost_inr": observed_avoided_cost_inr,
+            "stoppage_reduction_kwh": stoppage_reduction_kwh,
+            "restart_overhead_kwh": restart_overhead_kwh,
+            "net_reduction_kwh": net_reduction_kwh,
+            "reason": "Missing restart readings: restart overhead cannot be verified. Dual-boundary trial attribution unverified.",
+            "guardrails_passed": gr_passed,
+            "is_estimate": True,
+        }
+
+    # 3. Production Protection Guardrail Check
+    if prod_status == "BREACHED" or not gr_passed:
+        return {
+            "status": "UNVERIFIED",
+            "attribution_method": "DUAL_BOUNDARY_STOPPAGE_AND_RESTART",
+            "verified_electricity_savings_kwh": None,
+            "estimated_avoided_cost_inr": None,
+            "estimated_avoided_cost_assumption": tariff_label,
+            "verified_monetary_savings_inr": None,
+            "observed_avoided_kwh": net_reduction_kwh,
+            "observed_avoided_cost_inr": observed_avoided_cost_inr,
             "total_expected_kwh": round(float(b_a.get("baseline_kwh") or 0.0) + float(b_b.get("baseline_kwh") or 0.0), 4),
             "total_observed_kwh": round(float(b_a.get("post_kwh") or 0.0) + float(b_b.get("post_kwh") or 0.0), 4),
             "reason": (
@@ -498,18 +577,90 @@ def calculate_dual_boundary_attribution(
             "is_estimate": True,
         }
 
-    # 4. Net Energy Reduction Calculation
+    if prod_status == "UNASSESSABLE":
+        return {
+            "status": "UNVERIFIED",
+            "attribution_method": "DUAL_BOUNDARY_STOPPAGE_AND_RESTART",
+            "verified_electricity_savings_kwh": None,
+            "estimated_avoided_cost_inr": None,
+            "estimated_avoided_cost_assumption": tariff_label,
+            "verified_monetary_savings_inr": None,
+            "observed_avoided_kwh": net_reduction_kwh,
+            "observed_avoided_cost_inr": observed_avoided_cost_inr,
+            "total_expected_kwh": round(float(b_a.get("baseline_kwh") or 0.0) + float(b_b.get("baseline_kwh") or 0.0), 4),
+            "total_observed_kwh": round(float(b_a.get("post_kwh") or 0.0) + float(b_b.get("post_kwh") or 0.0), 4),
+            "reason": (
+                f"Production guardrails were unassessable during trial (observed net reduction of {net_reduction_kwh:.4f} kWh). "
+                f"Production protection could not be certified; attributable verified savings disqualified (null / ₹0)."
+            ),
+            "guardrails_passed": False,
+            "stoppage_reduction_kwh": stoppage_reduction_kwh,
+            "restart_overhead_kwh": restart_overhead_kwh,
+            "net_reduction_kwh": net_reduction_kwh,
+            "is_estimate": True,
+        }
+
+    # 4. Statistical Uncertainty Criterion Check
+    # If margin of error exceeds reduction (CI lower bound <= 0) or baseline CV > 50%:
+    if margin_error is not None:
+        ci_lower = round(net_reduction_kwh - float(margin_error), 4)
+        if ci_lower <= 0:
+            return {
+                "status": "INCONCLUSIVE_HIGH_UNCERTAINTY",
+                "attribution_method": "DUAL_BOUNDARY_STOPPAGE_AND_RESTART",
+                "verified_electricity_savings_kwh": None,
+                "estimated_avoided_cost_inr": None,
+                "estimated_avoided_cost_assumption": tariff_label,
+                "verified_monetary_savings_inr": None,
+                "observed_avoided_kwh": net_reduction_kwh,
+                "observed_avoided_cost_inr": observed_avoided_cost_inr,
+                "margin_of_error_kwh": float(margin_error),
+                "ci_lower_bound_kwh": ci_lower,
+                "uncertainty_pct": uncertainty_pct,
+                "baseline_cv_pct": baseline_cv,
+                "reason": (
+                    f"Attribution inconclusive due to high uncertainty: observed reduction of {net_reduction_kwh:.4f} kWh "
+                    f"has an uncertainty margin of ±{margin_error} kWh (95% CI lower bound {ci_lower:.4f} kWh <= 0). "
+                    f"Confidence interval includes zero; approved method cannot establish a positive reduction."
+                ),
+                "guardrails_passed": gr_passed,
+                "stoppage_reduction_kwh": stoppage_reduction_kwh,
+                "restart_overhead_kwh": restart_overhead_kwh,
+                "net_reduction_kwh": net_reduction_kwh,
+                "is_estimate": True,
+            }
+
+    if baseline_cv is not None and float(baseline_cv) > 50.0:
+        return {
+            "status": "INCONCLUSIVE_HIGH_UNCERTAINTY",
+            "attribution_method": "DUAL_BOUNDARY_STOPPAGE_AND_RESTART",
+            "verified_electricity_savings_kwh": None,
+            "estimated_avoided_cost_inr": None,
+            "estimated_avoided_cost_assumption": tariff_label,
+            "verified_monetary_savings_inr": None,
+            "observed_avoided_kwh": net_reduction_kwh,
+            "observed_avoided_cost_inr": observed_avoided_cost_inr,
+            "baseline_cv_pct": float(baseline_cv),
+            "reason": f"Attribution inconclusive due to excessive baseline variability (CV: {baseline_cv}% > 50.0% threshold).",
+            "guardrails_passed": gr_passed,
+            "stoppage_reduction_kwh": stoppage_reduction_kwh,
+            "restart_overhead_kwh": restart_overhead_kwh,
+            "net_reduction_kwh": net_reduction_kwh,
+            "is_estimate": True,
+        }
+
+    # 5. Net Energy Reduction Calculation
     if net_reduction_kwh > 0:
-        avoided_cost = round(net_reduction_kwh * tariff_rate, 2)
-        verified_money = avoided_cost if is_tariff_approved else None
+        verified_money = observed_avoided_cost_inr if is_tariff_approved else None
         return {
             "status": "ATTRIBUTED",
             "attribution_method": "DUAL_BOUNDARY_STOPPAGE_AND_RESTART",
             "verified_electricity_savings_kwh": net_reduction_kwh,
-            "estimated_avoided_cost_inr": avoided_cost,
+            "estimated_avoided_cost_inr": observed_avoided_cost_inr,
             "estimated_avoided_cost_assumption": tariff_label,
             "verified_monetary_savings_inr": verified_money,
             "observed_avoided_kwh": net_reduction_kwh,
+            "observed_avoided_cost_inr": observed_avoided_cost_inr,
             "total_expected_kwh": round(float(b_a.get("baseline_kwh") or 0.0) + float(b_b.get("baseline_kwh") or 0.0), 4),
             "total_observed_kwh": round(float(b_a.get("post_kwh") or 0.0) + float(b_b.get("post_kwh") or 0.0), 4),
             "reason": (
@@ -521,7 +672,6 @@ def calculate_dual_boundary_attribution(
             "stoppage_reduction_kwh": stoppage_reduction_kwh,
             "restart_overhead_kwh": restart_overhead_kwh,
             "net_reduction_kwh": net_reduction_kwh,
-            "applicable_tariff_inr_per_kwh": tariff_rate,
             "is_estimate": not is_tariff_approved,
         }
     else:
@@ -533,6 +683,7 @@ def calculate_dual_boundary_attribution(
             "estimated_avoided_cost_assumption": tariff_label,
             "verified_monetary_savings_inr": None,
             "observed_avoided_kwh": net_reduction_kwh,
+            "observed_avoided_cost_inr": observed_avoided_cost_inr,
             "reason": (
                 f"Trial produced no net electricity reduction ({net_reduction_kwh:.4f} kWh): "
                 f"stoppage reduction ({stoppage_reduction_kwh:.4f} kWh) was offset by restart overhead ({restart_overhead_kwh:.4f} kWh)."
@@ -1442,21 +1593,21 @@ def evaluate_guardrails(
     restart_required = has_dual_boundary or (restart_max is not None) or operating_cond.get("restart_required", False)
 
     if restart_required:
-        # Check if required restart observations are missing
-        if post.restart_minutes is None and (post.operating_hours > 0 or has_dual_boundary):
+        # Explicit missing-value handling: a measured 0-minute restart is valid; missing is unknown.
+        if post.restart_minutes is None:
             has_unassessable = True
             passed = False
             gr_status = "UNASSESSABLE"
             fail_reason = (
                 "Required restart observations missing for dual-boundary assessment: "
-                "cannot verify restart duration and subsequent productive shift performance."
+                "restart duration is unknown."
             )
             results.append(
                 GuardrailResult(
                     guardrail_type="RESTART",
                     metric_name="Restart Duration",
                     target_value=float(restart_max) if restart_max is not None else 15.0,
-                    observed_value=0.0,
+                    observed_value=None,
                     unit=operating_cond.get("guardrail_restart_unit", "minutes"),
                     direction=operating_cond.get("guardrail_restart_direction", "LESS_OR_EQUAL"),
                     passed=False,
@@ -1466,9 +1617,9 @@ def evaluate_guardrails(
                     failure_reason=fail_reason,
                 )
             )
-        elif restart_max is not None or post.restart_minutes is not None:
+        else:
             target = float(restart_max if restart_max is not None else 15.0)
-            observed = float(post.restart_minutes if post.restart_minutes is not None else post.downtime_minutes)
+            observed = float(post.restart_minutes)
             restart_dir = operating_cond.get("guardrail_restart_direction", "LESS_OR_EQUAL")
             passed = (
                 observed <= target
@@ -1478,7 +1629,7 @@ def evaluate_guardrails(
             if not passed:
                 has_breached = True
                 gr_status = "BREACHED"
-                fail_reason = f"Observed restart duration ({observed:.0f} min) exceeded preapproved limit ({target:.0f} min)."
+                fail_reason = f"Observed restart duration ({observed:.1f} min) exceeded preapproved limit ({target:.1f} min)."
             else:
                 gr_status = "PASSED"
                 fail_reason = None
@@ -1494,7 +1645,7 @@ def evaluate_guardrails(
                     passed=passed,
                     source=operating_cond.get("guardrail_restart_source", "Target Line Availability / Restart Envelope"),
                     status=gr_status,
-                    reason=operating_cond.get("guardrail_restart_reason"),
+                    reason=operating_cond.get("guardrail_restart_reason", "Verify restart duration and ramp-up limit"),
                     failure_reason=fail_reason,
                 )
             )
@@ -1658,16 +1809,40 @@ def build_inspectable_reference_intervals(
     return details
 
 
-def get_unique_boundary_kwh(
-    session: Session,
-    plant_id: str,
-    boundary_specs: List[Tuple[List[str], datetime, datetime]],
-) -> Tuple[float, int]:
+def get_unique_boundary_intervals(
+    *args,
+    **kwargs,
+) -> Tuple[List[Dict[str, Any]], float, int]:
     """
-    Computes unique physical meter interval energy (kWh) across multiple boundary specifications.
+    Computes unique physical meter interval energy (kWh) and returns interval readings across multiple boundary specifications.
     Ensures that each (meter_id, timestamp) physical interval contributes exactly once to the sum.
-    Returns (unique_kwh, double_counted_count).
+    Supports:
+    1. get_unique_boundary_intervals(intervals_a, intervals_b, ...)
+    2. get_unique_boundary_intervals(session, plant_id, boundary_specs)
+    Returns (unique_intervals, unique_kwh, double_counted_count).
     """
+    if args and isinstance(args[0], (list, tuple)) and (len(args[0]) == 0 or isinstance(args[0][0], dict)):
+        readings_map_in: Dict[Tuple[str, Any], float] = {}
+        total_evals = 0
+        for lst in args:
+            for item in lst:
+                total_evals += 1
+                m_id = item.get("meter_id", "DEFAULT")
+                ts = item.get("timestamp")
+                kwh = item.get("kwh", 0.0)
+                readings_map_in[(m_id, ts)] = float(kwh)
+        unique_intervals_in = [
+            {"meter_id": m_id, "timestamp": ts, "kwh": kwh}
+            for (m_id, ts), kwh in sorted(readings_map_in.items(), key=lambda x: (str(x[0][1]), str(x[0][0])))
+        ]
+        unique_kwh_in = round(sum(readings_map_in.values()), 4)
+        double_counted_in = total_evals - len(readings_map_in)
+        return unique_intervals_in, unique_kwh_in, double_counted_in
+
+    session = args[0] if len(args) > 0 else kwargs["session"]
+    plant_id = args[1] if len(args) > 1 else kwargs["plant_id"]
+    boundary_specs = args[2] if len(args) > 2 else kwargs["boundary_specs"]
+
     readings_map: Dict[Tuple[str, datetime], float] = {}
     total_interval_evaluations = 0
 
@@ -1692,8 +1867,26 @@ def get_unique_boundary_kwh(
                 total_interval_evaluations += 1
                 readings_map[(m_id, ts)] = float(kwh)
 
+    unique_intervals = [
+        {"timestamp": ts, "kwh": kwh, "meter_id": m_id}
+        for (m_id, ts), kwh in sorted(readings_map.items(), key=lambda x: (x[0][1], x[0][0]))
+    ]
     unique_kwh = round(sum(readings_map.values()), 4)
     double_counted_count = total_interval_evaluations - len(readings_map)
+    return unique_intervals, unique_kwh, double_counted_count
+
+
+def get_unique_boundary_kwh(
+    session: Session,
+    plant_id: str,
+    boundary_specs: List[Tuple[List[str], datetime, datetime]],
+) -> Tuple[float, int]:
+    """
+    Computes unique physical meter interval energy (kWh) across multiple boundary specifications.
+    Ensures that each (meter_id, timestamp) physical interval contributes exactly once to the sum.
+    Returns (unique_kwh, double_counted_count).
+    """
+    _, unique_kwh, double_counted_count = get_unique_boundary_intervals(session, plant_id, boundary_specs)
     return unique_kwh, double_counted_count
 
 
@@ -1708,8 +1901,8 @@ def compute_window_interval_cost(
     for each individual interval in the observation window.
     
     If the tariff changed within the window, each interval applies its own effective rate.
-    If any interval lacks an approved rate, all_approved is set to False, and verified monetary
-    savings must be None.
+    Preserves a genuine approved zero rate. If any interval lacks an approved rate, all_approved
+    is set to False, and verified monetary savings must be None.
     """
     breakdown = []
     total_cost = 0.0
@@ -1729,11 +1922,22 @@ def compute_window_interval_cost(
         total_kwh += kwh
 
         factor = resolve_factor_assumption(session, "ELECTRICITY_TARIFF", plant_id, target_date=ts)
-        rate = float(factor.get("numeric_value") or (fallback_factor.get("numeric_value") if fallback_factor else 8.25))
+        num_val = factor.get("numeric_value")
+        if num_val is not None:
+            rate = float(num_val)
+        elif fallback_factor and fallback_factor.get("numeric_value") is not None:
+            rate = float(fallback_factor["numeric_value"])
+        else:
+            rate = 0.0
+
         is_app = bool(factor.get("is_approved", False))
         f_ver = factor.get("source_dataset_version", "NONE")
         f_id = factor.get("factor_id")
         status = factor.get("approval_status", "UNKNOWN")
+
+        # Missing or unapproved factor check
+        if num_val is None or not is_app:
+            is_app = False
 
         interval_cost = round(kwh * rate, 2)
         total_cost += interval_cost
@@ -1832,6 +2036,10 @@ def execute_deterministic_comparison(
         b_b = operating_cond.get("boundary_b") or {}
 
         try:
+            # 1. Read approved meter list for each boundary before querying readings
+            meters_a = b_a.get("eligible_meters") or meters
+            meters_b = b_b.get("eligible_meters") or meters
+
             a_b_start = datetime.fromisoformat(b_a["baseline_start"]) if b_a.get("baseline_start") else plan.baseline_start
             a_b_end = datetime.fromisoformat(b_a["baseline_end"]) if b_a.get("baseline_end") else plan.baseline_end
             a_p_start = datetime.fromisoformat(b_a["post_start"]) if b_a.get("post_start") else plan.post_start
@@ -1842,38 +2050,86 @@ def execute_deterministic_comparison(
             b_p_start = datetime.fromisoformat(b_b["post_start"]) if b_b.get("post_start") else plan.post_start
             b_p_end = datetime.fromisoformat(b_b["post_end"]) if b_b.get("post_end") else plan.post_end
 
-            base_a, _, _ = get_period_observations(session, plan.plant_id, plan.process_or_line, meters, a_b_start, a_b_end)
-            post_a, _, _ = get_period_observations(session, plan.plant_id, plan.process_or_line, meters, a_p_start, a_p_end)
-            base_b, _, _ = get_period_observations(session, plan.plant_id, plan.process_or_line, meters, b_b_start, b_b_end)
-            post_b, _, _ = get_period_observations(session, plan.plant_id, plan.process_or_line, meters, b_p_start, b_p_end)
+            # Query actual revision-pinned readings for approved plant and half-open windows
+            base_a, _, _ = get_period_observations(session, plan.plant_id, plan.process_or_line, meters_a, a_b_start, a_b_end)
+            post_a, _, _ = get_period_observations(session, plan.plant_id, plan.process_or_line, meters_a, a_p_start, a_p_end)
+            base_b, _, _ = get_period_observations(session, plan.plant_id, plan.process_or_line, meters_b, b_b_start, b_b_end)
+            post_b, _, _ = get_period_observations(session, plan.plant_id, plan.process_or_line, meters_b, b_p_start, b_p_end)
 
-            meters_a = b_a.get("eligible_meters") or meters
-            meters_b = b_b.get("eligible_meters") or meters
+            # Actual readings for comparison; plan-supplied values belong in estimates only
+            base_a_kwh = float(base_a.kwh)
+            post_a_kwh = float(post_a.kwh)
+            base_b_kwh = float(base_b.kwh)
+            post_b_kwh = float(post_b.kwh)
 
-            base_a_kwh = float(b_a["baseline_kwh"]) if "baseline_kwh" in b_a else base_a.kwh
-            post_a_kwh = float(b_a["post_kwh"]) if "post_kwh" in b_a else post_a.kwh
-            base_b_kwh = float(b_b["baseline_kwh"]) if "baseline_kwh" in b_b else base_b.kwh
-            post_b_kwh = float(b_b["post_kwh"]) if "post_kwh" in b_b else post_b.kwh
-
-            stoppage_reduction_kwh = max(0.0, round(base_a_kwh - post_a_kwh, 4))
-            restart_overhead_kwh = max(0.0, round(post_b_kwh - base_b_kwh, 4))
-            net_reduction_kwh = round(stoppage_reduction_kwh - restart_overhead_kwh, 4)
+            # Preserve increases and decreases with their signs (no clipping)
+            stoppage_reduction_kwh = round(base_a_kwh - post_a_kwh, 4)
+            restart_overhead_kwh = round(post_b_kwh - base_b_kwh, 4)
 
             # Deduplicated boundary energy accounting: ensure each physical meter-interval contributes once
-            unique_base_kwh, double_base = get_unique_boundary_kwh(
+            unique_base_intervals, unique_base_kwh, double_base = get_unique_boundary_intervals(
                 session, plan.plant_id, [(meters_a, a_b_start, a_b_end), (meters_b, b_b_start, b_b_end)]
             )
-            unique_post_kwh, double_post = get_unique_boundary_kwh(
+            unique_post_intervals, unique_post_kwh, double_post = get_unique_boundary_intervals(
                 session, plan.plant_id, [(meters_a, a_p_start, a_p_end), (meters_b, b_p_start, b_p_end)]
             )
             double_counted_count = double_base + double_post
-            net_kwh_change = round(unique_post_kwh - unique_base_kwh, 4)
+            # For comparable windows, calculate observed reduction as eligible baseline kWh minus eligible post kWh
+            observed_reduction_kwh = round(unique_base_kwh - unique_post_kwh, 4)
+
+            # Interval-level tariff pricing across the unique intervals
+            base_interval_cost = compute_window_interval_cost(session, plan.plant_id, unique_base_intervals, tariff_factor)
+            post_interval_cost = compute_window_interval_cost(session, plan.plant_id, unique_post_intervals, tariff_factor)
+            observed_avoided_cost_inr = round(base_interval_cost["total_cost_inr"] - post_interval_cost["total_cost_inr"], 2)
+
+            tariffs_approved = (
+                base_interval_cost["all_approved"]
+                and (post_interval_cost["all_approved"] or len(unique_post_intervals) == 0)
+            )
+            tariff_reason = None
+            if not tariffs_approved:
+                reasons = []
+                if not base_interval_cost["all_approved"]:
+                    reasons.append(base_interval_cost.get("approval_status", "Unapproved baseline tariff"))
+                if not post_interval_cost["all_approved"] and len(unique_post_intervals) > 0:
+                    reasons.append(post_interval_cost.get("approval_status", "Unapproved post tariff"))
+                tariff_reason = f"Tariff rate unapproved or missing: {'; '.join(reasons)}"
+
+            # Explicit missing-value handling for restart_minutes: 0 is valid, None is unknown!
+            if post_b.restart_minutes is not None:
+                restart_min = post_b.restart_minutes
+            elif post.restart_minutes is not None:
+                restart_min = post.restart_minutes
+            else:
+                restart_min = None
+
+            # Detect missing restart evidence: post_b has 0 hours, 0 kwh, and restart_min is None
+            missing_restart_evidence = (
+                post_b.operating_hours == 0
+                and post_b.kwh == 0.0
+                and restart_min is None
+            )
 
             dual_boundary_breakdown = {
                 "has_dual_boundary": True,
                 "stoppage_reduction_kwh": stoppage_reduction_kwh,
                 "restart_overhead_kwh": restart_overhead_kwh,
-                "net_reduction_kwh": net_reduction_kwh,
+                "net_reduction_kwh": observed_reduction_kwh,
+                "observed_reduction_kwh": observed_reduction_kwh,
+                "unique_baseline_kwh": unique_base_kwh,
+                "unique_post_kwh": unique_post_kwh,
+                "baseline_cost_inr": base_interval_cost["total_cost_inr"],
+                "post_cost_inr": post_interval_cost["total_cost_inr"],
+                "observed_avoided_cost_inr": observed_avoided_cost_inr,
+                "tariffs_approved": tariffs_approved,
+                "tariff_reason": tariff_reason,
+                "missing_restart_evidence": missing_restart_evidence,
+                "plan_estimates": {
+                    "boundary_a_baseline_kwh": b_a.get("baseline_kwh"),
+                    "boundary_a_post_kwh": b_a.get("post_kwh"),
+                    "boundary_b_baseline_kwh": b_b.get("baseline_kwh"),
+                    "boundary_b_post_kwh": b_b.get("post_kwh"),
+                },
                 "boundary_a_stoppage": {
                     "name": "Boundary A: Stoppage Electricity",
                     "baseline_kwh": base_a_kwh,
@@ -1891,17 +2147,17 @@ def execute_deterministic_comparison(
                     "kwh_change": round(post_b_kwh - base_b_kwh, 4),
                     "baseline_good_units": base_b.good_units,
                     "post_good_units": post_b.good_units,
-                    "restart_minutes": post_b.restart_minutes or post.restart_minutes or 0,
+                    "restart_minutes": restart_min,
                     "restart_overhead_kwh": restart_overhead_kwh,
                     "post_hours": post_b.operating_hours,
                     "description": "Measures restart and subsequent productive-shift performance",
                 },
-                "net_energy_effect_kwh": net_kwh_change,
+                "net_energy_effect_kwh": observed_reduction_kwh,
                 "double_counted_intervals_count": double_counted_count,
                 "accounting_note": "Evaluates Boundary A and B together. Reports net energy effect over approved boundary accounting for extra restart consumption without double-counting intervals.",
             }
-            if post_b and post_b.restart_minutes is not None:
-                post = post.model_copy(update={"restart_minutes": post_b.restart_minutes})
+            if restart_min is not None:
+                post = post.model_copy(update={"restart_minutes": restart_min})
         except Exception as e:
             logger.warning(f"Dual boundary evaluation fallback: {e}")
             dual_boundary_breakdown = None
@@ -2057,17 +2313,34 @@ def execute_deterministic_comparison(
             action=action,
         )
 
+    attribution_status = attribution_calc.get("status") if attribution_calc else "NONE"
     if attribution_calc and attribution_calc["status"] == "ATTRIBUTED":
-        electricity_savings_kwh = attribution_calc["verified_electricity_savings_kwh"]
-        avoided_cost_inr = attribution_calc["estimated_avoided_cost_inr"]
-        monetary_savings_basis = (
-            "APPROVED_CONTRACT_TARIFF" if tariff_factor.get("is_approved")
-            else "ESTIMATED_AVOIDED_COST_VERSIONED_TARIFF"
-        )
-        attribution_method = attribution_calc["attribution_method"]
-        attribution_details = attribution_calc
-        attribution_status_reason = attribution_calc["reason"]
-        has_counterfactual = True
+        # Production protection gate: Breached or unassessable limits deny verified savings
+        if production_protection_status in ("BREACHED", "UNASSESSABLE") or not guardrails_passed:
+            electricity_savings_kwh = None
+            avoided_cost_inr = None
+            attribution_calc["status"] = "UNVERIFIED"
+            attribution_calc["verified_electricity_savings_kwh"] = None
+            attribution_calc["verified_monetary_savings_inr"] = None
+            monetary_savings_basis = "DISQUALIFIED_COMPARISON" if production_protection_status == "BREACHED" else "UNASSESSABLE_GUARDRAILS"
+            attribution_method = attribution_calc["attribution_method"]
+            attribution_details = attribution_calc
+            attribution_status_reason = (
+                f"Production protection failed ({production_protection_status}): verified savings disqualified (null / ₹0). "
+                f"Observed physical difference of {attribution_calc.get('observed_avoided_kwh')} kWh retained."
+            )
+            has_counterfactual = False
+        else:
+            electricity_savings_kwh = attribution_calc["verified_electricity_savings_kwh"]
+            avoided_cost_inr = attribution_calc["estimated_avoided_cost_inr"]
+            monetary_savings_basis = (
+                "APPROVED_CONTRACT_TARIFF" if attribution_calc.get("verified_monetary_savings_inr") is not None
+                else "ESTIMATED_AVOIDED_COST_VERSIONED_TARIFF"
+            )
+            attribution_method = attribution_calc["attribution_method"]
+            attribution_details = attribution_calc
+            attribution_status_reason = attribution_calc["reason"]
+            has_counterfactual = True
     elif attribution_calc:
         electricity_savings_kwh = None
         avoided_cost_inr = None

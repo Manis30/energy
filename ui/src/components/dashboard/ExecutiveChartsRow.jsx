@@ -20,7 +20,7 @@ function EnergyTooltip({ active, payload, label }) {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
-      <div className="custom-chart-tooltip">
+      <div className="custom-chart-tooltip exec-chart-tooltip">
         <div className="tooltip-title">{data.date || label}</div>
         <div className="tooltip-row">
           <span className="tooltip-label">Consumption:</span>
@@ -61,7 +61,7 @@ function ProductionTooltip({ active, payload, label }) {
       (hasNumber(actual) && actual > 0 && hasNumber(reject) ? reject / actual : null);
 
     return (
-      <div className="custom-chart-tooltip">
+      <div className="custom-chart-tooltip exec-chart-tooltip">
         <div className="tooltip-title">{data.date || label}</div>
         <div className="tooltip-row">
           <span className="tooltip-label">Actual Output:</span>
@@ -90,7 +90,7 @@ function ProductionTooltip({ active, payload, label }) {
   return null;
 }
 
-export default function ExecutiveChartsRow({
+export function ExecutiveChartsRow({
   energyTrend = [],
   productionTrend = [],
   energyAvailable = true,
@@ -125,11 +125,11 @@ export default function ExecutiveChartsRow({
       <div className="chart-card executive-chart-card">
         <div className="chart-card-header executive-chart-header">
           <div className="chart-title-wrap">
-            <h3 className="chart-card-title">Daily energy consumption</h3>
+            <h3 className="chart-card-title">Daily Energy Consumption</h3>
           </div>
           <div className="chart-header-right">
             <Link to="/energy-analytics" className="chart-header-action" title="Open Energy Analytics">
-              <span>Energy analytics</span>
+              <span>Energy Analytics</span>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="9 18 15 12 9 6" />
               </svg>
@@ -193,7 +193,7 @@ export default function ExecutiveChartsRow({
       <div className="chart-card executive-chart-card">
         <div className="chart-card-header executive-chart-header">
           <div className="chart-title-wrap">
-            <h3 className="chart-card-title">Daily production output</h3>
+            <h3 className="chart-card-title">Daily Production Output</h3>
           </div>
           <div className="chart-header-right">
             <div className="chart-legend-compact" aria-hidden="true">
@@ -207,7 +207,7 @@ export default function ExecutiveChartsRow({
               </span>
             </div>
             <Link to="/production-analytics" className="chart-header-action" title="Open Production Analytics">
-              <span>Production analytics</span>
+              <span>Production Analytics</span>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="9 18 15 12 9 6" />
               </svg>
@@ -266,3 +266,5 @@ export default function ExecutiveChartsRow({
     </div>
   );
 }
+
+export default ExecutiveChartsRow;

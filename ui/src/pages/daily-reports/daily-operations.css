@@ -20,12 +20,19 @@ body:has(.daily-ops-container) {
   --daily-ops-element-gap: 12px;
 }
 
-/* Page title scoped to Daily Operations: 22px at weight 600 */
+/* Page title scoped to Daily Operations: 18px at weight 600 */
 body:has(.daily-ops-container) .top-header .page-title,
+.route-daily-operations .page-title,
 .daily-ops-container .page-title {
-  font-size: 22px !important;
+  font-size: 18px !important;
   font-weight: 600 !important;
   line-height: 1.25;
+}
+
+body:has(.daily-ops-container) .top-header .system-badge,
+.route-daily-operations .system-badge {
+  font-size: 12px !important;
+  font-weight: 500 !important;
 }
 
 .daily-ops-container,
@@ -42,23 +49,23 @@ body:has(.daily-ops-container) .top-header .page-title,
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 246, 255, 0.92) 100%);
   border: 1px solid var(--border-color, rgba(226, 232, 240, 0.85));
   border-radius: var(--radius-md, 8px);
-  padding: 10px 14px;
+  padding: 8px 12px;
   box-shadow: 0 4px 20px -2px rgba(31, 47, 89, 0.04), 0 2px 6px -1px rgba(0, 0, 0, 0.02);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   box-sizing: border-box;
 }
 
-/* Reporting Controls Row: Single Horizontal Baseline on Desktop with Clean Wrap */
+/* Reporting Controls Row: Single Horizontal Baseline on Desktop Aligned in One Row */
 .daily-ops-controls-row {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  flex-wrap: wrap;
-  gap: 10px; /* 8-12px control gap */
+  flex-wrap: nowrap;
+  gap: 8px;
   width: 100%;
   box-sizing: border-box;
 }
@@ -67,7 +74,7 @@ body:has(.daily-ops-container) .top-header .page-title,
 .daily-ops-control-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0;
   min-width: 0;
   box-sizing: border-box;
 }
@@ -76,10 +83,11 @@ body:has(.daily-ops-container) .top-header .page-title,
   flex: 0 0 auto;
 }
 
-/* Flexible width for plant selector */
+/* Flexible width for plant selector: display full name in single row */
 .daily-ops-plant-item {
-  flex: 1 1 260px;
-  min-width: 220px;
+  flex: 0 1 auto;
+  min-width: 280px;
+  max-width: 440px;
 }
 
 .daily-ops-label {
@@ -99,6 +107,7 @@ body:has(.daily-ops-container) .top-header .page-title,
   align-items: center;
   width: 100%;
   min-width: 0;
+  max-width: none;
 }
 
 /* Consistent Control Heights strictly 36–40px (target 38px) */
@@ -112,7 +121,7 @@ body:has(.daily-ops-container) .top-header .page-title,
   background: #ffffff;
   color: var(--text-primary, #111827);
   font-family: var(--font-family);
-  font-size: 13.5px; /* 13–14px controls */
+  font-size: 13px; /* 13px selected values */
   font-weight: 500;
   outline: none;
   box-sizing: border-box;
@@ -120,7 +129,8 @@ body:has(.daily-ops-container) .top-header .page-title,
 }
 
 .daily-ops-date-item .daily-ops-date-input {
-  width: 155px;
+  width: 130px;
+  padding: 0 0.5rem;
 }
 
 .daily-ops-date-input:hover {
@@ -140,6 +150,8 @@ body:has(.daily-ops-container) .top-header .page-title,
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  width: 100%;
+  max-width: none;
 }
 
 .daily-ops-select-chevron {
@@ -156,24 +168,32 @@ body:has(.daily-ops-container) .top-header .page-title,
   transform: rotate(180deg);
 }
 
-/* Action Button Items */
+/* Action Button Items: Aligned to the far right in a single row */
+.daily-ops-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
 .daily-ops-action-item {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
 }
 
-/* Base button: 38px height, 13–14px font, weight 500 */
+/* Base button: 38px height, 13px font, weight 500 */
 .daily-ops-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
   height: 38px;
-  padding: 0 0.95rem;
+  padding: 0 0.75rem;
   border-radius: var(--radius-sm, 6px);
   font-family: var(--font-family);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   border: 1px solid transparent;
@@ -187,6 +207,7 @@ body:has(.daily-ops-container) .top-header .page-title,
   color: var(--text-primary, #1e293b);
   border-color: var(--border-color, #e2e8f0);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  font-weight: 500;
 }
 
 .daily-ops-btn-secondary:hover:not(:disabled) {
@@ -237,28 +258,29 @@ body:has(.daily-ops-container) .top-header .page-title,
    Responsive Adaptations for Toolbar
    ========================================================================== */
 
-/* Tablet & Medium Screens (<= 1024px): Allow clean wrapping */
-@media (max-width: 1024px) {
-  .daily-ops-controls-row {
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-}
-
 /* Mobile Screens (<= 640px): Stack cleanly */
 @media (max-width: 640px) {
   .daily-ops-header-card {
-    padding: 10px 12px;
+    padding: 8px 10px;
   }
   .daily-ops-controls-row {
     flex-direction: column;
     align-items: stretch;
-    gap: 10px;
+    flex-wrap: wrap;
+    gap: 8px;
   }
   .daily-ops-control-item,
+  .daily-ops-plant-item,
+  .daily-ops-actions-group,
   .daily-ops-action-item {
     width: 100%;
     flex: 1 1 100%;
+    max-width: none;
+    margin-left: 0;
+  }
+  .daily-ops-actions-group {
+    flex-direction: column;
+    gap: 8px;
   }
   .daily-ops-date-item .daily-ops-date-input {
     width: 100%;
@@ -315,7 +337,7 @@ body:has(.daily-ops-container) .top-header .page-title,
 
 .daily-ops-stepper-heading {
   margin: 0;
-  font-size: 17px; /* 16–18px section heading at 600 */
+  font-size: 16px; /* 16px section heading at 600 */
   font-weight: 600;
   color: var(--text-primary);
   display: flex;
@@ -330,7 +352,7 @@ body:has(.daily-ops-container) .top-header .page-title,
 
 .daily-ops-stepper-subheading {
   margin: 0;
-  font-size: 12px; /* 12px metadata label */
+  font-size: 13px; /* 13px description at 400 */
   font-weight: 400;
   color: var(--text-secondary);
 }
@@ -343,7 +365,7 @@ body:has(.daily-ops-container) .top-header .page-title,
 
 .daily-ops-progress-text {
   font-size: 12px; /* 12px metadata label */
-  font-weight: 500;
+  font-weight: 400;
   color: var(--text-secondary);
   display: flex;
   align-items: center;
@@ -351,6 +373,8 @@ body:has(.daily-ops-container) .top-header .page-title,
 }
 
 .daily-ops-progress-text strong {
+  font-size: 12px;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
@@ -500,7 +524,17 @@ body:has(.daily-ops-container) .top-header .page-title,
   color: var(--text-secondary);
 }
 
-/* Slim outline for the selected stage (no heavy shadow or vertical shift) */
+/* Single consistent purple selection indicator tied to the stage displayed in the detail panel */
+.daily-ops-h-step.selected::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  width: 24px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--brand-purple, #7c3aed);
+}
+
 .daily-ops-h-step.selected .daily-ops-h-node {
   outline: 2px solid var(--brand-purple, #7c3aed) !important;
   outline-offset: 2px;
@@ -516,6 +550,11 @@ body:has(.daily-ops-container) .top-header .page-title,
 .daily-ops-h-step.selected .daily-ops-h-index {
   color: var(--brand-purple);
   font-weight: 600;
+}
+
+/* Remove conflicting underline from non-selected stages */
+.daily-ops-h-step.current-step::after {
+  display: none;
 }
 
 /* Horizontal Progress Connector Line: Mathematically Centered through 34px Nodes */
@@ -561,51 +600,38 @@ body:has(.daily-ops-container) .top-header .page-title,
 }
 
 .daily-ops-h-index {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
   margin-bottom: 2px;
 }
 
-/* Equal 2-Line Height for Every Stage Title so all status badges align on the exact same baseline */
+/* Shared 2-Line Height for Stage Title: 13px font with 18px line height, reserving 2 lines (36px) on desktop */
 .daily-ops-h-title {
-  height: 2.5em;
-  min-height: 2.5em;
-  max-height: 2.5em;
-  line-height: 1.25;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  height: 36px;
+  min-height: 36px;
+  max-height: 36px;
+  line-height: 18px;
+  display: block;
   text-align: center;
   font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
+  font-weight: 500;
   max-width: 105px;
-  word-break: break-word;
+  word-break: normal;
   overflow: hidden;
   margin: 0;
   transition: color 0.15s ease;
 }
 
+/* Place status badge 4px below shared title area */
 .daily-ops-h-status-tag {
-  margin-top: 6px;
-  height: 24px;
+  margin-top: 4px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-}
-
-/* Active Pipeline Stage Tag */
-.daily-ops-h-step.current-step::after {
-  content: '';
-  position: absolute;
-  bottom: -4px;
-  width: 16px;
-  height: 3px;
-  border-radius: 999px;
-  background: var(--brand-purple);
+  min-height: 24px;
 }
 
 /* Narrow screens (< 820px): Switch to a compact vertical stepper with same selection behavior */
@@ -743,7 +769,7 @@ body:has(.daily-ops-container) .top-header .page-title,
 
 .daily-ops-detail-title {
   margin: 0;
-  font-size: 17px; /* 16–18px section heading at 600 */
+  font-size: 16px; /* 16px section heading at 600 */
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.01em;
@@ -752,7 +778,7 @@ body:has(.daily-ops-container) .top-header .page-title,
 
 .daily-ops-detail-summary {
   margin: 2px 0 0;
-  font-size: 14px; /* 14px body text at 400 */
+  font-size: 13px; /* 13px body text at 400 */
   font-weight: 400;
   color: var(--text-secondary);
   max-width: 720px;
@@ -808,10 +834,12 @@ body:has(.daily-ops-container) .top-header .page-title,
   to { transform: rotate(360deg); }
 }
 
-/* Badges: Sentence case, 12px metadata and status labels */
+/* Badges: Sentence case, 12px status labels, wrap enabled for multi-word labels */
 .daily-ops-status-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  text-align: center;
   gap: 0.35rem;
   padding: 0.15rem 0.55rem;
   border-radius: 9999px;
@@ -819,7 +847,12 @@ body:has(.daily-ops-container) .top-header .page-title,
   font-weight: 500;
   text-transform: none; /* sentence case */
   letter-spacing: normal;
-  line-height: 1.25;
+  line-height: 1.2;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
+  max-width: 110px;
+  box-sizing: border-box;
 }
 
 .daily-ops-status-badge.completed {
@@ -900,13 +933,14 @@ body:has(.daily-ops-container) .top-header .page-title,
 }
 
 .daily-ops-card-title {
-  font-size: 16px; /* 16–18px section headings at 600 */
+  font-size: 15px; /* 15px card heading at 600 */
   font-weight: 600;
   color: var(--text-primary);
   display: flex;
   align-items: center;
   gap: 6px;
   margin: 0;
+  height: 24px;
 }
 
 /* Desktop Drop Zones: Aim for 96–112px desktop drop zones (104px target) */
@@ -926,6 +960,7 @@ body:has(.daily-ops-container) .top-header .page-title,
   cursor: pointer;
   box-sizing: border-box;
   transition: border-color 0.15s ease, background-color 0.15s ease;
+  flex: 1;
 }
 
 .daily-ops-dropzone:hover {
@@ -947,7 +982,7 @@ body:has(.daily-ops-container) .top-header .page-title,
 }
 
 .daily-ops-dropzone-text {
-  font-size: 13.5px; /* 13–14px controls at 500 */
+  font-size: 14px; /* 14px prompts at 500 */
   font-weight: 500;
   color: var(--text-primary);
   margin: 0;
@@ -955,7 +990,7 @@ body:has(.daily-ops-container) .top-header .page-title,
 }
 
 .daily-ops-dropzone-hint {
-  font-size: 11.5px; /* 12px metadata and format label */
+  font-size: 12px; /* 12px hints at 400 */
   font-weight: 400;
   color: var(--text-muted);
   margin: 2px 0 0 0;
@@ -1003,19 +1038,43 @@ body:has(.daily-ops-container) .top-header .page-title,
 }
 
 .daily-ops-alert-banner {
-  padding: 0.45rem 0.85rem;
+  padding: 8px 12px;
   border-radius: var(--radius-sm, 6px);
-  font-size: 0.78rem;
+  font-size: 13px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
-  line-height: 1.4;
+  line-height: 1.45;
+}
+
+.daily-ops-alert-banner svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.daily-ops-alert-banner span {
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 400;
+}
+
+.daily-ops-alert-banner strong {
+  font-weight: 600;
 }
 
 .daily-ops-alert-banner.info {
-  background: rgba(59, 130, 246, 0.1);
-  color: #1d4ed8;
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: rgba(59, 130, 246, 0.04);
+  color: var(--text-secondary, #475569);
+  border: 1px solid rgba(59, 130, 246, 0.28);
+}
+
+.daily-ops-alert-banner.info svg {
+  color: #2563eb;
+}
+
+.daily-ops-alert-banner.info strong {
+  color: var(--text-primary, #0f172a);
+  font-weight: 600;
 }
 
 .daily-ops-alert-banner.warning {
@@ -1216,9 +1275,17 @@ body:has(.daily-ops-container) .top-header .page-title,
 }
 
 [data-theme="dark"] .daily-ops-alert-banner.info {
-  background: rgba(59, 130, 246, 0.15);
-  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--text-secondary, #94a3b8);
   border-color: rgba(59, 130, 246, 0.3);
+}
+
+[data-theme="dark"] .daily-ops-alert-banner.info svg {
+  color: #60a5fa;
+}
+
+[data-theme="dark"] .daily-ops-alert-banner.info strong {
+  color: #f1f5fd;
 }
 
 [data-theme="dark"] .daily-ops-alert-banner.warning {
@@ -1384,6 +1451,10 @@ body:has(.daily-ops-container) .top-header .page-title,
   color: #c4b5fd;
 }
 
+[data-theme="dark"] .daily-ops-h-step.selected::after {
+  background: var(--brand-purple, #a684ee);
+}
+
 /* ==========================================================================
    Opportunities to Review Section — Compact Layout
    ========================================================================== */
@@ -1402,10 +1473,18 @@ body:has(.daily-ops-container) .top-header .page-title,
 
 .daily-ops-opportunities-header {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.daily-ops-opportunities-top-row {
+  display: flex;
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+  width: 100%;
 }
 
 .daily-ops-opportunities-title-row {
@@ -1416,7 +1495,7 @@ body:has(.daily-ops-container) .top-header .page-title,
 
 .daily-ops-opportunities-title {
   margin: 0;
-  font-size: 17px; /* 16–18px section heading at 600 */
+  font-size: 16px; /* 16px section heading at 600 */
   font-weight: 600;
   color: var(--text-primary);
   line-height: 1.3;
@@ -1431,11 +1510,22 @@ body:has(.daily-ops-container) .top-header .page-title,
 }
 
 .daily-ops-opportunities-subtitle {
-  margin: 3px 0 0 0;
-  font-size: 13.5px; /* Compact body text */
+  margin: 0;
+  font-size: 13px; /* 13px description */
   font-weight: 400;
   color: var(--text-secondary);
   line-height: 1.4;
+  width: 100%;
+}
+
+.daily-ops-opportunities-action {
+  flex-shrink: 0;
+}
+
+.daily-ops-opp-scanning {
+  padding: 16px 0 !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
 }
 
 .daily-ops-opp-grid {

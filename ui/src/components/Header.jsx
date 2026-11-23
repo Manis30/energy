@@ -26,11 +26,19 @@ export default function Header({ theme, onToggleTheme, backendStatus, onToggleSi
   }
 
   const currentTitle = PATH_TITLES[location.pathname] || 'Industrial Energy Intelligence';
+  const isDashboard = location.pathname === '/dashboard';
+  const isDailyOps = location.pathname === '/daily-operations' || location.pathname === '/daily-reports';
+  const isCompactHeader = isDashboard || isDailyOps;
 
   const renderBadge = () => {
+    const badgeStyle = isCompactHeader ? { fontSize: '12px', fontWeight: 500 } : undefined;
     if (!backendStatus || backendStatus.loading) {
       return (
-        <span className="system-badge loading" title="Checking backend connection...">
+        <span
+          className={`system-badge loading ${isCompactHeader ? 'dashboard-badge' : ''}`}
+          style={badgeStyle}
+          title="Checking backend connection..."
+        >
           <span className="badge-dot"></span>
           Connecting to API...
         </span>
@@ -38,22 +46,32 @@ export default function Header({ theme, onToggleTheme, backendStatus, onToggleSi
     }
     if (backendStatus.connected) {
       return (
-        <span className="system-badge connected" title="FastAPI backend connected via proxy">
+        <span
+          className={`system-badge connected ${isCompactHeader ? 'dashboard-badge' : ''}`}
+          style={badgeStyle}
+          title="FastAPI backend connected via proxy"
+        >
           <span className="badge-dot"></span>
           Backend Connected (v{backendStatus.version || '1.0.0'})
         </span>
       );
     }
     return (
-      <span className="system-badge disconnected" title={backendStatus.error || 'FastAPI unavailable'}>
+      <span
+        className={`system-badge disconnected ${isCompactHeader ? 'dashboard-badge' : ''}`}
+        style={badgeStyle}
+        title={backendStatus.error || 'FastAPI unavailable'}
+      >
         <span className="badge-dot"></span>
         Backend Offline
       </span>
     );
   };
 
+  const isConnectorsRoute = location.pathname === '/data-connectors' || location.pathname === '/connectors';
+
   return (
-    <header className="top-header">
+    <header className={`top-header ${isConnectorsRoute ? 'route-data-connectors' : ''} ${isDashboard ? 'route-dashboard' : ''} ${isDailyOps ? 'route-daily-operations' : ''}`}>
       <div className="header-title-section">
         <button
           className="mobile-menu-btn"
@@ -67,7 +85,12 @@ export default function Header({ theme, onToggleTheme, backendStatus, onToggleSi
             <line x1="3" y1="18" x2="21" y2="18"></line>
           </svg>
         </button>
-        <h1 className="page-title">{currentTitle}</h1>
+        <h1
+          className="page-title"
+          style={isCompactHeader ? { fontSize: '18px', fontWeight: 600 } : undefined}
+        >
+          {currentTitle}
+        </h1>
         {renderBadge()}
       </div>
 

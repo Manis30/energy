@@ -253,23 +253,30 @@ def retrieve_occurrence_evidence(
 
     # 8. Build valid citations from confirmed database IDs only
     citations: List[Dict[str, str]] = []
+    retrieval_trace: List[str] = ["retrieve_occurrence_evidence"]
     if occ_id:
         citations.append({"type": "OCCURRENCE", "id": occ_id, "label": f"Occurrence #{occ_id}"})
     else:
         citations.append({"type": "FINDING", "id": clean_id, "label": f"Finding #{clean_id}"})
     if meter_reading_id:
+        retrieval_trace.append("retrieve_energy_reading")
         citations.append({
             "type": "METER_READING",
             "id": meter_reading_id,
             "label": f"Meter Reading {meter_reading_id} ({obs_kwh:.3f} kWh)",
         })
     if production_event_id:
+        retrieval_trace.append("retrieve_production_record")
         dt_citation_label = f"{downtime_min}m downtime" if downtime_min is not None else "downtime unknown"
         citations.append({
             "type": "PRODUCTION",
             "id": str(production_event_id),
             "label": f"Production Record {production_event_id} ({good_units or 0} good units, {dt_citation_label})",
         })
+    if not missing_equipment_data or line_id:
+        retrieval_trace.append("query_machine_topology")
+    if continuous_stoppages_count > 0 or matched_hourly_production_readings_count > 0:
+        retrieval_trace.append("query_reference_stoppage_episodes")
     if source_revision:
         citations.append({
             "type": "REVISION",
@@ -313,35 +320,165 @@ def retrieve_occurrence_evidence(
             "missing_occurrence_records": True if not target_occ else False,
         },
         "citations": citations,
+        "retrieval_trace": retrieval_trace,
     }
 
 
-def validate_citations_in_text(text: str, valid_citations: List[Dict[str, str]]) -> str:
+def validate_citations_in_text(
+    text: str,
+    valid_citations: List[Dict[str, str]],
+    evidence: Optional[Dict[str, Any]] = None,
+) -> str:
     """
-    Validate and clean citation references in text: [type:id].
-    Preserves exact matches to confirmed database record IDs.
-    Strips ungrounded references. An invented claim (e.g. [reading:invented])
-    must NEVER acquire a real database citation.
+    Validate and clean citation references and factual statements in text: [type:id].
+    Enforces strict AI grounding and semantic fidelity:
+    1. Validates citation IDs and types against confirmed database records.
+    2. Validates numerical claims (value, unit, plant, time window).
+    3. Rejects real citations attached to false numbers (e.g. claiming "saved 999 kWh [reading:MR-101]"
+       when the reading is 40.0 kWh).
+    4. Rejects claims that use the correct number and real citation but give it the WRONG MEANING:
+       A meter reading of 74.391 kWh supports "consumed 74.391 kWh"; claiming "saved 74.391 kWh"
+       gives gross consumption the wrong meaning without an eligible baseline comparison.
+       Replaces the wrong meaning with the supported factual meaning ("consumed/observed") or rejects the citation.
+    5. Rejects or corrects citations applied to the wrong plant or wrong time window.
+    6. Strips ungrounded or invented citations entirely.
     """
     valid_ids_map = {c["id"]: c for c in valid_citations}
 
-    pattern = re.compile(r"\[(reading|production|occurrence|revision|citation|finding):([^\]]+)\]", re.IGNORECASE)
+    # Extract supported ground-truth numbers and facts
+    supported_kwh_values: List[float] = []
+    supported_plant = (evidence.get("plant_id") if evidence else None) or "IN-TN-01"
+    supported_window = evidence.get("local_time_window") if evidence else None
+    obs_kwh_val = float(evidence["observed_value"]) if (evidence and evidence.get("observed_value") is not None) else None
 
-    def _replace_match(match: re.Match) -> str:
-        ctype = match.group(1).lower()
-        cid = match.group(2).strip()
-        if cid in valid_ids_map:
-            valid_record = valid_ids_map[cid]
-            rec_type = valid_record.get("type", "").lower()
-            if (ctype == "reading" and rec_type == "meter_reading") or (ctype == rec_type):
-                return f"[{ctype}:{cid}]"
-        # Never map an ungrounded or invented ID to a real database citation!
-        return ""
+    if obs_kwh_val is not None:
+        supported_kwh_values.append(obs_kwh_val)
+    if evidence and evidence.get("historical_mean_kwh") is not None:
+        supported_kwh_values.append(float(evidence["historical_mean_kwh"]))
 
-    cleaned = pattern.sub(_replace_match, text)
-    cleaned = re.sub(r" +", " ", cleaned)
-    cleaned = re.sub(r" \.", ".", cleaned)
-    return cleaned.strip()
+    # Also parse values embedded in citation labels (e.g. "(74.391 kWh)")
+    for c in valid_citations:
+        lbl = c.get("label", "")
+        m_kwh = re.search(r"([\d\.]+)\s*kWh", lbl, re.IGNORECASE)
+        if m_kwh:
+            try:
+                supported_kwh_values.append(float(m_kwh.group(1)))
+            except ValueError:
+                pass
+
+    # Split text into sentences/statements while preserving delimiters
+    sentence_tokens = re.split(r"([.!?]+(?:\s+|$))", text)
+    processed_sentences: List[str] = []
+
+    citation_pattern = re.compile(
+        r"\[(reading|production|occurrence|revision|citation|finding):([^\]]+)\]",
+        re.IGNORECASE,
+    )
+
+    for idx in range(0, len(sentence_tokens), 2):
+        sentence = sentence_tokens[idx]
+        punct = sentence_tokens[idx + 1] if idx + 1 < len(sentence_tokens) else ""
+        if not sentence.strip():
+            processed_sentences.append(sentence + punct)
+            continue
+
+        # Look for citations in this sentence
+        citations_in_sentence = citation_pattern.findall(sentence)
+
+        # Check for false numerical claims in the sentence
+        kwh_claims = re.findall(r"([+-]?\d+(?:\.\d+)?)\s*kWh", sentence, re.IGNORECASE)
+        has_false_kwh = False
+        if kwh_claims and supported_kwh_values:
+            for claim_str in kwh_claims:
+                try:
+                    val = float(claim_str)
+                    if not any(abs(val - sup) < 0.05 for sup in supported_kwh_values):
+                        has_false_kwh = True
+                        break
+                except ValueError:
+                    pass
+
+        # Check for wrong meaning: meter reading measuring consumption cited as 'saved' or 'reduction'
+        # e.g., "Saved 74.391 kWh [reading:ID]" or "74.391 kWh was saved [reading:ID]"
+        has_wrong_meaning = False
+        has_reading_citation = any(c[0].lower() == "reading" for c in citations_in_sentence)
+        if has_reading_citation and not has_false_kwh:
+            if re.search(r"\b(?:saved|savings|avoided|reduction)\b", sentence, re.IGNORECASE):
+                has_wrong_meaning = True
+
+        # Check for wrong plant citation
+        has_wrong_plant = False
+        plant_match = re.search(r"\b(IN-[A-Z]{2}-\d{2})\b", sentence)
+        if plant_match and supported_plant:
+            if plant_match.group(1).upper() != supported_plant.upper():
+                has_wrong_plant = True
+
+        # Check for wrong period citation
+        has_wrong_period = False
+        period_match = re.search(r"\b(\d{1,2}:\d{2}\s*[-–to]+\s*\d{1,2}:\d{2})\b", sentence)
+        if period_match and supported_window:
+            norm_period = re.sub(r"\s+", "", period_match.group(1).replace("to", "–"))
+            norm_supp = re.sub(r"\s+", "", supported_window.replace("to", "–"))
+            if norm_period != norm_supp:
+                has_wrong_period = True
+
+        # Handle false number: reject citation and drop the unsupported statement completely
+        if has_false_kwh:
+            continue
+
+        # Handle wrong meaning: convert 'saved' on a meter reading to supported factual consumption
+        if has_wrong_meaning and citations_in_sentence:
+            # Replace 'saved' with 'consumed' or 'observed draw of'
+            sentence = re.sub(r"\b[Ss]aved\b", "Consumed", sentence)
+            sentence = re.sub(r"\b[Ss]avings of\b", "consumption of", sentence)
+            sentence = re.sub(r"\b[Nn]et reduction of\b", "observed draw of", sentence)
+        elif has_wrong_meaning:
+            # Unsupported savings claim without grounded comparison: drop statement
+            continue
+
+        # Handle wrong plant: regenerate sentence using supported plant from database, or drop unsupported claim
+        if has_wrong_plant:
+            if supported_plant:
+                sentence = re.sub(r"\bIN-[A-Z]{2}-\d{2}\b", supported_plant, sentence)
+            else:
+                continue
+
+        # Handle wrong period: regenerate sentence using supported window from database, or drop unsupported claim
+        if has_wrong_period:
+            if supported_window:
+                sentence = re.sub(r"\b\d{1,2}:\d{2}\s*[-–to]+\s*\d{1,2}:\d{2}\b", supported_window, sentence)
+            else:
+                continue
+
+        # Validate citation references
+        def _replace_match(match: re.Match) -> str:
+            ctype = match.group(1).lower()
+            cid = match.group(2).strip()
+            if cid in valid_ids_map:
+                valid_record = valid_ids_map[cid]
+                rec_type = valid_record.get("type", "").lower()
+                # Disallow reading citations on false numbers
+                if has_false_kwh and (ctype == "reading" or rec_type == "meter_reading"):
+                    return ""
+                if (ctype == "reading" and rec_type == "meter_reading") or (ctype == rec_type):
+                    return f"[{ctype}:{cid}]"
+            return ""
+
+        cleaned_sentence = citation_pattern.sub(_replace_match, sentence)
+
+        # Enforce plant consistency if plant is mentioned
+        if supported_plant:
+            cleaned_sentence = re.sub(r"plant\s+IN-[A-Z]{2}-\d{2}", f"plant {supported_plant}", cleaned_sentence, flags=re.IGNORECASE)
+
+        cleaned_sentence = re.sub(r" +", " ", cleaned_sentence)
+        cleaned_sentence = re.sub(r" \.", ".", cleaned_sentence)
+        if cleaned_sentence.strip():
+            processed_sentences.append(cleaned_sentence + punct)
+
+    result = "".join(processed_sentences).strip()
+    result = re.sub(r"\s+", " ", result)
+    result = re.sub(r" \.", ".", result)
+    return result.strip()
 
 
 def parse_four_sections(text: str) -> Dict[str, str]:
@@ -530,12 +667,19 @@ def investigate_finding_with_ai(
     occ_id = evidence["occurrence_id"]
     correlation_id = f"corr-inv-{hashlib.sha256((clean_id + str(occ_id or '')).encode()).hexdigest()[:12]}"
 
+    retrieval_tools = list(evidence.get("retrieval_trace") or ["retrieve_occurrence_evidence"])
+
     agent_trace: Dict[str, Any] = {
         "provider": "Domo AI Services",
         "correlation_id": correlation_id,
         "workflow_step": "INVESTIGATE_FINDING",
         "model": "offline",
-        "tools_called": ["retrieve_occurrence_evidence", "get_comparable_stoppage_episodes", "get_equipment_topology"],
+        "backend_database_retrievals": retrieval_tools,
+        "model_invoked_tools": [],
+        "model_generation": "OFFLINE_FALLBACK",
+        "model_execution": "RULE_BASED_FALLBACK",
+        "inference_source": "RULE_BASED_FALLBACK",
+        "tools_called": retrieval_tools + ["rule_based_synthesis_fallback"],
         "status": "FALLBACK_APPLIED",
     }
     parsed_sections: Dict[str, str] = {}
@@ -609,7 +753,7 @@ def investigate_finding_with_ai(
             # Verify that all 4 sections were populated
             if all(parsed.values()):
                 parsed_sections = {
-                    k: validate_citations_in_text(v, citations)
+                    k: validate_citations_in_text(v, citations, evidence)
                     for k, v in parsed.items()
                 }
                 ai_success = True
@@ -619,7 +763,11 @@ def investigate_finding_with_ai(
                     "correlation_id": correlation_id,
                     "workflow_step": "INVESTIGATE_FINDING",
                     "model": target_model,
-                    "tools_called": ["retrieve_occurrence_evidence", "get_comparable_stoppage_episodes", "get_equipment_topology"],
+                    "backend_database_retrievals": retrieval_tools,
+                    "model_invoked_tools": [],
+                    "model_generation": "SUCCESSFUL_MODEL_GENERATION",
+                    "inference_source": "DOMO_AI_MODEL",
+                    "tools_called": retrieval_tools + ["live_model_generation"],
                     "status": "COMPLETED",
                     "usage": gen_resp.usage,
                 }
@@ -631,7 +779,7 @@ def investigate_finding_with_ai(
     if not ai_success or not parsed_sections:
         parsed_sections = _synthesize_rule_based_investigation(evidence)
         for k in parsed_sections:
-            parsed_sections[k] = validate_citations_in_text(parsed_sections[k], citations)
+            parsed_sections[k] = validate_citations_in_text(parsed_sections[k], citations, evidence)
 
     return {
         "finding_id": evidence["finding_id"],
@@ -803,12 +951,20 @@ def explain_assessment_with_ai(
             f"strictly null / ₹0 when production protection fails."
         )
     elif verified_kwh is not None and verified_kwh > 0:
-        q3_ans = f"{verified_kwh:.4f} kWh (₹{verified_cost or (verified_kwh * tariff_val):.2f})"
-        q3_text = (
-            f"Trial verified a net reduction of {verified_kwh:.4f} kWh after accounting for "
-            f"{restart_overhead or 0.0:.4f} kWh extra restart electricity. Valued at ₹{tariff_val:.2f}/kWh "
-            f"under approved contract tariff ({asm.common_rate_factor_version or 'DEFAULT'})."
-        )
+        if verified_cost is not None:
+            q3_ans = f"{verified_kwh:.4f} kWh (₹{verified_cost:.2f})"
+            q3_text = (
+                f"Trial verified a net reduction of {verified_kwh:.4f} kWh after accounting for "
+                f"{restart_overhead or 0.0:.4f} kWh extra restart electricity. Valued at ₹{tariff_val:.2f}/kWh "
+                f"under approved contract tariff ({asm.common_rate_factor_version or 'DEFAULT'})."
+            )
+        else:
+            q3_ans = f"{verified_kwh:.4f} kWh (Monetary savings unverified: tariff pending contract approval)"
+            q3_text = (
+                f"Trial verified a net reduction of {verified_kwh:.4f} kWh after accounting for "
+                f"{restart_overhead or 0.0:.4f} kWh extra restart electricity. Monetary savings remain unverified "
+                f"(₹0 ledger contribution) pending an approved contract tariff."
+            )
     else:
         q3_ans = "NONE"
         q3_text = (
@@ -841,11 +997,14 @@ def explain_assessment_with_ai(
         "signed_off_at": asm.signed_off_at.isoformat() if asm.signed_off_at else None,
     }
 
-    overall_verdict = (
-        "Verified Factory Energy Saving"
-        if is_mon_elig
-        else ("Production Limit Breached — Savings Disqualified" if prod_status == "BREACHED" else "Assessment Complete — Attribution Unverified")
-    )
+    if is_mon_elig:
+        overall_verdict = "Verified Factory Energy Saving"
+    elif is_kwh_elig:
+        overall_verdict = "Verified Physical Energy Saving (Monetary Unverified)"
+    elif prod_status == "BREACHED":
+        overall_verdict = "Production Limit Breached — Savings Disqualified"
+    else:
+        overall_verdict = "Assessment Complete — Attribution Unverified"
 
     citations = [
         {"type": "PLAN", "id": asm.plan_id, "label": f"Measurement Plan {asm.plan_id} (v{asm.plan_version})"},
@@ -870,8 +1029,23 @@ def explain_assessment_with_ai(
         "question_1_cost_intensity": q1_summary,
         "question_2_production_protection": q2_summary,
         "question_3_attribution": q3_summary,
+        "question_3_attributable_savings": q3_summary,
         "dual_boundary_summary": dual_boundary_summary,
         "ledger_eligibility": ledger_elig,
         "narrative_explanation": narrative,
         "citations": citations,
+        "agent_execution_trace": {
+            "provider": "IndustrialEnergyAgent",
+            "correlation_id": f"corr-asm-{hashlib.sha256(clean_id.encode()).hexdigest()[:12]}",
+            "workflow_step": "EXPLAIN_ASSESSMENT",
+            "model": "offline",
+            "tools_called": [
+                "retrieve_assessment_record",
+                "retrieve_measurement_plan",
+                "resolve_contract_tariffs",
+                "evaluate_production_guardrails",
+                "evaluate_ledger_eligibility",
+            ],
+            "status": "COMPLETED",
+        },
     }

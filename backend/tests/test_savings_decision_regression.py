@@ -49,6 +49,7 @@ from app.schemas.interventions import (
     RequestAssessmentRequest,
 )
 from app.services.intervention_comparison_service import (
+    calculate_dual_boundary_attribution,
     calculate_repeated_stoppages_attribution,
     compute_window_interval_cost,
     evaluate_guardrails,
@@ -118,6 +119,34 @@ class TestSavingsDecisionRegression(unittest.TestCase):
     def tearDown(self):
         self.session.close()
         Base.metadata.drop_all(self.engine)
+
+    def _make_assessment(self, **kwargs):
+        defaults = {
+            "baseline_kwh": 100.0,
+            "post_kwh": 68.0,
+            "baseline_cost_inr": 825.0,
+            "post_cost_inr": 561.0,
+            "baseline_actual_units": 150,
+            "baseline_good_units": 150,
+            "baseline_reject_units": 0,
+            "baseline_downtime_min": 0,
+            "baseline_operating_hours": 2,
+            "baseline_coverage_pct": 100.0,
+            "post_actual_units": 150,
+            "post_good_units": 145,
+            "post_reject_units": 5,
+            "post_downtime_min": 10,
+            "post_operating_hours": 2,
+            "post_coverage_pct": 100.0,
+            "monetary_savings_basis": "APPROVED_CONTRACT_TARIFF",
+            "savings_claim_status": "PENDING_REVIEW",
+            "savings_claim_description": "Default test claim description",
+            "status_reason": "Default test status reason",
+        }
+        for k, v in defaults.items():
+            if k not in kwargs:
+                kwargs[k] = v
+        return InterventionAssessment(**kwargs)
 
     def test_p0_defect_1_high_uncertainty_inconclusive(self):
         """
@@ -455,7 +484,7 @@ class TestSavingsDecisionRegression(unittest.TestCase):
         action.measurement_plan_id = plan.plan_id
 
         # Inconclusive assessment with null savings
-        asm = InterventionAssessment(
+        asm = self._make_assessment(
             assessment_id="ASM-SIGNOFF-TEST",
             action_id=action.action_id,
             plan_id=plan.plan_id,
@@ -631,6 +660,838 @@ class TestSavingsDecisionRegression(unittest.TestCase):
         self.assertEqual(calc["approval_status"], "UNAPPROVED_OR_MISSING_TARIFF")
         self.assertEqual(len(calc["unapproved_intervals"]), 1)
         self.assertEqual(calc["unapproved_intervals"][0]["factor_id"], "FA-TAR-KA-V2-EST")
+
+    def test_acceptance_case_1_stoppage_40kwh_restart_8kwh_net_32kwh_264inr(self):
+        """
+        Acceptance Case 1:
+        Stoppage saves 40 kWh and restart consumes 8 extra kWh. Observed reduction is 32 kWh.
+        An eligible signed trial at ₹8.25/kWh records ₹264.
+        """
+        from app.services.intervention_comparison_service import calculate_dual_boundary_attribution
+
+        attr = calculate_dual_boundary_attribution(
+            stoppage_reduction_kwh=40.0,
+            restart_overhead_kwh=8.0,
+            reference_pool_count=10,
+            baseline_cv_pct=15.0,
+            uncertainty_pct=5.0,
+            is_signed_off=True,
+            tariffs_approved=True,
+            common_rate_factor=8.25,
+            has_implementation_timestamp=True,
+            is_retrospective_plan=False,
+            production_limits_breached=False,
+            unassessable_guardrails=False,
+            missing_restart_evidence=False,
+        )
+
+        self.assertEqual(attr["stoppage_reduction_kwh"], 40.0)
+        self.assertEqual(attr["restart_overhead_kwh"], 8.0)
+        self.assertEqual(attr["net_reduction_kwh"], 32.0)
+        self.assertEqual(attr["observed_avoided_kwh"], 32.0)
+        self.assertEqual(attr["status"], "ATTRIBUTED")
+        self.assertEqual(attr["verified_electricity_savings_kwh"], 32.0)
+        self.assertEqual(attr["verified_monetary_savings_inr"], 264.0)
+
+    def test_acceptance_case_2_dual_boundary_interval_pricing_differing_rates(self):
+        """
+        Acceptance Case 2:
+        The same 40 kWh is saved at ₹6/kWh (= ₹240) and the extra 8 kWh costs ₹12/kWh (= ₹96).
+        The net result is 32 kWh and ₹144.
+        """
+        from app.services.intervention_comparison_service import calculate_dual_boundary_attribution
+
+        # 40 kWh saved at ₹6/kWh = ₹240.00 avoided
+        # 8 kWh restart consumed at ₹12/kWh = ₹96.00 extra cost
+        # Net avoided cost = 240 - 96 = ₹144.00
+        net_avoided_cost = 240.0 - 96.0
+
+        attr = calculate_dual_boundary_attribution(
+            stoppage_reduction_kwh=40.0,
+            restart_overhead_kwh=8.0,
+            observed_avoided_cost_inr=net_avoided_cost,
+            reference_pool_count=8,
+            baseline_cv_pct=12.0,
+            uncertainty_pct=4.0,
+            is_signed_off=True,
+            tariffs_approved=True,
+            common_rate_factor=8.25,
+            has_implementation_timestamp=True,
+            is_retrospective_plan=False,
+            production_limits_breached=False,
+            unassessable_guardrails=False,
+            missing_restart_evidence=False,
+        )
+
+        self.assertEqual(attr["net_reduction_kwh"], 32.0)
+        self.assertEqual(attr["observed_avoided_cost_inr"], 144.0)
+        self.assertEqual(attr["verified_electricity_savings_kwh"], 32.0)
+        self.assertEqual(attr["verified_monetary_savings_inr"], 144.0)
+        self.assertEqual(attr["status"], "ATTRIBUTED")
+
+    def test_acceptance_case_3_negative_stoppage_positive_restart_signs_preserved(self):
+        """
+        Acceptance Case 3:
+        Stoppage consumes 10 extra kWh (stoppage reduction = -10 kWh) and restart
+        saves 20 kWh (restart overhead = -20 kWh).
+        Observed reduction is (-10) - (-20) = 10 kWh.
+        Signs are preserved without arbitrary clipping.
+        """
+        from app.services.intervention_comparison_service import calculate_dual_boundary_attribution
+
+        attr = calculate_dual_boundary_attribution(
+            stoppage_reduction_kwh=-10.0,
+            restart_overhead_kwh=-20.0,
+            reference_pool_count=12,
+            baseline_cv_pct=18.0,
+            uncertainty_pct=6.0,
+            is_signed_off=True,
+            tariffs_approved=True,
+            common_rate_factor=8.25,
+            has_implementation_timestamp=True,
+            is_retrospective_plan=False,
+            production_limits_breached=False,
+            unassessable_guardrails=False,
+            missing_restart_evidence=False,
+        )
+
+        self.assertEqual(attr["stoppage_reduction_kwh"], -10.0)
+        self.assertEqual(attr["restart_overhead_kwh"], -20.0)
+        self.assertEqual(attr["net_reduction_kwh"], 10.0)
+        self.assertEqual(attr["observed_avoided_kwh"], 10.0)
+        self.assertEqual(attr["status"], "ATTRIBUTED")
+        self.assertEqual(attr["verified_electricity_savings_kwh"], 10.0)
+        self.assertEqual(attr["verified_monetary_savings_inr"], 82.50)
+
+    def test_acceptance_case_4_overlapping_windows_and_distinct_physical_meters(self):
+        """
+        Acceptance Case 4:
+        Overlapping windows count each physical meter interval once.
+        Different physical meters remain distinct.
+        """
+        from app.services.intervention_comparison_service import get_unique_boundary_intervals
+
+        # Boundary A and Boundary B share meter MTR-01 at 10:00 (overlap)
+        # Boundary B also has distinct meter MTR-02 at 10:00
+        intervals_a = [
+            {"meter_id": "MTR-01", "timestamp": "2026-11-10T10:00:00", "kwh": 15.0},
+            {"meter_id": "MTR-01", "timestamp": "2026-11-10T11:00:00", "kwh": 20.0},
+        ]
+        intervals_b = [
+            # Duplicate of (MTR-01, 10:00) with same or overlapping window
+            {"meter_id": "MTR-01", "timestamp": "2026-11-10T10:00:00", "kwh": 15.0},
+            # Distinct physical meter at same timestamp
+            {"meter_id": "MTR-02", "timestamp": "2026-11-10T10:00:00", "kwh": 12.0},
+            {"meter_id": "MTR-02", "timestamp": "2026-11-10T11:00:00", "kwh": 14.0},
+        ]
+
+        unique_intervals, total_kwh, double_counted = get_unique_boundary_intervals(intervals_a, intervals_b)
+
+        # MTR-01 10:00 counted once (15.0) + MTR-01 11:00 (20.0) + MTR-02 10:00 (12.0) + MTR-02 11:00 (14.0) = 61.0 kWh
+        self.assertEqual(len(unique_intervals), 4)
+        self.assertEqual(total_kwh, 61.0)
+        self.assertEqual(double_counted, 1)
+
+        # Confirm distinct physical meters are both retained
+        meters_present = {item["meter_id"] for item in unique_intervals}
+        self.assertEqual(meters_present, {"MTR-01", "MTR-02"})
+
+    def test_acceptance_case_5_unverified_disqualification_and_zero_ledger(self):
+        """
+        Acceptance Case 5:
+        Missing restart evidence, a production breach, a retrospective plan,
+        absent implementation or excessive uncertainty adds zero verified savings to the ledger.
+        """
+        from app.services.intervention_comparison_service import calculate_dual_boundary_attribution
+
+        # 5a: Missing restart evidence (unknown restart)
+        attr_missing_restart = calculate_dual_boundary_attribution(
+            stoppage_reduction_kwh=40.0,
+            restart_overhead_kwh=8.0,
+            missing_restart_evidence=True,
+            is_signed_off=True,
+            tariffs_approved=True,
+        )
+        self.assertEqual(attr_missing_restart["status"], "UNVERIFIED")
+        self.assertIsNone(attr_missing_restart["verified_electricity_savings_kwh"])
+        self.assertIsNone(attr_missing_restart["verified_monetary_savings_inr"])
+        self.assertEqual(attr_missing_restart["observed_avoided_kwh"], 32.0)
+
+        # 5b: Production breach
+        attr_breached = calculate_dual_boundary_attribution(
+            stoppage_reduction_kwh=40.0,
+            restart_overhead_kwh=8.0,
+            production_limits_breached=True,
+            is_signed_off=True,
+            tariffs_approved=True,
+        )
+        self.assertEqual(attr_breached["status"], "UNVERIFIED")
+        self.assertIsNone(attr_breached["verified_electricity_savings_kwh"])
+        self.assertIsNone(attr_breached["verified_monetary_savings_inr"])
+
+        # 5c: Retrospective plan
+        attr_retrospective = calculate_dual_boundary_attribution(
+            stoppage_reduction_kwh=40.0,
+            restart_overhead_kwh=8.0,
+            is_retrospective_plan=True,
+            is_signed_off=True,
+            tariffs_approved=True,
+        )
+        self.assertEqual(attr_retrospective["status"], "UNVERIFIED")
+        self.assertIsNone(attr_retrospective["verified_electricity_savings_kwh"])
+        self.assertIsNone(attr_retrospective["verified_monetary_savings_inr"])
+
+        # 5d: Absent implementation timestamp
+        attr_no_impl = calculate_dual_boundary_attribution(
+            stoppage_reduction_kwh=40.0,
+            restart_overhead_kwh=8.0,
+            has_implementation_timestamp=False,
+            is_signed_off=True,
+            tariffs_approved=True,
+        )
+        self.assertEqual(attr_no_impl["status"], "UNVERIFIED")
+        self.assertIsNone(attr_no_impl["verified_electricity_savings_kwh"])
+
+        # 5e: Excessive baseline uncertainty (CV > 50%)
+        attr_uncertain = calculate_dual_boundary_attribution(
+            stoppage_reduction_kwh=40.0,
+            restart_overhead_kwh=8.0,
+            baseline_cv_pct=85.0,
+            is_signed_off=True,
+            tariffs_approved=True,
+        )
+        self.assertEqual(attr_uncertain["status"], "INCONCLUSIVE_HIGH_UNCERTAINTY")
+        self.assertIsNone(attr_uncertain["verified_electricity_savings_kwh"])
+
+    def test_acceptance_repeated_signoff_deduplication_in_ledger(self):
+        """
+        Repeated sign-off on the same action/assessment counts once in ledger totals.
+        """
+        # Create an assessment with verified savings
+        asm1 = self._make_assessment(
+            assessment_id="ASM-DEDUP-001",
+            action_id="ACT-DEDUP-001",
+            plan_id="PLN-DEDUP-001",
+            plan_version=1,
+            assessment_revision=1,
+            objective_outcome="IMPROVED",
+            cost_intensity_change_pct=Decimal("-15.0"),
+            electricity_savings_kwh=Decimal("32.0"),
+            avoided_cost_inr=Decimal("264.0"),
+            verified_monetary_savings_inr=Decimal("264.0"),
+            common_rate_factor_inr_per_kwh=Decimal("8.25"),
+            common_rate_factor_version="TARIFF-TN-HT2A-2026-V1",
+            savings_claim_status="VERIFIED",
+            signed_off_by="lead_auditor",
+            signed_off_at=datetime.utcnow(),
+            output_guardrail_met=True,
+            quality_guardrail_met=True,
+            downtime_guardrail_met=True,
+            guardrails_summary_json=json.dumps([{"metric": "OUTPUT", "status": "PASSED", "passed": True}]),
+        )
+        # Second revision / repeat entry for the SAME action_id
+        asm2 = self._make_assessment(
+            assessment_id="ASM-DEDUP-002",
+            action_id="ACT-DEDUP-001",
+            plan_id="PLN-DEDUP-001",
+            plan_version=1,
+            assessment_revision=2,
+            objective_outcome="IMPROVED",
+            cost_intensity_change_pct=Decimal("-15.0"),
+            electricity_savings_kwh=Decimal("32.0"),
+            avoided_cost_inr=Decimal("264.0"),
+            verified_monetary_savings_inr=Decimal("264.0"),
+            common_rate_factor_inr_per_kwh=Decimal("8.25"),
+            common_rate_factor_version="TARIFF-TN-HT2A-2026-V1",
+            savings_claim_status="VERIFIED",
+            signed_off_by="lead_auditor",
+            signed_off_at=datetime.utcnow(),
+            output_guardrail_met=True,
+            quality_guardrail_met=True,
+            downtime_guardrail_met=True,
+            guardrails_summary_json=json.dumps([{"metric": "OUTPUT", "status": "PASSED", "passed": True}]),
+        )
+        self.session.add_all([asm1, asm2])
+        self.session.commit()
+
+        ledger = list_savings_ledger(self.session)
+
+        # Repeated sign-offs on ACT-DEDUP-001 must count ONCE in totals
+        # verified_count should count distinct actions (1), not 2
+        # total_verified_avoided_kwh should be 32.0, not 64.0
+        # total_verified_monetary_savings_inr should be 264.0, not 528.0
+        self.assertEqual(ledger.verified_count, 1)
+        self.assertEqual(ledger.total_verified_avoided_kwh, 32.0)
+        self.assertEqual(ledger.total_verified_monetary_savings_inr, 264.0)
+
+    def test_approval_after_implementation_denies_verification(self):
+        """
+        Regression Check (Point 1): Approval order verification.
+        All flags look valid (is_frozen=True, is_retrospective=False, action.implemented_at present),
+        but approval happened AFTER implementation (approved_at: 11:00 vs implemented_at: 10:00).
+        Sign-off must set savings_claim_status = NOT_VERIFIED, verified_monetary_savings_inr = None,
+        and ledger totals must remain 0.
+        """
+        act = CorrectiveAction(
+            action_id="ACT-TIMING-001",
+            recommendation_id="REC-TIMING-001",
+            plant_id=self.plant_id,
+            title="Non-prospective Timing Test Action",
+            description="Testing approval sequence enforcement",
+            status="IN_PROGRESS",
+            implemented_at=datetime(2026, 11, 4, 10, 0, 0),
+            implemented_by="technician_01",
+        )
+        plan = InterventionPlan(
+            plan_id="PLN-TIMING-001",
+            action_id=act.action_id,
+            version=1,
+            is_frozen=True,
+            is_retrospective=False,
+            intended_change="Reduce standby wattage",
+            implementation_owner="lead_engineer",
+            plant_id=self.plant_id,
+            process_or_line="FAL-L2",
+            eligible_meters_json=json.dumps(["MTR-FAL"]),
+            production_denominator="GOOD_UNITS",
+            production_unit="units",
+            baseline_start=datetime(2026, 11, 1, 0, 0, 0),
+            baseline_end=datetime(2026, 11, 2, 0, 0, 0),
+            post_start=datetime(2026, 11, 4, 10, 0, 0),
+            post_end=datetime(2026, 11, 4, 14, 0, 0),
+            min_coverage_pct=95.0,
+            success_criterion="COST_PER_GOOD_UNIT",
+            approved_by="plant_manager",
+            approved_at=datetime(2026, 11, 4, 11, 0, 0),  # 1 hour AFTER implementation!
+        )
+        asm = self._make_assessment(
+            assessment_id="ASM-TIMING-001",
+            action_id=act.action_id,
+            plan_id=plan.plan_id,
+            plan_version=1,
+            assessment_revision=1,
+            objective_outcome="IMPROVED",
+            cost_intensity_change_pct=Decimal("-12.5"),
+            electricity_savings_kwh=Decimal("32.0"),
+            avoided_cost_inr=Decimal("264.0"),
+            monetary_savings_basis="APPROVED_CONTRACT_TARIFF",
+            savings_claim_status="PENDING_REVIEW",
+            output_guardrail_met=True,
+            quality_guardrail_met=True,
+            downtime_guardrail_met=True,
+            guardrails_summary_json=json.dumps([{"metric": "OUTPUT", "status": "PASSED", "passed": True}]),
+        )
+        self.session.add_all([act, plan, asm])
+        self.session.commit()
+
+        sign_off_req = AssessmentSignOffRequest(
+            decision="APPROVED_VERIFIED",
+            reviewer="Plant Manager",
+            notes="Attempting sign-off on non-prospective action",
+        )
+        signed = sign_off_assessment(
+            session=self.session,
+            assessment_id=asm.assessment_id,
+            req=sign_off_req,
+            auth_caller={
+                "is_authenticated": True,
+                "operational_auth_available": True,
+                "user_id": "mgr_plant",
+                "role": "PLANT_MANAGER",
+                "plant_scope": self.plant_id,
+            },
+        )
+
+        self.assertEqual(signed.savings_claim_status, "NOT_VERIFIED")
+        self.assertIsNone(signed.verified_electricity_savings_kwh)
+        self.assertIsNone(signed.verified_monetary_savings_inr)
+        self.assertIn("Non-prospective timing", signed.status_reason)
+        self.assertIn("did not precede", signed.status_reason)
+
+        # Neither ledger total increases
+        ledger = list_savings_ledger(self.session, plant_id=self.plant_id)
+        self.assertEqual(ledger.total_verified_avoided_kwh, 0.0)
+        self.assertEqual(ledger.total_verified_monetary_savings_inr, 0.0)
+
+    def test_approval_at_same_recorded_time_without_audit_trail_denies_verification(self):
+        """
+        Regression Check (Point 2): Equal recorded timestamps without audit trail evidence.
+        approved_at == implemented_at == 10:00:00.
+        Without an audit event establishing that the plan was frozen before implementation,
+        the claim must remain NOT_VERIFIED, both verified kWh and verified INR must be null,
+        and neither ledger total increases.
+        """
+        same_time = datetime(2026, 11, 4, 10, 0, 0)
+        act = CorrectiveAction(
+            action_id="ACT-SAME-NOAUDIT-01",
+            recommendation_id="REC-SAME-01",
+            plant_id=self.plant_id,
+            title="Same timestamp without audit trail",
+            description="Testing unverified sequence on equal timestamps",
+            status="IN_PROGRESS",
+            implemented_at=same_time,
+            implemented_by="technician_01",
+        )
+        plan = InterventionPlan(
+            plan_id="PLN-SAME-NOAUDIT-01",
+            action_id=act.action_id,
+            version=1,
+            is_frozen=True,
+            is_retrospective=False,
+            intended_change="Standby change",
+            implementation_owner="lead_engineer",
+            plant_id=self.plant_id,
+            process_or_line="FAL-L2",
+            eligible_meters_json=json.dumps(["MTR-FAL"]),
+            production_denominator="GOOD_UNITS",
+            production_unit="units",
+            baseline_start=datetime(2026, 11, 1, 0, 0, 0),
+            baseline_end=datetime(2026, 11, 2, 0, 0, 0),
+            post_start=datetime(2026, 11, 4, 10, 0, 0),
+            post_end=datetime(2026, 11, 4, 14, 0, 0),
+            min_coverage_pct=95.0,
+            success_criterion="COST_PER_GOOD_UNIT",
+            approved_by="plant_manager",
+            approved_at=same_time,  # Exactly equal to implemented_at!
+        )
+        asm = self._make_assessment(
+            assessment_id="ASM-SAME-NOAUDIT-01",
+            action_id=act.action_id,
+            plan_id=plan.plan_id,
+            plan_version=1,
+            assessment_revision=1,
+            objective_outcome="IMPROVED",
+            cost_intensity_change_pct=Decimal("-10.0"),
+            electricity_savings_kwh=Decimal("32.0"),
+            avoided_cost_inr=Decimal("264.0"),
+            monetary_savings_basis="APPROVED_CONTRACT_TARIFF",
+            savings_claim_status="PENDING_REVIEW",
+            output_guardrail_met=True,
+            quality_guardrail_met=True,
+            downtime_guardrail_met=True,
+            guardrails_summary_json=json.dumps([{"metric": "OUTPUT", "status": "PASSED", "passed": True}]),
+        )
+        self.session.add_all([act, plan, asm])
+        self.session.commit()
+
+        sign_off_req = AssessmentSignOffRequest(
+            decision="APPROVED_VERIFIED",
+            reviewer="Plant Manager",
+            notes="Sign-off on equal timestamp without audit evidence",
+        )
+        signed = sign_off_assessment(
+            session=self.session,
+            assessment_id=asm.assessment_id,
+            req=sign_off_req,
+            auth_caller={
+                "is_authenticated": True,
+                "operational_auth_available": True,
+                "user_id": "mgr_plant",
+                "role": "PLANT_MANAGER",
+                "plant_scope": self.plant_id,
+            },
+        )
+
+        self.assertEqual(signed.savings_claim_status, "NOT_VERIFIED")
+        self.assertIsNone(signed.verified_electricity_savings_kwh)
+        self.assertIsNone(signed.verified_monetary_savings_inr)
+        self.assertIn("equals implementation timestamp", signed.status_reason)
+        self.assertIn("without independent audit trail evidence", signed.status_reason)
+
+        # Neither ledger total increases
+        ledger = list_savings_ledger(self.session, plant_id=self.plant_id)
+        self.assertEqual(ledger.total_verified_avoided_kwh, 0.0)
+        self.assertEqual(ledger.total_verified_monetary_savings_inr, 0.0)
+
+    def test_approval_at_same_recorded_time_with_audit_trail_allows_verification(self):
+        """
+        Regression Check (Point 2): Equal recorded timestamps with audit trail evidence.
+        approved_at == implemented_at == 10:00:00, BUT ActionAuditLog confirms
+        PLAN_APPROVED_FROZEN was performed strictly before IMPLEMENTED.
+        Verification is approved, verified kWh = 32.0, verified INR = 264.0,
+        and ledger totals increase.
+        """
+        same_time = datetime(2026, 11, 4, 10, 0, 0)
+        act = CorrectiveAction(
+            action_id="ACT-SAME-AUDIT-01",
+            recommendation_id="REC-SAME-02",
+            plant_id=self.plant_id,
+            title="Same timestamp with prior audit event",
+            description="Testing verified sequence via audit log",
+            status="IN_PROGRESS",
+            implemented_at=same_time,
+            implemented_by="technician_01",
+        )
+        plan = InterventionPlan(
+            plan_id="PLN-SAME-AUDIT-01",
+            action_id=act.action_id,
+            version=1,
+            is_frozen=True,
+            is_retrospective=False,
+            intended_change="Standby change",
+            implementation_owner="lead_engineer",
+            plant_id=self.plant_id,
+            process_or_line="FAL-L2",
+            eligible_meters_json=json.dumps(["MTR-FAL"]),
+            production_denominator="GOOD_UNITS",
+            production_unit="units",
+            baseline_start=datetime(2026, 11, 1, 0, 0, 0),
+            baseline_end=datetime(2026, 11, 2, 0, 0, 0),
+            post_start=datetime(2026, 11, 4, 10, 0, 0),
+            post_end=datetime(2026, 11, 4, 14, 0, 0),
+            min_coverage_pct=95.0,
+            success_criterion="COST_PER_GOOD_UNIT",
+            approved_by="plant_manager",
+            approved_at=same_time,
+        )
+        asm = self._make_assessment(
+            assessment_id="ASM-SAME-AUDIT-01",
+            action_id=act.action_id,
+            plan_id=plan.plan_id,
+            plan_version=1,
+            assessment_revision=1,
+            objective_outcome="IMPROVED",
+            cost_intensity_change_pct=Decimal("-10.0"),
+            electricity_savings_kwh=Decimal("32.0"),
+            avoided_cost_inr=Decimal("264.0"),
+            monetary_savings_basis="APPROVED_CONTRACT_TARIFF",
+            savings_claim_status="PENDING_REVIEW",
+            output_guardrail_met=True,
+            quality_guardrail_met=True,
+            downtime_guardrail_met=True,
+            guardrails_summary_json=json.dumps([{"metric": "OUTPUT", "status": "PASSED", "passed": True}]),
+        )
+
+        # Independent audit trail establishing order: freeze at 09:59:50, implementation at 10:00:10
+        audit_freeze = ActionAuditLog(
+            audit_id="AUD-FREEZE-001",
+            action_id=act.action_id,
+            recommendation_id=act.recommendation_id,
+            entity_id=plan.plan_id,
+            action="PLAN_APPROVED_FROZEN",
+            performed_at=datetime(2026, 11, 4, 9, 59, 50),
+            comment="Plan approved and frozen before implementation",
+        )
+        audit_impl = ActionAuditLog(
+            audit_id="AUD-IMPL-001",
+            action_id=act.action_id,
+            recommendation_id=act.recommendation_id,
+            entity_id=act.action_id,
+            action="IMPLEMENTED",
+            performed_at=datetime(2026, 11, 4, 10, 0, 10),
+            comment="Action implemented physically on line",
+        )
+
+        self.session.add_all([act, plan, asm, audit_freeze, audit_impl])
+        self.session.commit()
+
+        sign_off_req = AssessmentSignOffRequest(
+            decision="APPROVED_VERIFIED",
+            reviewer="Plant Manager",
+            notes="Sign-off with audit-corroborated order",
+        )
+        signed = sign_off_assessment(
+            session=self.session,
+            assessment_id=asm.assessment_id,
+            req=sign_off_req,
+            auth_caller={
+                "is_authenticated": True,
+                "operational_auth_available": True,
+                "user_id": "mgr_plant",
+                "role": "PLANT_MANAGER",
+                "plant_scope": self.plant_id,
+            },
+        )
+
+        self.assertEqual(signed.savings_claim_status, "VERIFIED")
+        self.assertEqual(signed.verified_electricity_savings_kwh, Decimal("32.0"))
+        self.assertEqual(signed.verified_monetary_savings_inr, Decimal("264.0"))
+
+        # Ledger increases
+        ledger = list_savings_ledger(self.session, plant_id=self.plant_id)
+        self.assertEqual(ledger.total_verified_avoided_kwh, 32.0)
+        self.assertEqual(ledger.total_verified_monetary_savings_inr, 264.0)
+
+    def test_approval_at_same_recorded_time_with_older_revision_audit_trail_denies_verification(self):
+        """
+        Regression Check: Equal recorded timestamps where audit trail belongs to an older revision.
+        Plan v1 was frozen before implementation, but the evaluated plan is amended revision v2.
+        approved_at == implemented_at == 10:00:00.
+        The audit log for v1 CANNOT authorize v2. Verification must be denied, verified kWh = None,
+        verified INR = None, and ledger must not increase.
+        """
+        same_time = datetime(2026, 11, 4, 10, 0, 0)
+        act = CorrectiveAction(
+            action_id="ACT-SAME-AUDIT-OLDREV",
+            recommendation_id="REC-SAME-03",
+            plant_id=self.plant_id,
+            title="Same timestamp with older revision audit event",
+            description="Testing that older revision audit cannot authorize newer revision",
+            status="IN_PROGRESS",
+            implemented_at=same_time,
+            implemented_by="technician_01",
+        )
+        plan_v2 = InterventionPlan(
+            plan_id="PLN-SAME-AUDIT-02",
+            action_id=act.action_id,
+            version=2,
+            is_frozen=True,
+            is_retrospective=False,
+            intended_change="Amended standby change",
+            implementation_owner="lead_engineer",
+            plant_id=self.plant_id,
+            process_or_line="FAL-L2",
+            eligible_meters_json=json.dumps(["MTR-FAL"]),
+            production_denominator="GOOD_UNITS",
+            production_unit="units",
+            baseline_start=datetime(2026, 11, 1, 0, 0, 0),
+            baseline_end=datetime(2026, 11, 2, 0, 0, 0),
+            post_start=datetime(2026, 11, 4, 10, 0, 0),
+            post_end=datetime(2026, 11, 4, 14, 0, 0),
+            min_coverage_pct=95.0,
+            success_criterion="COST_PER_GOOD_UNIT",
+            approved_by="plant_manager",
+            approved_at=same_time,
+        )
+        asm = self._make_assessment(
+            assessment_id="ASM-SAME-AUDIT-OLDREV",
+            action_id=act.action_id,
+            plan_id=plan_v2.plan_id,
+            plan_version=2,
+            assessment_revision=1,
+            objective_outcome="IMPROVED",
+            cost_intensity_change_pct=Decimal("-10.0"),
+            electricity_savings_kwh=Decimal("32.0"),
+            avoided_cost_inr=Decimal("264.0"),
+            monetary_savings_basis="APPROVED_CONTRACT_TARIFF",
+            savings_claim_status="PENDING_REVIEW",
+            output_guardrail_met=True,
+            quality_guardrail_met=True,
+            downtime_guardrail_met=True,
+            guardrails_summary_json=json.dumps([{"metric": "OUTPUT", "status": "PASSED", "passed": True}]),
+        )
+
+        # Audit trail belongs to older revision v1, NOT v2
+        audit_freeze_v1 = ActionAuditLog(
+            audit_id="AUD-FREEZE-OLDREV-001",
+            action_id=act.action_id,
+            recommendation_id=act.recommendation_id,
+            entity_id=plan_v2.plan_id,
+            action="PLAN_APPROVED_FROZEN",
+            performed_at=datetime(2026, 11, 4, 9, 50, 0),
+            comment="Measurement plan v1 approved and frozen",
+            changed_fields_json=json.dumps({"plan_id": plan_v2.plan_id, "version": 1, "is_frozen": True}),
+        )
+        audit_impl = ActionAuditLog(
+            audit_id="AUD-IMPL-OLDREV-001",
+            action_id=act.action_id,
+            recommendation_id=act.recommendation_id,
+            entity_id=act.action_id,
+            action="IMPLEMENTED",
+            performed_at=datetime(2026, 11, 4, 10, 0, 10),
+            comment="Action implemented physically on line",
+        )
+
+        self.session.add_all([act, plan_v2, asm, audit_freeze_v1, audit_impl])
+        self.session.commit()
+
+        sign_off_req = AssessmentSignOffRequest(
+            decision="APPROVED_VERIFIED",
+            reviewer="Plant Manager",
+            notes="Attempting sign-off with older revision audit trail",
+        )
+        signed = sign_off_assessment(
+            session=self.session,
+            assessment_id=asm.assessment_id,
+            req=sign_off_req,
+            auth_caller={
+                "is_authenticated": True,
+                "operational_auth_available": True,
+                "user_id": "mgr_plant",
+                "role": "PLANT_MANAGER",
+                "plant_scope": self.plant_id,
+            },
+        )
+
+        # Verification must be DENIED because audit trail was for v1, not v2
+        self.assertEqual(signed.savings_claim_status, "NOT_VERIFIED")
+        self.assertIsNone(signed.verified_electricity_savings_kwh)
+        self.assertIsNone(signed.verified_monetary_savings_inr)
+        self.assertTrue(
+            "exact plan revision" in signed.status_reason.lower()
+            or "older revision" in signed.status_reason.lower()
+            or "non-prospective timing" in signed.status_reason.lower()
+        )
+
+        # Ledger does NOT count this unverified claim
+        ledger = list_savings_ledger(self.session, plant_id=self.plant_id)
+        act_items = [it for it in ledger.items if it.action_id == act.action_id]
+        self.assertEqual(len(act_items), 1)
+        self.assertIsNone(act_items[0].verified_electricity_savings_kwh)
+
+    def test_uncertainty_gate_1kwh_reduction_with_203kwh_margin(self):
+        """
+        Regression Check (Point 2): Uncertainty gate with original QA case:
+        1 kWh estimated reduction with a ±203.6892 kWh uncertainty margin.
+        Since 95% CI lower bound (1.0 - 203.6892 = -202.6892 kWh) <= 0,
+        attribution must return INCONCLUSIVE_HIGH_UNCERTAINTY with verified savings = None.
+        """
+        attr = calculate_dual_boundary_attribution(
+            stoppage_reduction_kwh=1.0,
+            restart_overhead_kwh=0.0,
+            margin_of_error_kwh=203.6892,
+            tariffs_approved=True,
+        )
+        self.assertEqual(attr["status"], "INCONCLUSIVE_HIGH_UNCERTAINTY")
+        self.assertIsNone(attr["verified_electricity_savings_kwh"])
+        self.assertIsNone(attr["verified_monetary_savings_inr"])
+        self.assertIn("high uncertainty", attr["reason"].lower())
+        self.assertLessEqual(attr["ci_lower_bound_kwh"], 0.0)
+
+    def test_qualified_kwh_with_missing_tariff_preserves_physical_savings(self):
+        """
+        Regression Check (Point 3): Qualified energy savings with missing tariff contract.
+        Physical kWh is verified (32.0 kWh), but verified rupees is None and monetary
+        contribution to the savings ledger is ₹0.
+        """
+        # Set up action and plan in a plant with NO approved tariff
+        no_tariff_plant = "IN-MH-01"
+        act = CorrectiveAction(
+            action_id="ACT-NOTARIFF-001",
+            recommendation_id="REC-NOTARIFF-001",
+            plant_id=no_tariff_plant,
+            title="Trial in plant without approved tariff contract",
+            description="Testing physical vs monetary separation",
+            status="IN_PROGRESS",
+            implemented_at=datetime(2026, 11, 4, 10, 0, 0),
+            implemented_by="engineer_01",
+        )
+        plan = InterventionPlan(
+            plan_id="PLN-NOTARIFF-001",
+            action_id=act.action_id,
+            version=1,
+            is_frozen=True,
+            is_retrospective=False,
+            intended_change="Standby optimization",
+            implementation_owner="lead_engineer",
+            plant_id=no_tariff_plant,
+            process_or_line="SMT-L1",
+            eligible_meters_json=json.dumps(["MTR-SMT"]),
+            production_denominator="GOOD_UNITS",
+            production_unit="units",
+            baseline_start=datetime(2026, 11, 1, 0, 0, 0),
+            baseline_end=datetime(2026, 11, 2, 0, 0, 0),
+            post_start=datetime(2026, 11, 4, 10, 0, 0),
+            post_end=datetime(2026, 11, 4, 14, 0, 0),
+            min_coverage_pct=95.0,
+            success_criterion="COST_PER_GOOD_UNIT",
+            approved_by="plant_manager",
+            approved_at=datetime(2026, 11, 4, 9, 0, 0),  # Strictly precedes implementation
+        )
+        asm = self._make_assessment(
+            assessment_id="ASM-NOTARIFF-001",
+            action_id=act.action_id,
+            plan_id=plan.plan_id,
+            plan_version=1,
+            assessment_revision=1,
+            objective_outcome="IMPROVED",
+            cost_intensity_change_pct=Decimal("-10.0"),
+            electricity_savings_kwh=Decimal("32.0"),
+            avoided_cost_inr=Decimal("264.0"),
+            monetary_savings_basis="ESTIMATED_AVOIDED_COST_VERSIONED_TARIFF",
+            savings_claim_status="PENDING_REVIEW",
+            output_guardrail_met=True,
+            quality_guardrail_met=True,
+            downtime_guardrail_met=True,
+            guardrails_summary_json=json.dumps([{"metric": "OUTPUT", "status": "PASSED", "passed": True}]),
+        )
+        self.session.add_all([act, plan, asm])
+        self.session.commit()
+
+        sign_off_req = AssessmentSignOffRequest(
+            decision="APPROVED_VERIFIED",
+            reviewer="Energy Auditor",
+            notes="Physical trial verified, tariff contract pending",
+        )
+        signed = sign_off_assessment(
+            session=self.session,
+            assessment_id=asm.assessment_id,
+            req=sign_off_req,
+            auth_caller={
+                "is_authenticated": True,
+                "operational_auth_available": True,
+                "user_id": "auditor_01",
+                "role": "ENERGY_ENGINEER",
+                "plant_scope": no_tariff_plant,
+            },
+        )
+
+        # Physical savings IS verified
+        self.assertEqual(signed.savings_claim_status, "VERIFIED")
+        self.assertEqual(signed.electricity_savings_kwh, Decimal("32.0"))
+        # Monetary savings is None (Unverified)
+        self.assertIsNone(signed.verified_monetary_savings_inr)
+        self.assertIn("Physical electricity savings verified", signed.status_reason)
+        self.assertIn("Monetary savings unverified", signed.status_reason)
+
+        # Check ledger total for this plant
+        ledger = list_savings_ledger(self.session, plant_id=no_tariff_plant)
+        self.assertEqual(ledger.total_verified_avoided_kwh, 32.0)
+        self.assertEqual(ledger.total_verified_monetary_savings_inr, 0.0)
+
+    def test_stale_and_superseded_revisions_excluded_from_ledger(self):
+        """
+        Regression Check (Point 3): Exclude stale and superseded revisions from ledger.
+        Rev 1 marked is_stale_flag=True must not be counted alongside active Rev 2.
+        """
+        asm_rev1 = self._make_assessment(
+            assessment_id="ASM-STALE-REV1",
+            action_id="ACT-STALE-001",
+            plan_id="PLN-STALE-001",
+            plan_version=1,
+            assessment_revision=1,
+            objective_outcome="IMPROVED",
+            cost_intensity_change_pct=Decimal("-15.0"),
+            electricity_savings_kwh=Decimal("32.0"),
+            avoided_cost_inr=Decimal("264.0"),
+            verified_monetary_savings_inr=Decimal("264.0"),
+            savings_claim_status="VERIFIED",
+            signed_off_by="lead_auditor",
+            signed_off_at=datetime.utcnow(),
+            is_stale_flag=True,  # Stale / superseded revision
+            output_guardrail_met=True,
+            quality_guardrail_met=True,
+            downtime_guardrail_met=True,
+            guardrails_summary_json=json.dumps([{"metric": "OUTPUT", "status": "PASSED", "passed": True}]),
+        )
+        asm_rev2 = self._make_assessment(
+            assessment_id="ASM-STALE-REV2",
+            action_id="ACT-STALE-001",
+            plan_id="PLN-STALE-001",
+            plan_version=1,
+            assessment_revision=2,
+            objective_outcome="IMPROVED",
+            cost_intensity_change_pct=Decimal("-15.0"),
+            electricity_savings_kwh=Decimal("32.0"),
+            avoided_cost_inr=Decimal("264.0"),
+            verified_monetary_savings_inr=Decimal("264.0"),
+            savings_claim_status="VERIFIED",
+            signed_off_by="lead_auditor",
+            signed_off_at=datetime.utcnow(),
+            is_stale_flag=False,  # Active revision
+            output_guardrail_met=True,
+            quality_guardrail_met=True,
+            downtime_guardrail_met=True,
+            guardrails_summary_json=json.dumps([{"metric": "OUTPUT", "status": "PASSED", "passed": True}]),
+        )
+        self.session.add_all([asm_rev1, asm_rev2])
+        self.session.commit()
+
+        ledger = list_savings_ledger(self.session)
+        # Only Rev 2 should be included
+        matching_items = [item for item in ledger.items if item.action_id == "ACT-STALE-001"]
+        self.assertEqual(len(matching_items), 1)
+        self.assertEqual(matching_items[0].assessment_revision, 2)
 
 
 if __name__ == "__main__":

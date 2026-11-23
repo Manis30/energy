@@ -228,7 +228,7 @@ class GuardrailResult(BaseModel):
     guardrail_type: str = Field(..., description="OUTPUT, QUALITY_YIELD, DOWNTIME, or RESTART")
     metric_name: str
     target_value: float
-    observed_value: float
+    observed_value: Optional[float] = None
     unit: str
     direction: str = Field(..., description="GREATER_OR_EQUAL or LESS_OR_EQUAL")
     passed: bool

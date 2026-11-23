@@ -52,7 +52,17 @@ export async function apiRequest(endpoint, { params = {}, init = {} } = {}) {
     ? endpoint
     : `/api${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
 
-  const apiBaseUrl = (import.meta.env?.VITE_API_BASE_URL || import.meta.env?.VITE_BACKEND_URL || '').replace(/\/+$/, '');
+  // In local development, always use relative '/api' so Vite proxy forwards to local server (http://127.0.0.1:8000).
+  // In deployment, use VITE_API_BASE_URL if configured, or empty string (which uses Vercel rewrites to https://energy-myhx.onrender.com).
+  let apiBaseUrl = '';
+  if (import.meta.env.DEV) {
+    // Development mode: rely on Vite reverse proxy (/api -> http://127.0.0.1:8000)
+    apiBaseUrl = (import.meta.env?.VITE_LOCAL_API_URL || '').replace(/\/+$/, '');
+  } else {
+    // Production / deployed mode: use VITE_API_BASE_URL if provided, else empty string for relative Vercel rewrites
+    apiBaseUrl = (import.meta.env?.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+  }
+
   const queryString = buildQueryString(params);
   const url = `${apiBaseUrl}${normalizedEndpoint}${queryString}`;
 

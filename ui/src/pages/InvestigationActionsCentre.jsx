@@ -2160,7 +2160,7 @@ export default function InvestigationActionsCentre() {
             </div>
           </div>
 
-          <div style={{ padding: '1rem 1.25rem' }}>
+          <div style={{ padding: '0.65rem 1rem' }}>
             <RecommendationsDirectoryTable
               selectedFindingId={selectedFindingId}
               onClearFindingFilter={() => setSelectedFindingId(null)}

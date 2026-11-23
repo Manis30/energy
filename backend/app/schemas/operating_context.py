@@ -162,6 +162,10 @@ class OperatingContextSummaryResponse(BaseModel):
     total_stoppage_kwh: float = 0.0
     total_target_lost: int = 0
     total_target_shortfall: int = 0
+    influencing_inputs_and_context_gaps: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Disclosure of operational inputs influencing comparisons and missing operating context",
+    )
 
 
 class StoppageEpisodesResponse(BaseModel):

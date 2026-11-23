@@ -1554,7 +1554,7 @@ export default function InterventionWorkflowModal({
                         Three Authoritative Assessment Answers
                       </span>
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        Boundary: Meter {action.measurement_meter_id || action.affected_equipment || 'MTR-COMPRESSOR'} · Line {getResolvedLineDisplay(action.plant_id, action.affected_equipment)}
+                        Assessment ID: <strong>{assessment.assessment_id}</strong> (Rev #{assessment.assessment_revision || 1}) · Boundary: Meter {action.measurement_meter_id || action.affected_equipment || 'MTR-COMPRESSOR'} · Line {getResolvedLineDisplay(action.plant_id, action.affected_equipment)}
                       </span>
                     </div>
 
@@ -1587,7 +1587,7 @@ export default function InterventionWorkflowModal({
                           fontSize: '1rem',
                           color: assessment.production_protection_status === 'PROTECTED' ? '#10b981' : (assessment.production_protection_status === 'UNASSESSABLE' ? '#f59e0b' : '#ef4444')
                         }}>
-                          {assessment.production_protection_status}
+                          {assessment.production_protection_status || 'UNASSESSABLE'}
                         </div>
                         <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
                           {assessment.guardrails?.filter((g) => g.passed).length || 0} of {assessment.guardrails?.length || 0} limits passed.
@@ -1601,24 +1601,30 @@ export default function InterventionWorkflowModal({
                         <div style={{
                           fontWeight: 700,
                           fontSize: '1rem',
-                          color: (assessment.verified_electricity_savings_kwh || assessment.electricity_savings_kwh) ? '#10b981' : 'var(--text-muted)'
+                          color: (assessment.savings_claim_status === 'VERIFIED' && assessment.verified_electricity_savings_kwh != null) ? '#10b981' : 'var(--text-muted)'
                         }}>
-                          {(assessment.verified_electricity_savings_kwh || assessment.electricity_savings_kwh)
-                            ? `${formatNumber(assessment.verified_electricity_savings_kwh || assessment.electricity_savings_kwh)} kWh`
-                            : 'No verified savings'}
+                          {assessment.savings_claim_status === 'VERIFIED' && assessment.verified_electricity_savings_kwh != null
+                            ? `${formatNumber(assessment.verified_electricity_savings_kwh)} kWh`
+                            : 'Unverified'}
                         </div>
                         <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                          {assessment.verified_monetary_savings_inr ? (
+                          {assessment.savings_claim_status === 'VERIFIED' && assessment.verified_monetary_savings_inr != null ? (
                             <span style={{ color: '#10b981', fontWeight: 600 }}>Verified: {formatCurrency(assessment.verified_monetary_savings_inr)}</span>
-                          ) : assessment.avoided_cost_inr ? (
-                            <span>Est avoided: {formatCurrency(assessment.avoided_cost_inr)} (Pending contract approval)</span>
                           ) : (
-                            'Attribution unverified.'
+                            <span style={{ color: 'var(--text-muted)' }}>Verified: Unverified</span>
                           )}
                         </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                          Ledger Contribution: <strong>{assessment.savings_claim_status === 'VERIFIED' && assessment.verified_monetary_savings_inr != null ? formatCurrency(assessment.verified_monetary_savings_inr) : '₹0 ledger contribution'}</strong>
+                        </div>
+                        {assessment.status_reason && (
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.2rem', fontStyle: 'italic' }}>
+                            {assessment.status_reason}
+                          </div>
+                        )}
                         {assessment.attribution_details && (
                           <div style={{ marginTop: '0.35rem', fontSize: '0.7rem', color: 'var(--text-muted)', borderTop: '1px solid var(--border-color)', paddingTop: '0.25rem' }}>
-                            Method: {assessment.attribution_details.attribution_method} · Pool: {assessment.attribution_details.reference_pool_count} eps · CV: {assessment.attribution_details.baseline_cv_pct}% · Band: ±{assessment.attribution_details.uncertainty_pct}%
+                            Method: {assessment.attribution_details.attribution_method} · Observed: {formatNumber(assessment.observed_avoided_kwh || assessment.net_reduction_kwh || 0)} kWh · Pool: {assessment.attribution_details.reference_pool_count} eps · Band: ±{assessment.attribution_details.uncertainty_pct}%
                           </div>
                         )}
                       </div>
@@ -1761,8 +1767,11 @@ export default function InterventionWorkflowModal({
 
                           <div style={{ padding: '0.65rem', background: 'var(--bg-surface)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
                             <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>3. Attributable Savings</div>
-                            <div style={{ fontSize: '0.88rem', fontWeight: 700, margin: '0.2rem 0', color: assessmentExplanation.question_3_attribution?.status === 'ATTRIBUTED' ? '#10b981' : 'var(--text-muted)' }}>
-                              Result: {assessmentExplanation.question_3_attribution?.answer}
+                            <div style={{ fontSize: '0.88rem', fontWeight: 700, margin: '0.2rem 0', color: (assessmentExplanation.question_3_attribution?.status === 'ATTRIBUTED' && assessmentExplanation.question_3_attribution?.verified_electricity_savings_kwh != null) ? '#10b981' : 'var(--text-muted)' }}>
+                              Verified: {assessmentExplanation.question_3_attribution?.verified_electricity_savings_kwh != null ? `${formatNumber(assessmentExplanation.question_3_attribution.verified_electricity_savings_kwh)} kWh` : 'Unverified'} ({assessmentExplanation.question_3_attribution?.verified_monetary_savings_inr != null ? formatCurrency(assessmentExplanation.question_3_attribution.verified_monetary_savings_inr) : 'Unverified'})
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>
+                              Ledger Contribution: <strong>{assessmentExplanation.ledger_eligibility?.is_eligible_for_verified_cost && assessmentExplanation.question_3_attribution?.verified_monetary_savings_inr != null ? formatCurrency(assessmentExplanation.question_3_attribution.verified_monetary_savings_inr) : '₹0 ledger contribution'}</strong>
                             </div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
                               {assessmentExplanation.question_3_attribution?.explanation}
