@@ -1585,6 +1585,89 @@ class TestFindingTrialResultRegression(unittest.TestCase):
         self.assertEqual(explanation["ledger_eligibility"]["is_eligible_for_verified_kwh"], True)
         self.assertEqual(explanation["ledger_eligibility"]["is_eligible_for_verified_cost"], False)
 
+    def test_investigate_finding_statistical_drop_and_pf_formatting(self):
+        """
+        Regression: f-strings with conditional expressions must not place `if/else` inside
+        the format specifier (which raises `ValueError: Invalid format specifier`).
+        Covers STATISTICAL_DROP (with and without baseline) and POWER_FACTOR fallback.
+        """
+        fnd_drop = OperationalFinding(
+            finding_id="FND-IN-TN-01-DROP-TEST",
+            finding_key="KEY-FND-DROP-TEST",
+            plant_id="IN-TN-01",
+            line_id="SMT-01",
+            meter_id="MTR-SMT",
+            anomaly_type="STATISTICAL_DROP",
+            severity="HIGH",
+            status="NEW",
+            first_detected_at=datetime(2026, 11, 5, 22, 0),
+            last_detected_at=datetime(2026, 11, 5, 22, 0),
+            current_actual_value=Decimal("40.25"),
+            current_baseline_value=Decimal("85.50"),
+        )
+        fnd_drop_no_base = OperationalFinding(
+            finding_id="FND-IN-TN-01-DROP-NOBASE",
+            finding_key="KEY-FND-DROP-NOBASE",
+            plant_id="IN-TN-01",
+            line_id="SMT-01",
+            meter_id="MTR-SMT",
+            anomaly_type="STATISTICAL_DROP",
+            severity="HIGH",
+            status="NEW",
+            first_detected_at=datetime(2026, 11, 5, 22, 0),
+            last_detected_at=datetime(2026, 11, 5, 22, 0),
+            current_actual_value=Decimal("40.25"),
+            current_baseline_value=None,
+        )
+        fnd_pf = OperationalFinding(
+            finding_id="FND-IN-TN-01-PF-TEST",
+            finding_key="KEY-FND-PF-TEST",
+            plant_id="IN-TN-01",
+            line_id="SMT-01",
+            meter_id="MTR-SMT",
+            anomaly_type="POWER_FACTOR_LOW",
+            severity="MEDIUM",
+            status="NEW",
+            first_detected_at=datetime(2026, 11, 5, 22, 0),
+            last_detected_at=datetime(2026, 11, 5, 22, 0),
+            current_actual_value=Decimal("0.81"),
+            current_baseline_value=Decimal("0.90"),
+        )
+        self.session.add_all([fnd_drop, fnd_drop_no_base, fnd_pf])
+        self.session.commit()
+
+        with patch("app.services.finding_ai_investigation_service.get_domo_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_client.default_model = "domogpt-large-v2.2:anthropic"
+            mock_client.generate_text.side_effect = ConnectionError("offline")
+            mock_get_client.return_value = mock_client
+
+            res_drop = investigate_finding_with_ai(self.session, fnd_drop.finding_id)
+            res_no_base = investigate_finding_with_ai(self.session, fnd_drop_no_base.finding_id)
+            res_pf = investigate_finding_with_ai(self.session, fnd_pf.finding_id)
+
+        from app.services.finding_ai_investigation_service import _synthesize_rule_based_investigation
+
+        pf_synth = _synthesize_rule_based_investigation({
+            "finding_id": fnd_pf.finding_id,
+            "plant_id": "IN-TN-01",
+            "meter_id": "MTR-SMT",
+            "anomaly_type": "POWER_FACTOR_LOW",
+            "is_power_factor": True,
+            "observed_value": 0.81,
+            "baseline_value": 0.90,
+            "power_factor": None,
+            "local_time_window": "22:00-23:00",
+            "missing_evidence": {"missing_occurrence_records": False, "missing_energy_reading": False},
+        })
+
+        self.assertIn("Baseline 85.50 kWh", res_drop["comparison"]["formatted"])
+        self.assertIn("85.50 kWh", res_drop["evidence_summary"])
+        self.assertIn("Baseline N/A", res_no_base["comparison"]["formatted"])
+        self.assertEqual(res_pf["status"], "SUCCESS")
+        self.assertIn("0.81", pf_synth["what_we_observed"])
+        self.assertIn("0.85", pf_synth["what_we_still_need_to_know"])
+
 
 if __name__ == "__main__":
     unittest.main()

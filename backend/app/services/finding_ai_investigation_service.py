@@ -653,6 +653,7 @@ def synthesize_three_bullet_sections(evidence: Dict[str, Any]) -> Dict[str, Any]
         else:
             headline = f"{asset_name} electricity use reached {obs_num:.2f} {unit_str}."
 
+        base_formatted = f"{base_num:.2f} {unit_str}" if base_num is not None else "N/A"
         comparison = {
             "recorded": round(obs_num, 2),
             "baseline": round(base_num, 2) if base_num is not None else None,
@@ -661,7 +662,7 @@ def synthesize_three_bullet_sections(evidence: Dict[str, Any]) -> Dict[str, Any]
             "diff_str": f"{diff_sign}{diff:.2f} {unit_str}".strip(),
             "unit": unit_str,
             "is_power_factor": False,
-            "formatted": f"Recorded {obs_num:.2f} {unit_str} · Baseline {base_num:.2f if base_num is not None else 0.0} {unit_str} · Difference {diff_sign}{diff:.2f} {unit_str}",
+            "formatted": f"Recorded {obs_num:.2f} {unit_str} · Baseline {base_formatted} · Difference {diff_sign}{diff:.2f} {unit_str}",
         }
 
     # 2. EVIDENCE SUMMARY (What the evidence shows)
@@ -671,9 +672,15 @@ def synthesize_three_bullet_sections(evidence: Dict[str, Any]) -> Dict[str, Any]
     elif "STANDBY" in anomaly_type or (good_units == 0 and downtime_min and downtime_min >= 30):
         flag_reason = f"Flagged by standby surveillance because electricity draw persisted at {obs_num:.2f} kWh on meter {meter_id} during a zero-production stoppage interval{prod_cite}{reading_cite}{occ_cite}."
     elif "DROP" in anomaly_type:
-        flag_reason = f"Flagged by baseline drop surveillance because electricity draw dropped to {obs_num:.2f} kWh on meter {meter_id}, below expected baseline of {base_num:.2f if base_num is not None else 0.0} kWh{reading_cite}{occ_cite}."
+        base_clause = f"below expected baseline of {base_num:.2f} kWh" if base_num is not None else "showing a statistical drop against baseline"
+        flag_reason = f"Flagged by baseline drop surveillance because electricity draw dropped to {obs_num:.2f} kWh on meter {meter_id}, {base_clause}{reading_cite}{occ_cite}."
     else:
-        diff_clause = f"exceeded the {base_num:.2f} kWh operating baseline by {diff:.2f} kWh" if base_num is not None else "showed significant statistical elevation"
+        if base_num is not None and diff < 0:
+            diff_clause = f"fell below the {base_num:.2f} kWh operating baseline by {abs(diff):.2f} kWh"
+        elif base_num is not None:
+            diff_clause = f"exceeded the {base_num:.2f} kWh operating baseline by {diff:.2f} kWh"
+        else:
+            diff_clause = "showed significant statistical elevation"
         flag_reason = f"Flagged by statistical spike detection because electricity draw of {obs_num:.2f} kWh on meter {meter_id} {diff_clause}{reading_cite}{occ_cite}."
 
     if continuous_cnt > 0:
@@ -808,7 +815,8 @@ def _synthesize_rule_based_investigation(evidence: Dict[str, Any]) -> Dict[str, 
             f"are currently attached to this record in the database [finding:{fnd_id}]."
         )
     elif is_pf:
-        pf_display = obs_power_factor if obs_power_factor is not None else (obs_val if obs_val is not None else None)
+        raw_obs_val = evidence.get("observed_value")
+        pf_display = obs_power_factor if obs_power_factor is not None else raw_obs_val
         target_display = baseline_val
         if pf_display is not None and target_display is not None:
             what_we_observed = (
@@ -871,8 +879,9 @@ def _synthesize_rule_based_investigation(evidence: Dict[str, Any]) -> Dict[str, 
             "The saved finding contains the comparison, but the missing original reading limits independent verification."
         )
     elif is_pf:
+        pf_val_str = f"{float(obs_power_factor if obs_power_factor is not None else 0.85):.2f}"
         what_we_still_need_to_know = (
-            f"Whether low power factor ({obs_power_factor:.2f if obs_power_factor is not None else 0.85}) on meter '{meter_id}' is driven by unloaded induction motors "
+            f"Whether low power factor ({pf_val_str}) on meter '{meter_id}' is driven by unloaded induction motors "
             f"or degraded power factor correction capacitors, and which production line this meter serves."
         )
     elif "COMPRESSOR" in str(meter_id).upper():

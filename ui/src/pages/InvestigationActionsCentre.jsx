@@ -4,6 +4,7 @@ import { findingsApi } from '../services/findingsApi';
 import { recommendationsApi } from '../services/recommendationsApi';
 import { anomalyApi } from '../services/anomalyApi';
 import { formatDateTime, formatNumber, formatFindingTitle } from '../utils/formatters';
+import { generateSparklinePaths } from '../components/common/KpiCard';
 
 // Provenance components
 import {
@@ -404,17 +405,85 @@ export default function InvestigationActionsCentre() {
     }
   }, [offset, plantFilter, statusFilter, severityFilter, typeFilter, debouncedSearch]);
 
-  // Compute selected KPI index for animated accent line (0: Active, 1: Critical/High, 2: Awaiting, 3: Recommendations, 4: Actions)
-  const selectedKpiIndex = useMemo(() => {
-    if (activeTab === 'workspace') {
-      if (severityFilter === 'CRITICAL') return 1;
-      if (statusFilter === 'NEW') return 2;
-      return 0;
-    }
-    if (activeTab === 'recommendations') return 3;
-    if (activeTab === 'actions') return 4;
-    return 0;
-  }, [activeTab, statusFilter, severityFilter]);
+  // Build the 5 summary KPI cards with sparkline paths (historical counts when available, decorative wave otherwise)
+  const summaryKpiCards = useMemo(() => {
+    const historyMap = kpis.history || {};
+    const defs = [
+      {
+        id: 'active-findings',
+        label: 'Active findings',
+        count: kpis.activeFindings,
+        history: historyMap.activeFindings,
+        decorativeWave: [10, 14, 13, 18, 16, 22, 20, 26],
+        isSelected: activeTab === 'workspace' && statusFilter === 'ACTIVE' && severityFilter !== 'CRITICAL',
+        title: 'Click to view Active findings in queue',
+        onClick: () => {
+          setActiveTab('workspace');
+          setStatusFilter('ACTIVE');
+          setSeverityFilter('ALL');
+          setOffset(0);
+        },
+      },
+      {
+        id: 'critical-high',
+        label: 'Critical & high priority',
+        count: kpis.criticalHigh,
+        history: historyMap.criticalHigh,
+        decorativeWave: [12, 11, 14, 13, 16, 15, 18, 17],
+        isSelected: activeTab === 'workspace' && severityFilter === 'CRITICAL',
+        title: 'Click to filter Critical & High findings',
+        onClick: () => {
+          setActiveTab('workspace');
+          setStatusFilter('ACTIVE');
+          setSeverityFilter('CRITICAL');
+          setOffset(0);
+        },
+      },
+      {
+        id: 'awaiting-investigation',
+        label: 'Awaiting investigation',
+        count: kpis.awaitingInvestigation,
+        history: historyMap.awaitingInvestigation,
+        decorativeWave: [10, 13, 12, 16, 15, 19, 18, 22],
+        isSelected: activeTab === 'workspace' && statusFilter === 'NEW',
+        title: 'Click to view New & Acknowledged findings',
+        onClick: () => {
+          setActiveTab('workspace');
+          setStatusFilter('NEW');
+          setSeverityFilter('ALL');
+          setOffset(0);
+        },
+      },
+      {
+        id: 'open-recommendations',
+        label: 'Open recommendations',
+        count: kpis.openRecommendations,
+        history: historyMap.openRecommendations,
+        decorativeWave: [9, 11, 10, 14, 13, 17, 16, 21],
+        isSelected: activeTab === 'recommendations',
+        title: 'Click to view Open Recommendations Directory',
+        onClick: () => setActiveTab('recommendations'),
+      },
+      {
+        id: 'corrective-actions',
+        label: 'Corrective actions',
+        count: kpis.openActions,
+        history: historyMap.openActions,
+        decorativeWave: [10, 12, 14, 15, 17, 19, 21, 24],
+        isSelected: activeTab === 'actions',
+        title: 'Click to view Corrective Actions Tracker',
+        onClick: () => setActiveTab('actions'),
+      },
+    ];
+
+    return defs.map((card) => {
+      const hasHistory = Array.isArray(card.history) && card.history.length >= 2;
+      const series = hasHistory ? card.history : card.decorativeWave;
+      const sparkPaths = generateSparklinePaths(series, 300, 18, 2, 3);
+      const dataSignature = hasHistory ? card.history.join(',') : String(card.count);
+      return { ...card, hasHistory, sparkPaths, dataSignature };
+    });
+  }, [kpis, activeTab, statusFilter, severityFilter]);
 
   // Selected Finding Investigation Workspace State
   const [selectedFindingId, setSelectedFindingId] = useState(urlFindingId || null);
@@ -463,6 +532,7 @@ export default function InvestigationActionsCentre() {
   const [activeCitationToast, setActiveCitationToast] = useState(null);
   const [workflowAction, setWorkflowAction] = useState(null);
   const activeAiFindingIdRef = useRef(null);
+  const inFlightAiFindingRef = useRef(null);
   const aiRequestSeqRef = useRef(0);
 
   // Modals & Drawers State
@@ -644,6 +714,7 @@ export default function InvestigationActionsCentre() {
         findingsApi.getFindingDetail(findingId),
         recommendationsApi.listRecommendations({ finding_id: findingId, limit: 50 }),
       ]);
+      if (activeAiFindingIdRef.current !== findingId) return;
       setFindingDetail(detail);
 
       const recs = recsRes.items || [];
@@ -655,6 +726,7 @@ export default function InvestigationActionsCentre() {
           recommendationsApi.listActions({ recommendation_id: r.recommendation_id, limit: 50 })
         );
         const actionResults = await Promise.all(actionPromises);
+        if (activeAiFindingIdRef.current !== findingId) return;
         const actionsByRec = {};
         recs.forEach((r, idx) => {
           actionsByRec[r.recommendation_id] = actionResults[idx].items || [];
@@ -664,11 +736,14 @@ export default function InvestigationActionsCentre() {
         setRecActionsMap({});
       }
     } catch (err) {
+      if (activeAiFindingIdRef.current !== findingId) return;
       console.error(`Failed to load details for finding ${findingId}:`, err);
       setDetailError(err.message || 'Unable to load finding details.');
     } finally {
-      setLoadingDetail(false);
-      setLoadingRecs(false);
+      if (activeAiFindingIdRef.current === findingId) {
+        setLoadingDetail(false);
+        setLoadingRecs(false);
+      }
     }
   }, []);
 
@@ -683,24 +758,27 @@ export default function InvestigationActionsCentre() {
 
   useEffect(() => {
     activeAiFindingIdRef.current = selectedFindingId;
+    inFlightAiFindingRef.current = null;
+    aiRequestSeqRef.current += 1;
+    setInvestigatingAi(false);
     setAiInvestigation(null);
     setAiInvestigationError(null);
     setActiveCitationToast(null);
     setSelectedOccurrenceId(null);
+    setFindingDetail(null);
     if (selectedFindingId) {
       loadFindingDetailAndRecs(selectedFindingId);
     } else {
-      setFindingDetail(null);
       setFindingRecs([]);
       setRecActionsMap({});
     }
   }, [selectedFindingId, loadFindingDetailAndRecs]);
 
   useEffect(() => {
-    if (detailSubTab === 'ai_investigation' && selectedFindingId && !aiInvestigation && !investigatingAi) {
+    if (detailSubTab === 'ai_investigation' && selectedFindingId && !aiInvestigation && !investigatingAi && !aiInvestigationError) {
       handleInvestigateWithAi();
     }
-  }, [detailSubTab, selectedFindingId, aiInvestigation, investigatingAi]);
+  }, [detailSubTab, selectedFindingId, aiInvestigation, investigatingAi, aiInvestigationError]);
 
   // Load Live Anomaly Surveillance Data when that tab is selected
   const loadSurveillanceData = useCallback(async () => {
@@ -785,14 +863,22 @@ export default function InvestigationActionsCentre() {
   };
 
   const handleInvestigateWithAi = async () => {
-    if (!selectedFindingId || investigatingAi) return;
     const reqFindingId = selectedFindingId;
+    if (!reqFindingId || inFlightAiFindingRef.current === reqFindingId) return;
     activeAiFindingIdRef.current = reqFindingId;
+    inFlightAiFindingRef.current = reqFindingId;
     const reqSeq = ++aiRequestSeqRef.current;
     setInvestigatingAi(true);
     setAiInvestigationError(null);
     try {
-      const occId = selectedOccurrenceId || (findingDetail?.occurrences?.[0]?.occurrence_id) || null;
+      const validDetail = findingDetail?.finding_id === reqFindingId ? findingDetail : null;
+      const validOccs = validDetail?.occurrences || [];
+      const occId =
+        (selectedOccurrenceId && validOccs.some((o) => o.occurrence_id === selectedOccurrenceId)
+          ? selectedOccurrenceId
+          : null) ||
+        validOccs[0]?.occurrence_id ||
+        null;
       const url = `/api/findings/${encodeURIComponent(reqFindingId)}/investigate-ai${occId ? `?occurrence_id=${encodeURIComponent(occId)}` : ''}`;
       const res = await fetch(url, {
         method: 'POST',
@@ -815,6 +901,7 @@ export default function InvestigationActionsCentre() {
       }
     } finally {
       if (activeAiFindingIdRef.current === reqFindingId && reqSeq === aiRequestSeqRef.current) {
+        inFlightAiFindingRef.current = null;
         setInvestigatingAi(false);
       }
     }
@@ -1157,75 +1244,54 @@ export default function InvestigationActionsCentre() {
 
       {/* SECTION A: Authoritative Operational KPI Summary Strip */}
       <section className="iac-kpi-strip" role="region" aria-label="Investigation Summary Metrics">
-        {/* Active findings */}
-        <button
-          type="button"
-          className={`iac-kpi-strip-item ${activeTab === 'workspace' && statusFilter === 'ACTIVE' && severityFilter !== 'CRITICAL' ? 'is-selected active-filter' : ''}`}
-          onClick={() => {
-            setActiveTab('workspace');
-            setStatusFilter('ACTIVE');
-            setSeverityFilter('ALL');
-            setOffset(0);
-          }}
-          title="Click to view Active findings in queue"
-        >
-          <span className="iac-kpi-strip-label">Active findings</span>
-          <span className="iac-kpi-strip-count">{kpis.loading ? '...' : formatNumber(kpis.activeFindings)}</span>
-        </button>
-
-        {/* Critical & high priority */}
-        <button
-          type="button"
-          className={`iac-kpi-strip-item ${activeTab === 'workspace' && severityFilter === 'CRITICAL' ? 'is-selected active-filter' : ''}`}
-          onClick={() => {
-            setActiveTab('workspace');
-            setStatusFilter('ACTIVE');
-            setSeverityFilter('CRITICAL');
-            setOffset(0);
-          }}
-          title="Click to filter Critical & High findings"
-        >
-          <span className="iac-kpi-strip-label">Critical & high priority</span>
-          <span className="iac-kpi-strip-count">{kpis.loading ? '...' : formatNumber(kpis.criticalHigh)}</span>
-        </button>
-
-        {/* Awaiting investigation */}
-        <button
-          type="button"
-          className={`iac-kpi-strip-item ${activeTab === 'workspace' && statusFilter === 'NEW' ? 'is-selected active-filter' : ''}`}
-          onClick={() => {
-            setActiveTab('workspace');
-            setStatusFilter('NEW');
-            setSeverityFilter('ALL');
-            setOffset(0);
-          }}
-          title="Click to view New & Acknowledged findings"
-        >
-          <span className="iac-kpi-strip-label">Awaiting investigation</span>
-          <span className="iac-kpi-strip-count">{kpis.loading ? '...' : formatNumber(kpis.awaitingInvestigation)}</span>
-        </button>
-
-        {/* Open recommendations */}
-        <button
-          type="button"
-          className={`iac-kpi-strip-item ${activeTab === 'recommendations' ? 'is-selected active-filter' : ''}`}
-          onClick={() => setActiveTab('recommendations')}
-          title="Click to view Open Recommendations Directory"
-        >
-          <span className="iac-kpi-strip-label">Open recommendations</span>
-          <span className="iac-kpi-strip-count">{kpis.loading ? '...' : formatNumber(kpis.openRecommendations)}</span>
-        </button>
-
-        {/* Corrective actions */}
-        <button
-          type="button"
-          className={`iac-kpi-strip-item ${activeTab === 'actions' ? 'is-selected active-filter' : ''}`}
-          onClick={() => setActiveTab('actions')}
-          title="Click to view Corrective Actions Tracker"
-        >
-          <span className="iac-kpi-strip-label">Corrective actions</span>
-          <span className="iac-kpi-strip-count">{kpis.loading ? '...' : formatNumber(kpis.openActions)}</span>
-        </button>
+        {summaryKpiCards.map((card) => (
+          <button
+            key={card.id}
+            type="button"
+            className={`iac-kpi-strip-item ${card.isSelected ? 'is-selected active-filter' : ''}`}
+            onClick={card.onClick}
+            title={card.title}
+            aria-pressed={card.isSelected}
+          >
+            <div className="iac-kpi-strip-content">
+              <span className="iac-kpi-strip-label">{card.label}</span>
+              <span className="iac-kpi-strip-count">
+                {kpis.loading ? '...' : formatNumber(card.count)}
+              </span>
+            </div>
+            <div
+              className="kpi-sparkline-wrap"
+              aria-hidden={card.hasHistory ? undefined : 'true'}
+            >
+              {!kpis.loading && card.sparkPaths && (
+                <svg
+                  viewBox="0 0 300 18"
+                  preserveAspectRatio="none"
+                  className="kpi-sparkline-svg"
+                  role={card.hasHistory ? 'img' : undefined}
+                  aria-label={card.hasHistory ? `${card.label} historical count trend` : undefined}
+                >
+                  <path
+                    key={`line-${card.id}-${card.dataSignature}`}
+                    d={card.sparkPaths.linePath}
+                    fill="none"
+                    stroke="#7c3aed"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    vectorEffect="non-scaling-stroke"
+                    style={{
+                      '--path-len': card.sparkPaths.pathLength,
+                      strokeDasharray: card.sparkPaths.pathLength,
+                      strokeDashoffset: card.sparkPaths.pathLength,
+                    }}
+                    className="kpi-sparkline-line"
+                  />
+                </svg>
+              )}
+            </div>
+          </button>
+        ))}
       </section>
 
       {/* Top Navigation Tabs */}
@@ -2595,7 +2661,12 @@ export default function InvestigationActionsCentre() {
                           flagReason = `Flagged by standby surveillance because electricity draw persisted at ${recordedStr} on meter ${meterDisplay} during a zero-production stoppage interval.`;
                         } else if (recordedVal !== null && baselineVal !== null) {
                           const diffVal = recordedVal - baselineVal;
-                          flagReason = `Electricity consumption of ${recordedStr} on meter ${meterDisplay} exceeded the ${baselineStr} operating baseline by ${Math.abs(diffVal).toLocaleString('en-IN', { maximumFractionDigits: 2 })}${unitStr ? ` ${unitStr}` : ''}, flagged by statistical spike detection.`;
+                          const absDiffStr = `${Math.abs(diffVal).toLocaleString('en-IN', { maximumFractionDigits: 2 })}${unitStr ? ` ${unitStr}` : ''}`;
+                          if (diffVal < 0 || String(findingDetail?.anomaly_type || '').toUpperCase().includes('DROP')) {
+                            flagReason = `Electricity consumption of ${recordedStr} on meter ${meterDisplay} fell below the ${baselineStr} operating baseline by ${absDiffStr}, flagged by statistical drop detection.`;
+                          } else {
+                            flagReason = `Electricity consumption of ${recordedStr} on meter ${meterDisplay} exceeded the ${baselineStr} operating baseline by ${absDiffStr}, flagged by statistical spike detection.`;
+                          }
                         } else {
                           flagReason = `Observed telemetry on meter ${meterDisplay} deviated from the expected operating baseline.`;
                         }
