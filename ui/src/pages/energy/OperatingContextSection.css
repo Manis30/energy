@@ -1,0 +1,374 @@
+/* ==========================================================================
+   Operating Context Section Redesign
+   Compact, supervisor-focused stoppage analysis
+   ========================================================================== */
+
+.operating-context-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 1. Header & Navigation Tabs */
+.operating-context-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.operating-context-heading {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.operating-context-tabs {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  padding-bottom: 8px;
+}
+
+.operating-context-tab {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary, #64748b);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+}
+
+.operating-context-tab:hover {
+  background: var(--bg-surface-subtle, #f8fafc);
+  color: var(--text-primary, #0f172a);
+}
+
+.operating-context-tab.active {
+  background: rgba(111, 61, 186, 0.1);
+  color: var(--brand-purple, #6f3dba);
+  border-color: rgba(111, 61, 186, 0.25);
+  font-weight: 600;
+}
+
+/* 2. Stoppage Filter Toolbar */
+.operating-context-toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 2px 0;
+}
+
+.operating-context-control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.operating-context-control-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted, #64748b);
+  line-height: 16px;
+}
+
+.operating-context-select {
+  height: 34px;
+  padding: 0 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-primary, #0f172a);
+  background: var(--bg-surface-subtle, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: var(--radius-sm, 6px);
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-sizing: border-box;
+}
+
+.operating-context-select:focus {
+  border-color: var(--brand-purple, #6f3dba);
+  box-shadow: 0 0 0 2px rgba(111, 61, 186, 0.12);
+}
+
+/* 3. Summary Strip (4 metrics) */
+.operating-context-summary-strip {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-surface-subtle, #f8fafc);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.operating-context-summary-item {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 2px;
+  border-right: 1px solid var(--border-color, #e2e8f0);
+}
+
+.operating-context-summary-item:last-child {
+  border-right: none;
+}
+
+.operating-context-summary-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted, #64748b);
+  line-height: 16px;
+  text-transform: none;
+}
+
+.operating-context-summary-val-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 1px;
+}
+
+.operating-context-summary-val {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 24px;
+  color: var(--text-primary, #0f172a);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.operating-context-summary-val.has-warning {
+  color: var(--status-warning, #d97706);
+}
+
+.operating-context-summary-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-secondary, #475569);
+  margin-top: 1px;
+}
+
+/* 4. Episode Table Layout */
+.operating-context-table-container {
+  max-height: 480px;
+  overflow-y: auto;
+  overflow-x: auto;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-surface, #ffffff);
+}
+
+.operating-context-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.operating-context-table th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg-surface-subtle, #f8fafc);
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary, #64748b);
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  white-space: nowrap;
+}
+
+.operating-context-table td {
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-primary, #1e293b);
+  border-bottom: 1px solid var(--border-color, #f1f5f9);
+  vertical-align: middle;
+}
+
+.operating-context-table tr:hover td {
+  background: rgba(111, 61, 186, 0.03);
+}
+
+.operating-context-table tr.is-selected td {
+  background: rgba(111, 61, 186, 0.08);
+}
+
+/* Column Specific Styles */
+.col-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.operating-context-line-id {
+  font-weight: 600;
+  color: var(--text-primary, #0f172a);
+}
+
+.operating-context-plant-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+  line-height: 15px;
+}
+
+.operating-context-window {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge-restart-success {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+  white-space: nowrap;
+  display: inline-block;
+}
+
+.badge-restart-none {
+  font-size: 12px;
+  color: var(--text-muted, #94a3b8);
+  white-space: nowrap;
+}
+
+/* 5. Episode Inspection Drawer/Card */
+.operating-context-inspect-drawer {
+  background: var(--bg-surface, #ffffff);
+  border: 1px solid var(--brand-purple, #6f3dba);
+  border-radius: var(--radius-md, 8px);
+  padding: 16px;
+  position: relative;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.operating-context-inspect-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  padding-bottom: 8px;
+}
+
+.operating-context-inspect-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.operating-context-inspect-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.operating-context-inspect-close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.operating-context-inspect-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-subtle);
+}
+
+/* Dark mode overrides */
+[data-theme="dark"] .operating-context-tab.active {
+  background: rgba(166, 132, 238, 0.16);
+  color: #c4b5fd;
+  border-color: rgba(166, 132, 238, 0.35);
+}
+
+[data-theme="dark"] .operating-context-summary-strip {
+  background: #141c2e;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .operating-context-summary-item {
+  border-right-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .operating-context-summary-val {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .operating-context-summary-sub {
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .operating-context-table-container {
+  background: #101726;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .operating-context-table th {
+  background: #141c2e;
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .operating-context-table td {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .operating-context-line-id {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .operating-context-inspect-drawer {
+  background: #141c2e;
+  border-color: #a684ee;
+}
+
+[data-theme="dark"] .operating-context-inspect-header {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+@media (max-width: 860px) {
+  .operating-context-summary-strip {
+    flex-direction: column;
+  }
+  .operating-context-summary-item {
+    border-right: none;
+    border-bottom: 1px solid var(--border-color, #e2e8f0);
+  }
+  .operating-context-summary-item:last-child {
+    border-bottom: none;
+  }
+}

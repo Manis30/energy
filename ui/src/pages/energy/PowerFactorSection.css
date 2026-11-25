@@ -1,0 +1,328 @@
+/* ==========================================================================
+   Power Factor Monitoring Section Redesign
+   Prominent reading summary, compact 3-metric strip, shared dot scale
+   ========================================================================== */
+
+.pf-section-card {
+  width: 100%;
+  padding: 14px;
+  background: var(--bg-surface, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-sm);
+  box-sizing: border-box;
+  margin-bottom: 12px;
+}
+
+/* 1. Section Header & Headline Summary */
+.pf-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pf-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pf-section-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+  color: var(--text-primary, #0f172a);
+  letter-spacing: -0.01em;
+}
+
+/* Prominent Summary Headline */
+.pf-headline-summary-row {
+  margin-bottom: 12px;
+}
+
+.pf-headline-summary {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 24px;
+  color: var(--text-primary, #0f172a);
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.pf-headline-summary.has-warning {
+  color: var(--status-warning, #d97706);
+}
+
+/* 2. Compact 3-Metric Row (Average, Minimum, Maximum) */
+.pf-metrics-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  background: var(--bg-surface-subtle, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: var(--radius-md, 6px);
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.pf-metric-item {
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--border-color, #e2e8f0);
+}
+
+.pf-metric-item:last-child {
+  border-right: none;
+}
+
+.pf-metric-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary, #64748b);
+  line-height: 16px;
+}
+
+.pf-metric-val {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 24px;
+  color: var(--text-primary, #0f172a);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.pf-metric-sub {
+  font-size: 11px;
+  color: var(--text-muted, #94a3b8);
+  line-height: 14px;
+}
+
+/* 3. Submeter Scale with Dots */
+.pf-scale-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.pf-scale-note {
+  font-size: 12px;
+  color: var(--text-secondary, #64748b);
+  margin-bottom: 8px;
+}
+
+/* Shared Axis Header Row */
+.pf-scale-axis-row {
+  display: grid;
+  grid-template-columns: 145px 1fr 75px;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+
+.pf-axis-label-col {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary, #64748b);
+}
+
+.pf-scale-ticks {
+  position: relative;
+  width: 100%;
+  height: 18px;
+}
+
+.pf-scale-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted, #64748b);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pf-scale-tick.is-threshold {
+  color: var(--status-warning, #d97706);
+  font-weight: 600;
+}
+
+.pf-axis-val-col {
+  text-align: right;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary, #64748b);
+}
+
+/* Submeter Rows */
+.pf-meter-rows-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.pf-meter-dot-row {
+  display: grid;
+  grid-template-columns: 145px 1fr 75px;
+  gap: 12px;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-color-light, #f1f5f9);
+}
+
+.pf-meter-dot-row:last-child {
+  border-bottom: none;
+}
+
+.pf-meter-dot-row:hover {
+  background: var(--bg-hover, rgba(111, 61, 186, 0.02));
+}
+
+.pf-meter-name-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 145px;
+  white-space: nowrap;
+}
+
+.pf-meter-id-text {
+  font-size: 13px;
+  font-weight: 500;
+  font-family: monospace;
+  color: var(--text-primary, #0f172a);
+}
+
+.pf-meter-area-badge {
+  font-size: 11px;
+  color: var(--text-muted, #64748b);
+}
+
+/* Scale Track & Dot */
+.pf-dot-track-wrap {
+  position: relative;
+  width: 100%;
+  height: 18px;
+  display: flex;
+  align-items: center;
+}
+
+.pf-dot-track-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--border-color, #e2e8f0);
+  border-radius: 1px;
+}
+
+.pf-threshold-indicator-line {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 1.5px;
+  background: var(--status-warning, #f59e0b);
+  z-index: 1;
+}
+
+.pf-dot-marker {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  transform: translate(-50%, 0);
+  z-index: 2;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: left 0.3s ease;
+}
+
+.pf-dot-marker.compliant {
+  background: var(--status-success, #10b981);
+}
+
+.pf-dot-marker.non-compliant {
+  background: var(--status-danger, #ef4444);
+}
+
+/* Numeric Value Column */
+.pf-meter-val-text {
+  text-align: right;
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  font-family: monospace;
+  color: var(--text-primary, #0f172a);
+}
+
+.pf-meter-val-text.non-compliant {
+  color: var(--status-danger, #ef4444);
+  font-weight: 600;
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+  .pf-metrics-strip {
+    grid-template-columns: 1fr;
+  }
+  .pf-metric-item {
+    border-right: none;
+    border-bottom: 1px solid var(--border-color, #e2e8f0);
+  }
+  .pf-metric-item:last-child {
+    border-bottom: none;
+  }
+  .pf-scale-axis-row,
+  .pf-meter-dot-row {
+    grid-template-columns: 110px 1fr 65px;
+    gap: 8px;
+  }
+}
+
+/* Dark Mode Overrides */
+[data-theme="dark"] .pf-section-card {
+  background: #141c2e;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .pf-section-title {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .pf-headline-summary {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .pf-metrics-strip {
+  background: #101726;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .pf-metric-item {
+  border-right-color: rgba(255, 255, 255, 0.08);
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .pf-metric-val {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .pf-meter-id-text,
+[data-theme="dark"] .pf-meter-val-text {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .pf-dot-track-line {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+[data-theme="dark"] .pf-meter-dot-row {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}

@@ -948,7 +948,7 @@ class TestFindingTrialResultRegression(unittest.TestCase):
             ai_inv["what_we_observed"]
             + " " + ai_inv["how_it_compares"]
             + " " + ai_inv["what_we_still_need_to_know"]
-            + " " + ai_inv["what_to_check_next"]
+            + " " + (ai_inv["what_to_check_next"] if isinstance(ai_inv["what_to_check_next"], str) else " ".join(ai_inv["what_to_check_next"]))
         )
         self.assertNotIn("FAL-L2", combined_text)
         self.assertNotIn("Line FAL", combined_text)

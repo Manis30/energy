@@ -1,0 +1,307 @@
+/* ==========================================================================
+   Energy Meter Breakdown Redesign
+   Full-width ranked table with inline visual bars
+   ========================================================================== */
+
+.meter-breakdown-card {
+  width: 100%;
+  padding: 14px;
+  background: var(--bg-surface, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-sm);
+  box-sizing: border-box;
+  margin-bottom: 1.25rem;
+}
+
+/* 1. Header */
+.meter-breakdown-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.meter-breakdown-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.meter-breakdown-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+  color: var(--text-primary, #0f172a);
+  letter-spacing: -0.01em;
+}
+
+.meter-breakdown-count {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted, #64748b);
+  background: var(--bg-surface-subtle, #f8fafc);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--border-color, #e2e8f0);
+}
+
+.meter-breakdown-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 2. Table Container & Table */
+.meter-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.meter-ranked-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 18px;
+  text-align: left;
+}
+
+.meter-ranked-table th {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-secondary, #64748b);
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  white-space: nowrap;
+  background: transparent;
+}
+
+.meter-ranked-table td {
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+  color: var(--text-primary, #0f172a);
+  border-bottom: 1px solid var(--border-color-light, #f1f5f9);
+  vertical-align: middle;
+}
+
+.meter-ranked-table tbody tr:hover td {
+  background-color: var(--bg-hover, rgba(111, 61, 186, 0.03));
+}
+
+.meter-ranked-table tbody tr.is-expanded td {
+  background-color: var(--bg-surface-subtle, #f8fafc);
+}
+
+/* Column Alignment & Tabular Digits */
+.col-right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  white-space: nowrap;
+}
+
+.col-meter {
+  min-width: 145px;
+  white-space: nowrap;
+}
+
+/* Meter Cell Layout */
+.meter-cell-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.meter-color-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.meter-id-text {
+  font-weight: 500;
+  color: var(--text-primary, #0f172a);
+  white-space: nowrap;
+}
+
+.meter-sub-note {
+  font-size: 11px;
+  color: var(--text-muted, #64748b);
+  line-height: 14px;
+}
+
+/* Inline Bar in Energy Consumed Column */
+.meter-energy-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  min-width: 150px;
+}
+
+.meter-energy-val {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  color: var(--text-primary, #0f172a);
+  white-space: nowrap;
+}
+
+.meter-energy-bar-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.meter-energy-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: rgba(111, 61, 186, 0.35);
+  transition: width 0.3s ease;
+}
+
+.meter-energy-bar-fill.is-highest {
+  background: var(--brand-purple, #6f3dba);
+}
+
+/* Small Screen Row Disclosure */
+.meter-disclosure-btn {
+  display: none;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  color: var(--text-muted, #64748b);
+  border-radius: 4px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+}
+
+.meter-disclosure-btn:hover {
+  color: var(--brand-purple, #6f3dba);
+  background: rgba(111, 61, 186, 0.08);
+}
+
+.meter-disclosure-row {
+  display: none;
+}
+
+.meter-disclosure-content {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-surface-subtle, #f8fafc);
+  border-radius: var(--radius-sm, 6px);
+  margin: 4px 0;
+}
+
+.meter-disclosure-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.meter-disclosure-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted, #64748b);
+}
+
+.meter-disclosure-val {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #0f172a);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Empty State */
+.meter-table-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-muted, #64748b);
+  font-size: 13px;
+}
+
+/* Responsive Rules for Small Screens */
+@media (max-width: 768px) {
+  .meter-col-desktop {
+    display: none !important;
+  }
+
+  .meter-disclosure-btn {
+    display: inline-flex;
+  }
+
+  .meter-disclosure-row.is-open {
+    display: table-row;
+  }
+
+  .meter-disclosure-row.is-open td {
+    padding: 0 12px 8px 12px;
+    border-bottom: 1px solid var(--border-color, #e2e8f0);
+  }
+}
+
+/* Dark Mode Overrides */
+[data-theme="dark"] .meter-breakdown-card {
+  background: #141c2e;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .meter-breakdown-title {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .meter-breakdown-count {
+  background: #0f172a;
+  color: #94a3b8;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .meter-ranked-table th {
+  color: #94a3b8;
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .meter-ranked-table td {
+  color: #cbd5e1;
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="dark"] .meter-id-text,
+[data-theme="dark"] .meter-energy-val,
+[data-theme="dark"] .meter-disclosure-val {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .meter-energy-bar-track {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .meter-energy-bar-fill {
+  background: rgba(166, 132, 238, 0.35);
+}
+
+[data-theme="dark"] .meter-energy-bar-fill.is-highest {
+  background: #a684ee;
+}
+
+[data-theme="dark"] .meter-ranked-table tbody tr.is-expanded td,
+[data-theme="dark"] .meter-disclosure-content {
+  background: #101726;
+}

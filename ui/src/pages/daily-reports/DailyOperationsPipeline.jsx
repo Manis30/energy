@@ -2,9 +2,10 @@ import React, { useRef, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatCurrency, formatNumber } from '../../utils/formatters';
+import DailyDataEntryForm from './DailyDataEntryForm';
 
 const STAGE_TITLES = {
-  data_upload: 'Data Upload',
+  data_upload: 'Data Entry',
   validation: 'Validation',
   database_ingestion: 'Database Ingestion',
   data_reconciliation: 'Data Reconciliation',
@@ -25,6 +26,181 @@ const STAGE_KEYS = [
   'investigation_handoff',
 ];
 
+const RECON_CHECK_NAMES = {
+  CHK_ENERGY_COVERAGE: 'Energy coverage',
+  CHK_PRODUCTION_COVERAGE: 'Production coverage',
+  CHK_TIMESTAMP_ALIGNMENT: 'Timestamp alignment',
+  CHK_DUPLICATE_RECORDS: 'Duplicate records',
+  CHK_SOURCE_CONSISTENCY: 'Source consistency',
+  CHK_REFERENCE_INTEGRITY: 'Reference integrity',
+  CHK_DATA_QUALITY: 'Data quality',
+  ENERGY_COVERAGE: 'Energy coverage',
+  PRODUCTION_COVERAGE: 'Production coverage',
+  TIMESTAMP_ALIGNMENT: 'Timestamp alignment',
+  DUPLICATE_RECORDS: 'Duplicate records',
+  SOURCE_CONSISTENCY: 'Source consistency',
+  REFERENCE_INTEGRITY: 'Reference integrity',
+  DATA_QUALITY: 'Data quality',
+};
+
+const getCheckFriendlyName = (chk) => {
+  if (chk.check_id && RECON_CHECK_NAMES[chk.check_id]) return RECON_CHECK_NAMES[chk.check_id];
+  if (chk.category && RECON_CHECK_NAMES[chk.category]) return RECON_CHECK_NAMES[chk.category];
+  if (chk.name) {
+    return chk.name.replace(/\s*&.*$/, '').trim();
+  }
+  return chk.check_id
+    ? chk.check_id.replace(/^CHK_/, '').replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase())
+    : 'System check';
+};
+
+const formatCheckSummary = (chk) => {
+  const s = String(chk?.summary || '');
+  const status = String(chk?.status || '').toUpperCase();
+
+  if (chk.check_id === 'CHK_ENERGY_COVERAGE' || chk.category === 'ENERGY_COVERAGE') {
+    const meterMatch = s.match(/Evaluated (\d+) observed energy meter stream/i);
+    const meterCount = meterMatch ? meterMatch[1] : null;
+    const gapMatch = s.match(/Identified (\d+) coverage gap/i);
+    const gapCount = gapMatch ? parseInt(gapMatch[1], 10) : 0;
+    if (meterCount) {
+      return gapCount > 0
+        ? `${meterCount} meter streams checked. ${gapCount} coverage gap${gapCount === 1 ? '' : 's'} identified.`
+        : `${meterCount} meter streams checked. No coverage gaps found.`;
+    }
+  }
+
+  if (chk.check_id === 'CHK_PRODUCTION_COVERAGE' || chk.category === 'PRODUCTION_COVERAGE') {
+    const lineMatch = s.match(/Found (\d+) active line stream/i) || s.match(/Evaluated (\d+) registered line/i);
+    const lineCount = lineMatch ? lineMatch[1] : null;
+    const unobsMatch = s.match(/(\d+) unobserved line warning/i);
+    const unobsCount = unobsMatch ? parseInt(unobsMatch[1], 10) : 0;
+    if (lineCount) {
+      return unobsCount > 0
+        ? `${lineCount} line streams checked. ${unobsCount} unobserved line warning${unobsCount === 1 ? '' : 's'} identified.`
+        : `${lineCount} line streams checked. No unobserved line warnings found.`;
+    }
+  }
+
+  if (chk.check_id === 'CHK_TIMESTAMP_ALIGNMENT' || chk.category === 'TIMESTAMP_ALIGNMENT') {
+    const misMatch = s.match(/(\d+) active production hour\(s\) with zero energy/i);
+    const misCount = misMatch ? parseInt(misMatch[1], 10) : 0;
+    if (status === 'PASS' || misCount === 0) {
+      return 'Timestamp check passed. No energy or production misalignments found.';
+    }
+    return `Timestamp warning: ${misCount} production hours with zero energy telemetry.`;
+  }
+
+  if (chk.check_id === 'CHK_DUPLICATE_RECORDS' || chk.category === 'DUPLICATE_RECORDS') {
+    if (status === 'PASS' || s.includes('0 duplicate energy key')) {
+      return 'Uniqueness check passed. No duplicate records found.';
+    }
+    return 'Duplicate records detected during key verification.';
+  }
+
+  if (chk.check_id === 'CHK_SOURCE_CONSISTENCY' || chk.category === 'SOURCE_CONSISTENCY') {
+    if (status === 'PASS' || s.includes('0 inconsistency')) {
+      return 'Source consistency verified. Upload logs match ingested facts.';
+    }
+    return 'Source consistency discrepancy detected across upload logs.';
+  }
+
+  if (chk.check_id === 'CHK_REFERENCE_INTEGRITY' || chk.category === 'REFERENCE_INTEGRITY') {
+    if (status === 'PASS' || s.includes('0 orphan') || s.includes('0 violation')) {
+      return 'Reference integrity verified. All foreign keys match dimension tables.';
+    }
+    return 'Foreign key integrity warning: orphaned records identified.';
+  }
+
+  if (chk.check_id === 'CHK_DATA_QUALITY' || chk.category === 'DATA_QUALITY') {
+    if (status === 'PASS' || s.includes('0 anomaly') || s.includes('0 out-of-range')) {
+      return 'Data quality checks passed. Voltage and quantities within physical bounds.';
+    }
+    return 'Data quality warnings detected for electrical or production parameters.';
+  }
+
+  if (s) {
+    return s.replace(/\s+/g, ' ').trim();
+  }
+  return status === 'PASS' ? 'Check passed with zero discrepancies.' : 'Reconciliation evaluation completed.';
+};
+
+const getReconCheckBadge = (status) => {
+  const s = String(status || '').toUpperCase();
+  switch (s) {
+    case 'PASS':
+    case 'PASSED':
+    case 'COMPLETED':
+      return <span className="daily-ops-recon-badge pass">Passed</span>;
+    case 'WARNING':
+    case 'WARN':
+    case 'COMPLETED_WITH_WARNINGS':
+      return <span className="daily-ops-recon-badge warning">Warning</span>;
+    case 'FAIL':
+    case 'FAILED':
+      return <span className="daily-ops-recon-badge fail">Failed</span>;
+    case 'UNAVAILABLE':
+    case 'UNKNOWN':
+      return <span className="daily-ops-recon-badge unknown">Unknown</span>;
+    case 'NOT_STARTED':
+      return <span className="daily-ops-recon-badge not-started">Not started</span>;
+    default:
+      if (!status) return <span className="daily-ops-recon-badge unknown">Unknown</span>;
+      return <span className="daily-ops-recon-badge not-started">{status}</span>;
+  }
+};
+
+const formatAnomalyMeasurement = (ev) => {
+  if (!ev) return 'Baseline unavailable';
+
+  // 1. Power factor anomalies
+  const isPf = ev.power_factor != null || (ev.detector && ev.detector.toLowerCase().includes('power factor'));
+  if (isPf) {
+    const pfVal = ev.power_factor != null
+      ? Number(ev.power_factor)
+      : (ev.actual_value != null && Number(ev.actual_value) < 1.0 ? Number(ev.actual_value) : null);
+    if (pfVal != null) {
+      const basePf = ev.baseline_value != null ? Number(ev.baseline_value) : null;
+      if (basePf != null) {
+        return `PF ${pfVal.toFixed(3)} vs ${basePf.toFixed(3)} base`;
+      }
+      return `PF ${pfVal.toFixed(3)} (Base: ≥0.900)`;
+    }
+  }
+
+  // 2. Numeric actual and baseline
+  const actual = ev.actual_value != null ? Number(ev.actual_value) : (ev.actual_kwh != null ? Number(ev.actual_kwh) : null);
+  const baseline = ev.baseline_value != null ? Number(ev.baseline_value) : (ev.baseline_kwh != null ? Number(ev.baseline_kwh) : null);
+  const unit = ev.unit || 'kWh';
+
+  if (actual != null && baseline != null) {
+    const diff = actual - baseline;
+    const diffSign = diff > 0 ? '+' : '';
+    const diffPct = baseline !== 0 ? ` (${diffSign}${((diff / baseline) * 100).toFixed(1)}%)` : '';
+    return `${actual.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 })} ${unit} vs ${baseline.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 })} ${unit}${diffPct}`;
+  }
+
+  if (actual != null && baseline == null) {
+    return `${actual.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 })} ${unit} (Baseline unavailable)`;
+  }
+
+  if (actual == null && baseline != null) {
+    return `Base: ${baseline.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 })} ${unit}`;
+  }
+
+  // 3. Deviation score fallback
+  if (ev.deviation_score != null) {
+    const score = Number(ev.deviation_score);
+    if (ev.detector && ev.detector.toLowerCase().includes('z-score')) {
+      return `${score > 0 ? '+' : ''}${score.toFixed(2)}σ deviation (Baseline unavailable)`;
+    }
+    return `${score > 0 ? '+' : ''}${score.toFixed(1)}% deviation (Baseline unavailable)`;
+  }
+
+  // 4. Fallback if baseline is completely missing
+  return 'Baseline unavailable';
+};
+
 export default function DailyOperationsPipeline({
   pipelineState,
   selectedStage: externalSelectedStage,
@@ -33,13 +209,26 @@ export default function DailyOperationsPipeline({
   toggleStage,
   reportingDate,
   plantId,
-  // Upload & File states
+  onSwitchPlantAndDate,
+  // Data Entry props
+  energyRows = [],
+  setEnergyRows,
+  productionRows = [],
+  setProductionRows,
+  masterData,
+  savedCounts,
+  loadingSaved,
+  validationResult,
+  validating,
+  savingEntries,
+  onValidateEntries,
+  onSaveEntries,
+  onReloadRecords,
+  // Legacy / Downstream props
   energyFiles,
   productionFiles,
   handleEnergyFileSelect,
   handleProductionFileSelect,
-  // Action handlers
-  validating,
   handleValidateFiles,
   handleValidateAndSave,
   ingesting,
@@ -64,6 +253,8 @@ export default function DailyOperationsPipeline({
   // Opportunities to Review state
   const [opportunities, setOpportunities] = useState([]);
   const [loadingOpportunities, setLoadingOpportunities] = useState(false);
+  const [expandedCheckId, setExpandedCheckId] = useState(null);
+  const [expandedHandoffRows, setExpandedHandoffRows] = useState({});
 
   useEffect(() => {
     let isMounted = true;
@@ -129,9 +320,11 @@ export default function DailyOperationsPipeline({
   };
 
   const stages = pipelineState?.stages || {};
-  const completedCount = STAGE_KEYS.filter(
-    (k) => stages[k]?.status === 'COMPLETED' || stages[k]?.status === 'COMPLETED_WITH_WARNINGS'
-  ).length;
+  const isStageCompleted = (status) => {
+    const s = String(status || '').toUpperCase();
+    return s === 'COMPLETED' || s === 'COMPLETED_WITH_WARNINGS';
+  };
+  const completedCount = STAGE_KEYS.filter((k) => isStageCompleted(stages[k]?.status)).length;
   const progressPercent = Math.round((completedCount / STAGE_KEYS.length) * 100);
   const onValidate = handleValidateAndSave || handleValidateFiles;
   const selectedStageObj = stages[selectedStageKey] || {
@@ -139,12 +332,22 @@ export default function DailyOperationsPipeline({
     summary: 'Pending stage initialization',
   };
 
-  const getStatusBadge = (status) => {
-    switch (status) {
+  const getStatusBadge = (status, stageKey) => {
+    const s = String(status || '').toUpperCase();
+    const isHandoff = stageKey === 'investigation_handoff';
+    switch (s) {
       case 'COMPLETED':
-        return <span className="daily-ops-status-badge completed">Completed</span>;
+        return (
+          <span className="daily-ops-status-badge completed">
+            {isHandoff ? 'Stage completed' : 'Completed'}
+          </span>
+        );
       case 'COMPLETED_WITH_WARNINGS':
-        return <span className="daily-ops-status-badge warning">Completed with warnings</span>;
+        return (
+          <span className="daily-ops-status-badge warning">
+            {isHandoff ? 'Stage completed with warnings' : 'Completed with warnings'}
+          </span>
+        );
       case 'IN_PROGRESS':
         return <span className="daily-ops-status-badge in-progress">In progress</span>;
       case 'FAILED':
@@ -157,16 +360,17 @@ export default function DailyOperationsPipeline({
   };
 
   const getNodeIcon = (status, idx) => {
-    switch (status) {
+    const s = String(status || '').toUpperCase();
+    switch (s) {
       case 'COMPLETED':
         return (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true">
             <polyline points="20 6 9 17 4 12" />
           </svg>
         );
       case 'COMPLETED_WITH_WARNINGS':
         return (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
             <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
             <line x1="12" y1="9" x2="12" y2="13" />
             <line x1="12" y1="17" x2="12.01" y2="17" />
@@ -174,25 +378,23 @@ export default function DailyOperationsPipeline({
         );
       case 'IN_PROGRESS':
         return (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="spin-icon" aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="spin-icon" aria-hidden="true">
             <line x1="12" y1="2" x2="12" y2="6" />
             <line x1="12" y1="18" x2="12" y2="22" />
             <line x1="4.93" y1="4.93" x2="7.76" y2="7.76" />
             <line x1="16.24" y1="16.24" x2="19.07" y2="19.07" />
-            <line x1="2" y1="12" x2="6" y2="12" />
-            <line x1="18" y1="12" x2="22" y2="12" />
           </svg>
         );
       case 'FAILED':
         return (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true">
             <line x1="18" y1="6" x2="6" y2="18" />
             <line x1="6" y1="6" x2="18" y2="18" />
           </svg>
         );
       case 'BLOCKED':
         return (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
             <path d="M7 11V7a5 5 0 0 1 10 0v4" />
           </svg>
@@ -203,7 +405,8 @@ export default function DailyOperationsPipeline({
   };
 
   const getNodeClass = (status) => {
-    switch (status) {
+    const s = String(status || '').toUpperCase();
+    switch (s) {
       case 'COMPLETED':
         return 'completed';
       case 'COMPLETED_WITH_WARNINGS':
@@ -220,16 +423,18 @@ export default function DailyOperationsPipeline({
   };
 
   const getConnectorClass = (currentStatus, nextStatus) => {
+    const cur = String(currentStatus || '').toUpperCase();
+    const nxt = String(nextStatus || '').toUpperCase();
     if (
-      (currentStatus === 'COMPLETED' || currentStatus === 'COMPLETED_WITH_WARNINGS') &&
-      (nextStatus === 'COMPLETED' || nextStatus === 'COMPLETED_WITH_WARNINGS' || nextStatus === 'IN_PROGRESS')
+      (cur === 'COMPLETED' || cur === 'COMPLETED_WITH_WARNINGS') &&
+      (nxt === 'COMPLETED' || nxt === 'COMPLETED_WITH_WARNINGS' || nxt === 'IN_PROGRESS')
     ) {
-      return currentStatus === 'COMPLETED_WITH_WARNINGS' ? 'warning' : 'completed';
+      return cur === 'COMPLETED_WITH_WARNINGS' ? 'warning' : 'completed';
     }
-    if (currentStatus === 'IN_PROGRESS') {
+    if (cur === 'IN_PROGRESS') {
       return 'in-progress';
     }
-    if (currentStatus === 'COMPLETED') {
+    if (cur === 'COMPLETED') {
       return 'completed';
     }
     return '';
@@ -242,20 +447,17 @@ export default function DailyOperationsPipeline({
         <div className="daily-ops-stepper-header">
           <div className="daily-ops-stepper-title-area">
             <h3 className="daily-ops-stepper-heading">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
                 <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
               </svg>
-              <span>8-Stage Operational Pipeline</span>
+              <span>Operational pipeline</span>
             </h3>
-            <p className="daily-ops-stepper-subheading">
-              Authoritative telemetry intake, deterministic reconciliation, and anomaly detection
-            </p>
           </div>
 
           <div className="daily-ops-stepper-meta">
-            <div className="daily-ops-progress-text">
-              <strong>{completedCount} of 8</strong> Stages Completed
-            </div>
+            <span className="daily-ops-progress-text">
+              <strong>{completedCount} of 8</strong> completed
+            </span>
             <div className="daily-ops-progress-bar-bg" title={`${progressPercent}% completed`}>
               <div
                 className="daily-ops-progress-bar-fill"
@@ -265,8 +467,8 @@ export default function DailyOperationsPipeline({
           </div>
         </div>
 
-        {/* Scrollable Horizontal Stepper Track */}
-        <div className="daily-ops-horizontal-scroll">
+        {/* Desktop Single-Row 8-Step Track */}
+        <div className="daily-ops-desktop-stepper-wrap">
           <div className="daily-ops-horizontal-stepper" role="tablist" aria-label="Pipeline Stages">
             {STAGE_KEYS.map((key, idx) => {
               const stage = stages[key] || { status: 'NOT_STARTED', summary: 'Pending initialization' };
@@ -274,6 +476,8 @@ export default function DailyOperationsPipeline({
               const isCurrent = pipelineState?.current_stage === key;
               const isLast = idx === STAGE_KEYS.length - 1;
               const nextStatus = !isLast ? stages[STAGE_KEYS[idx + 1]]?.status : null;
+              const hasWarning = stage.status === 'COMPLETED_WITH_WARNINGS';
+              const hasFailed = stage.status === 'FAILED';
 
               return (
                 <div
@@ -304,17 +508,44 @@ export default function DailyOperationsPipeline({
                     </div>
                   </div>
 
-                  <div className="daily-ops-h-label-group">
-                    <span className="daily-ops-h-index">Stage {idx + 1}</span>
-                    <span className="daily-ops-h-title">{STAGE_TITLES[key]}</span>
-                    <div className="daily-ops-h-status-tag">
-                      {getStatusBadge(stage.status)}
-                    </div>
-                  </div>
+                  <span className="daily-ops-h-title">{STAGE_TITLES[key]}</span>
+                  {hasWarning && (
+                    <span className="daily-ops-h-alert-indicator warning">Warning</span>
+                  )}
+                  {hasFailed && (
+                    <span className="daily-ops-h-alert-indicator failed">Failed</span>
+                  )}
                 </div>
               );
             })}
           </div>
+        </div>
+
+        {/* Mobile / Narrow Screen Compact Stage Selector */}
+        <div className="daily-ops-mobile-stepper" aria-label="Pipeline Stage Selection">
+          <button
+            type="button"
+            className="daily-ops-mobile-nav-btn"
+            onClick={handlePrevStage}
+            disabled={selectedIndex === 0}
+            aria-label="Previous Stage"
+          >
+            ‹
+          </button>
+          <div className="daily-ops-mobile-stage-summary">
+            <span className="daily-ops-mobile-step-pill">Stage {selectedIndex + 1} of 8</span>
+            <span className="daily-ops-mobile-step-title">{STAGE_TITLES[selectedStageKey]}</span>
+            {getStatusBadge(selectedStageObj.status, selectedStageKey)}
+          </div>
+          <button
+            type="button"
+            className="daily-ops-mobile-nav-btn"
+            onClick={handleNextStage}
+            disabled={selectedIndex === STAGE_KEYS.length - 1}
+            aria-label="Next Stage"
+          >
+            ›
+          </button>
         </div>
       </div>
 
@@ -327,15 +558,11 @@ export default function DailyOperationsPipeline({
       >
         <div className="daily-ops-detail-header">
           <div className="daily-ops-detail-header-left">
-            <div className="daily-ops-detail-title-row">
-              <span className="daily-ops-phase-chip">Stage {selectedIndex + 1} of 8</span>
-              <h3 className="daily-ops-detail-title">{`${selectedIndex + 1}. ${STAGE_TITLES[selectedStageKey]}`}</h3>
-              {getStatusBadge(selectedStageObj.status)}
-              {pipelineState?.current_stage === selectedStageKey && (
-                <span className="daily-ops-active-chip">Active</span>
-              )}
-            </div>
-            <p className="daily-ops-detail-summary">{selectedStageObj.summary || 'Pending stage execution'}</p>
+            <h3 className="daily-ops-detail-title">{`${selectedIndex + 1}. ${STAGE_TITLES[selectedStageKey]}`}</h3>
+            {getStatusBadge(selectedStageObj.status, selectedStageKey)}
+            {pipelineState?.current_stage === selectedStageKey && selectedStageObj.status !== 'COMPLETED' && (
+              <span className="daily-ops-active-chip">Active</span>
+            )}
           </div>
 
           <div className="daily-ops-detail-header-right">
@@ -359,7 +586,7 @@ export default function DailyOperationsPipeline({
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                   <polyline points="15 18 9 12 15 6" />
                 </svg>
-                <span>Previous Stage</span>
+                <span>Previous</span>
               </button>
               <button
                 type="button"
@@ -368,7 +595,7 @@ export default function DailyOperationsPipeline({
                 disabled={selectedIndex === STAGE_KEYS.length - 1}
                 aria-label="Next Stage"
               >
-                <span>Next Stage</span>
+                <span>Next</span>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                   <polyline points="9 18 15 12 9 6" />
                 </svg>
@@ -430,198 +657,26 @@ export default function DailyOperationsPipeline({
               </div>
             )}
 
-            {/* STAGE 1: DATA UPLOAD */}
+            {/* STAGE 1: DATA ENTRY */}
             {selectedStageKey === 'data_upload' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                {selectedStageObj.details?.is_historical_baseline && (
-                  <div className="daily-ops-alert-banner info">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="16" x2="12" y2="12" />
-                      <line x1="12" y1="8" x2="12.01" y2="8" />
-                    </svg>
-                    <span>
-                      <strong>Historical Telemetry Baseline:</strong> Fact records exist in PostgreSQL for {reportingDate}. You may upload new files below to perform an incremental or overwrite ingestion, or execute downstream pipeline stages directly on baseline data.
-                    </span>
-                  </div>
-                )}
-
-                {dateMismatch && (
-                  <div className="daily-ops-alert-banner warning">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-                      <line x1="12" y1="9" x2="12" y2="13" />
-                      <line x1="12" y1="17" x2="12.01" y2="17" />
-                    </svg>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '0.5rem' }}>
-                      <span>
-                        <strong>Date Mismatch:</strong> {dateMismatch.fileType} file contains data for <strong>{dateMismatch.detectedDate}</strong>, but current reporting date is <strong>{dateMismatch.selectedDate}</strong>.
-                      </span>
-                      {handleSwitchDate && (
-                        <button
-                          type="button"
-                          className="daily-ops-btn daily-ops-btn-secondary"
-                          style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
-                          onClick={() => handleSwitchDate(dateMismatch.detectedDate)}
-                        >
-                          Switch to {dateMismatch.detectedDate}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {selectedStageObj.details?.has_linked_uploads && selectedStageObj.details?.files?.length > 0 && (
-                  <div className="daily-ops-table-wrapper" style={{ marginBottom: '0.5rem' }}>
-                    <table className="daily-ops-table">
-                      <thead>
-                        <tr>
-                          <th>Upload ID</th>
-                          <th>File Name</th>
-                          <th>Report Type</th>
-                          <th>Size</th>
-                          <th>Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {selectedStageObj.details.files.map((f, fi) => (
-                          <tr key={fi}>
-                            <td><strong>{f.upload_id}</strong></td>
-                            <td>{f.filename}</td>
-                            <td>{f.report_type}</td>
-                            <td>{(f.size_bytes / 1024).toFixed(1)} KB</td>
-                            <td>
-                              <span className="daily-ops-status-badge completed">{f.status}</span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                <div className="daily-ops-upload-grid">
-                  {/* Energy Upload Card */}
-                  <div className="daily-ops-upload-card">
-                    <h4 className="daily-ops-card-title">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                      </svg>
-                      Energy Telemetry File
-                    </h4>
-                    <label
-                      className="daily-ops-dropzone"
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        if (e.dataTransfer?.files?.[0]) {
-                          handleEnergyFileSelect(e.dataTransfer.files[0]);
-                        }
-                      }}
-                    >
-                      <input
-                        type="file"
-                        accept=".csv,.xlsx,.xls"
-                        style={{ display: 'none' }}
-                        onChange={(e) => handleEnergyFileSelect(e.target.files[0])}
-                      />
-                      <div className="daily-ops-dropzone-icon">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                          <polyline points="17 8 12 3 7 8" />
-                          <line x1="12" y1="3" x2="12" y2="15" />
-                        </svg>
-                      </div>
-                      <p className="daily-ops-dropzone-text">Click or drag Energy file</p>
-                      <p className="daily-ops-dropzone-hint">CSV, XLSX, XLS supported</p>
-                    </label>
-                    {energyFiles && (
-                      <div className="daily-ops-file-box">
-                        <div className="daily-ops-file-info">
-                          <span className="daily-ops-file-name">{energyFiles.name}</span>
-                          <span className="daily-ops-file-meta">
-                            {(energyFiles.size / 1024).toFixed(1)} KB • {energyFiles.name.split('.').pop().toUpperCase()}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          className="daily-ops-btn daily-ops-btn-secondary"
-                          onClick={() => handleEnergyFileSelect(null)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Production Upload Card */}
-                  <div className="daily-ops-upload-card">
-                    <h4 className="daily-ops-card-title">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-                      </svg>
-                      Production Output File
-                    </h4>
-                    <label
-                      className="daily-ops-dropzone"
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        if (e.dataTransfer?.files?.[0]) {
-                          handleProductionFileSelect(e.dataTransfer.files[0]);
-                        }
-                      }}
-                    >
-                      <input
-                        type="file"
-                        accept=".csv,.xlsx,.xls"
-                        style={{ display: 'none' }}
-                        onChange={(e) => handleProductionFileSelect(e.target.files[0])}
-                      />
-                      <div className="daily-ops-dropzone-icon">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                          <polyline points="17 8 12 3 7 8" />
-                          <line x1="12" y1="3" x2="12" y2="15" />
-                        </svg>
-                      </div>
-                      <p className="daily-ops-dropzone-text">Click or drag Production file</p>
-                      <p className="daily-ops-dropzone-hint">CSV, XLSX, XLS supported</p>
-                    </label>
-                    {productionFiles && (
-                      <div className="daily-ops-file-box">
-                        <div className="daily-ops-file-info">
-                          <span className="daily-ops-file-name">{productionFiles.name}</span>
-                          <span className="daily-ops-file-meta">
-                            {(productionFiles.size / 1024).toFixed(1)} KB • {productionFiles.name.split('.').pop().toUpperCase()}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          className="daily-ops-btn daily-ops-btn-secondary"
-                          onClick={() => handleProductionFileSelect(null)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Validate & Save Action for Stage 1 */}
-                {(energyFiles || productionFiles) && (
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-                    <button
-                      type="button"
-                      className="daily-ops-btn daily-ops-btn-primary"
-                      onClick={onValidate}
-                      disabled={validating}
-                    >
-                      {validating ? 'Validating Uploads...' : 'Validate & Save'}
-                    </button>
-                  </div>
-                )}
-              </div>
+              <DailyDataEntryForm
+                reportingDate={reportingDate}
+                plantId={plantId}
+                masterData={masterData}
+                energyRows={energyRows}
+                setEnergyRows={setEnergyRows}
+                productionRows={productionRows}
+                setProductionRows={setProductionRows}
+                savedCounts={savedCounts}
+                onValidate={onValidateEntries}
+                onSave={onSaveEntries}
+                validating={validating}
+                saving={savingEntries}
+                validationResult={validationResult}
+                onReload={onReloadRecords}
+                loadingSaved={loadingSaved}
+                onSwitchPlantAndDate={onSwitchPlantAndDate}
+              />
             )}
 
             {/* STAGE 2: VALIDATION */}
@@ -681,19 +736,19 @@ export default function DailyOperationsPipeline({
                   </div>
                 ) : (
                   <p style={{ color: 'var(--text-secondary)' }}>
-                    Select Energy or Production files in Stage 1 and click "Validate & Save" to inspect and verify records.
+                    Enter or paste Energy and Production data in Stage 1 and click "Validate entries" to inspect and verify records.
                   </p>
                 )}
 
-                {(energyFiles || productionFiles) && (
+                {(onValidateEntries || energyFiles || productionFiles) && (
                   <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
                     <button
                       type="button"
                       className="daily-ops-btn daily-ops-btn-primary"
-                      onClick={onValidate}
+                      onClick={onValidateEntries || onValidate}
                       disabled={validating}
                     >
-                      {validating ? 'Validating Uploads...' : 'Re-Validate & Save'}
+                      {validating ? 'Validating Entries...' : 'Re-Validate Entries'}
                     </button>
                   </div>
                 )}
@@ -702,134 +757,203 @@ export default function DailyOperationsPipeline({
 
             {/* STAGE 3: DATABASE INGESTION */}
             {selectedStageKey === 'database_ingestion' && (
-              <div className="daily-ops-confirm-box">
-                <div className="daily-ops-alert-banner info">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="16" x2="12" y2="12" />
-                    <line x1="12" y1="8" x2="12.01" y2="8" />
-                  </svg>
-                  <span>
-                    <strong>Strict Safeguard:</strong> Records will only be written to PostgreSQL fact tables with explicit confirmation. Duplicates are handled according to your selected mode.
-                  </span>
-                </div>
-
-                <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <div>
-                    <label className="daily-ops-label" style={{ display: 'block', marginBottom: '0.4rem' }}>
-                      Ingestion Mode:
-                    </label>
-                    <select
-                      value={ingestMode}
-                      onChange={(e) => setIngestMode(e.target.value)}
-                      className="daily-ops-date-input"
-                      style={{ minWidth: '240px' }}
-                    >
-                      <option value="INCREMENTAL">INCREMENTAL (Skip Existing Duplicates)</option>
-                      <option value="OVERWRITE_CORRECTION">OVERWRITE_CORRECTION (Replace Date Records)</option>
-                    </select>
+              <div className="daily-ops-stage-ingestion-content">
+                {/* 1. Compact Saved Records Summary */}
+                <div className="daily-ops-saved-records-card">
+                  <div className="daily-ops-saved-metric-col">
+                    <span className="daily-ops-saved-metric-label">Energy</span>
+                    <span className="daily-ops-saved-metric-value">
+                      {formatNumber(selectedStageObj?.details?.energy_records ?? savedCounts?.energy ?? 0)}
+                    </span>
+                    <span className="daily-ops-saved-metric-sub">
+                      ({formatNumber(selectedStageObj?.details?.linked_energy_records != null ? selectedStageObj.details.linked_energy_records : ((selectedStageObj?.details?.energy_records ?? savedCounts?.energy ?? 0) > 0 ? 1 : 0))} linked to upload)
+                    </span>
                   </div>
-
-                  {(selectedStageObj.status !== 'COMPLETED' || energyFiles || productionFiles) && (
-                    <button
-                      type="button"
-                      className="daily-ops-btn daily-ops-btn-primary"
-                      onClick={handleConfirmIngest}
-                      disabled={ingesting || (!energyFiles && !productionFiles && stages.validation?.status === 'BLOCKED')}
-                      style={{ marginTop: '1.4rem' }}
-                    >
-                      {ingesting ? 'Committing to PostgreSQL...' : 'Confirm & Commit Records to Database'}
-                    </button>
+                  <div className="daily-ops-saved-metric-divider" aria-hidden="true" />
+                  <div className="daily-ops-saved-metric-col">
+                    <span className="daily-ops-saved-metric-label">Production</span>
+                    <span className="daily-ops-saved-metric-value">
+                      {formatNumber(selectedStageObj?.details?.production_records ?? savedCounts?.production ?? 0)}
+                    </span>
+                    <span className="daily-ops-saved-metric-sub">
+                      ({formatNumber(selectedStageObj?.details?.linked_production_records != null ? selectedStageObj.details.linked_production_records : ((selectedStageObj?.details?.production_records ?? savedCounts?.production ?? 0) > 0 ? 1 : 0))} linked to upload)
+                    </span>
+                  </div>
+                  {selectedStageObj?.details?.has_partial_uploads && selectedStageObj?.details?.rejected_rows_count > 0 && (
+                    <>
+                      <div className="daily-ops-saved-metric-divider" aria-hidden="true" />
+                      <div className="daily-ops-saved-metric-col is-warning">
+                        <span className="daily-ops-saved-metric-label">Rejected</span>
+                        <span className="daily-ops-saved-metric-value" style={{ color: '#f59e0b' }}>
+                          {formatNumber(selectedStageObj.details.rejected_rows_count)}
+                        </span>
+                        <span className="daily-ops-saved-metric-sub">Partial upload batches</span>
+                      </div>
+                    </>
                   )}
                 </div>
 
-                {selectedStageObj.details && (
-                  <div className="daily-ops-kpi-grid" style={{ marginTop: '0.5rem' }}>
-                    <div className="daily-ops-kpi-card">
-                      <span className="daily-ops-kpi-label">Committed Energy Rows</span>
-                      <span className="daily-ops-kpi-value">{formatNumber(selectedStageObj.details.energy_records || 0)}</span>
-                      <span className="daily-ops-kpi-sub">
-                        {selectedStageObj.details.linked_energy_records ? `(${formatNumber(selectedStageObj.details.linked_energy_records)} linked to upload)` : 'fact_energy_meter_hourly'}
-                      </span>
+                {/* 2. Simplified Ingestion Controls */}
+                <div className="daily-ops-ingest-controls-section">
+                  <div className="daily-ops-ingest-controls-row">
+                    <div className="daily-ops-ingest-select-group">
+                      <label htmlFor="daily-ops-ingest-mode" className="daily-ops-ingest-label">
+                        Ingestion mode
+                      </label>
+                      <select
+                        id="daily-ops-ingest-mode"
+                        value={ingestMode}
+                        onChange={(e) => setIngestMode(e.target.value)}
+                        className="daily-ops-ingest-select"
+                      >
+                        <option value="OVERWRITE_CORRECTION">Replace records for this date</option>
+                        <option value="INCREMENTAL">Skip existing records</option>
+                      </select>
                     </div>
-                    <div className="daily-ops-kpi-card">
-                      <span className="daily-ops-kpi-label">Committed Production Rows</span>
-                      <span className="daily-ops-kpi-value">{formatNumber(selectedStageObj.details.production_records || 0)}</span>
-                      <span className="daily-ops-kpi-sub">
-                        {selectedStageObj.details.linked_production_records ? `(${formatNumber(selectedStageObj.details.linked_production_records)} linked to upload)` : 'fact_hourly_production'}
-                      </span>
-                    </div>
-                    {selectedStageObj.details.has_partial_uploads && (
-                      <div className="daily-ops-kpi-card" style={{ borderLeft: '3px solid #f59e0b' }}>
-                        <span className="daily-ops-kpi-label">Rejected Ingestion Rows</span>
-                        <span className="daily-ops-kpi-value" style={{ color: '#f59e0b' }}>
-                          {formatNumber(selectedStageObj.details.rejected_rows_count || 0)}
-                        </span>
-                        <span className="daily-ops-kpi-sub">Partial upload batches</span>
-                      </div>
+
+                    {(selectedStageObj.status !== 'COMPLETED' || energyFiles || productionFiles) && (
+                      <button
+                        type="button"
+                        className="daily-ops-btn daily-ops-btn-primary"
+                        onClick={handleConfirmIngest}
+                        disabled={ingesting || (!energyFiles && !productionFiles && stages.validation?.status === 'BLOCKED')}
+                      >
+                        {ingesting ? 'Committing to PostgreSQL…' : 'Confirm & commit records to database'}
+                      </button>
                     )}
                   </div>
-                )}
+
+                  <p className="daily-ops-ingest-helper">
+                    {ingestMode === 'OVERWRITE_CORRECTION'
+                      ? 'Replaces existing records for this date. Confirmation is required before writing to the database.'
+                      : 'Preserves existing records and skips duplicates. Confirmation is required before writing to the database.'}
+                  </p>
+                </div>
               </div>
             )}
 
             {/* STAGE 4: DATA RECONCILIATION */}
             {selectedStageKey === 'data_reconciliation' && (
-              <div>
-                {selectedStageObj.details?.counts ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <div className="daily-ops-kpi-grid">
-                      <div className="daily-ops-kpi-card">
-                        <span className="daily-ops-kpi-label">Total Checks</span>
-                        <span className="daily-ops-kpi-value">{selectedStageObj.details.counts.total_checks}</span>
-                      </div>
-                      <div className="daily-ops-kpi-card">
-                        <span className="daily-ops-kpi-label">Passed Checks</span>
-                        <span className="daily-ops-kpi-value" style={{ color: '#10b981' }}>
-                          {selectedStageObj.details.counts.pass_count}
-                        </span>
-                      </div>
-                      <div className="daily-ops-kpi-card">
-                        <span className="daily-ops-kpi-label">Warnings</span>
-                        <span className="daily-ops-kpi-value" style={{ color: '#f59e0b' }}>
-                          {selectedStageObj.details.counts.warning_count}
-                        </span>
-                      </div>
-                      <div className="daily-ops-kpi-card">
-                        <span className="daily-ops-kpi-label">Failed Checks</span>
-                        <span className="daily-ops-kpi-value" style={{ color: '#ef4444' }}>
-                          {selectedStageObj.details.counts.fail_count}
-                        </span>
-                      </div>
+              <div className="daily-ops-stage-recon-content">
+                {selectedStageObj.details?.checks || selectedStageObj.details?.counts ? (
+                  <>
+                    {/* 1. Slim summary strip directly above table */}
+                    <div className="daily-ops-recon-summary-strip">
+                      <span className="daily-ops-recon-metric">
+                        <strong>
+                          {selectedStageObj.details?.counts?.total_checks ?? selectedStageObj.details?.checks?.length ?? 0}
+                        </strong>{' '}
+                        checks
+                      </span>
+                      <span className="daily-ops-recon-sep" aria-hidden="true">·</span>
+                      <span className="daily-ops-recon-metric is-pass">
+                        <strong>
+                          {selectedStageObj.details?.counts?.pass_count ?? (selectedStageObj.details?.checks || []).filter(c => String(c.status).toUpperCase() === 'PASS').length}
+                        </strong>{' '}
+                        passed
+                      </span>
+                      <span className="daily-ops-recon-sep" aria-hidden="true">·</span>
+                      <span className="daily-ops-recon-metric is-warning">
+                        <strong>
+                          {selectedStageObj.details?.counts?.warning_count ?? (selectedStageObj.details?.checks || []).filter(c => String(c.status).toUpperCase() === 'WARNING').length}
+                        </strong>{' '}
+                        warnings
+                      </span>
+                      <span className="daily-ops-recon-sep" aria-hidden="true">·</span>
+                      <span className="daily-ops-recon-metric is-fail">
+                        <strong>
+                          {selectedStageObj.details?.counts?.fail_count ?? (selectedStageObj.details?.checks || []).filter(c => String(c.status).toUpperCase() === 'FAIL').length}
+                        </strong>{' '}
+                        failed
+                      </span>
                     </div>
 
-                    {selectedStageObj.details.checks && selectedStageObj.details.checks.length > 0 && (
-                      <div className="daily-ops-table-wrapper">
-                        <table className="daily-ops-table">
+                    {/* 2. Simplified 3-column table */}
+                    {selectedStageObj.details?.checks && selectedStageObj.details.checks.length > 0 && (
+                      <div className="daily-ops-recon-table-wrapper">
+                        <table className="daily-ops-recon-table">
                           <thead>
                             <tr>
-                              <th>Check ID</th>
-                              <th>Category</th>
-                              <th>Status</th>
-                              <th>Summary</th>
+                              <th scope="col" className="daily-ops-recon-th-check">Check</th>
+                              <th scope="col" className="daily-ops-recon-th-result">Result</th>
+                              <th scope="col" className="daily-ops-recon-th-summary">Summary</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {selectedStageObj.details.checks.map((chk) => (
-                              <tr key={chk.check_id}>
-                                <td><strong>{chk.check_id}</strong></td>
-                                <td>{chk.category}</td>
-                                <td>{getStatusBadge(chk.status)}</td>
-                                <td>{chk.summary}</td>
-                              </tr>
-                            ))}
+                            {selectedStageObj.details.checks.map((chk) => {
+                              const isExpanded = expandedCheckId === chk.check_id;
+                              const friendlyName = getCheckFriendlyName(chk);
+                              const shortSummary = formatCheckSummary(chk);
+                              return (
+                                <React.Fragment key={chk.check_id}>
+                                  <tr
+                                    className={`daily-ops-recon-row ${isExpanded ? 'is-expanded' : ''}`}
+                                    onClick={() => setExpandedCheckId(isExpanded ? null : chk.check_id)}
+                                  >
+                                    <td className="daily-ops-recon-td-check">
+                                      <button
+                                        type="button"
+                                        className="daily-ops-recon-expand-btn"
+                                        aria-expanded={isExpanded}
+                                        title="Toggle diagnostic details"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setExpandedCheckId(isExpanded ? null : chk.check_id);
+                                        }}
+                                      >
+                                        <svg
+                                          width="12"
+                                          height="12"
+                                          viewBox="0 0 24 24"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          strokeWidth="2.5"
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                          className={`daily-ops-recon-chevron ${isExpanded ? 'is-open' : ''}`}
+                                          aria-hidden="true"
+                                        >
+                                          <polyline points="9 18 15 12 9 6" />
+                                        </svg>
+                                        <span>{friendlyName}</span>
+                                      </button>
+                                    </td>
+                                    <td className="daily-ops-recon-td-result">
+                                      {getReconCheckBadge(chk.status)}
+                                    </td>
+                                    <td className="daily-ops-recon-td-summary">
+                                      <span className="daily-ops-recon-summary-text">{shortSummary}</span>
+                                    </td>
+                                  </tr>
+                                  {isExpanded && (
+                                    <tr className="daily-ops-recon-detail-row">
+                                      <td colSpan={3} className="daily-ops-recon-detail-cell">
+                                        <div className="daily-ops-recon-detail-box">
+                                          <div className="daily-ops-recon-detail-meta">
+                                            <span className="daily-ops-recon-detail-pill">
+                                              <strong>Check ID:</strong> <code>{chk.check_id}</code>
+                                            </span>
+                                            <span className="daily-ops-recon-detail-pill">
+                                              <strong>Category:</strong> <code>{chk.category}</code>
+                                            </span>
+                                          </div>
+                                          <div className="daily-ops-recon-detail-full">
+                                            <strong>Full diagnostic:</strong> {chk.summary || chk.description || 'No additional diagnostics reported.'}
+                                          </div>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )}
+                                </React.Fragment>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
                     )}
-                  </div>
+                  </>
                 ) : (
-                  <p style={{ color: 'var(--text-secondary)' }}>
+                  <p style={{ color: 'var(--text-secondary)', margin: 0, fontSize: '13px' }}>
                     Click "Run Downstream Pipeline" in the top toolbar to execute cross-source reconciliation.
                   </p>
                 )}
@@ -954,82 +1078,128 @@ export default function DailyOperationsPipeline({
 
             {/* STAGE 7: ANOMALY DETECTION */}
             {selectedStageKey === 'anomaly_detection' && (
-              <div>
+              <div className="daily-ops-anomaly-container">
                 {selectedStageObj.details ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <div className="daily-ops-kpi-grid">
-                      <div className="daily-ops-kpi-card">
-                        <span className="daily-ops-kpi-label">Statistical Outliers</span>
-                        <span className="daily-ops-kpi-value">
-                          {(selectedStageObj.status === 'COMPLETED' || selectedStageObj.status === 'COMPLETED_WITH_WARNINGS') && selectedStageObj.details?.counts_by_detector
-                            ? (selectedStageObj.details.counts_by_detector?.statistical_zscore || 0)
-                            : 'Unavailable'}
-                        </span>
-                        <span className="daily-ops-kpi-sub">Z-Score ({'>'} 3.0σ)</span>
-                      </div>
-                      <div className="daily-ops-kpi-card">
-                        <span className="daily-ops-kpi-label">Rolling Excursions</span>
-                        <span className="daily-ops-kpi-value">
-                          {(selectedStageObj.status === 'COMPLETED' || selectedStageObj.status === 'COMPLETED_WITH_WARNINGS') && selectedStageObj.details?.counts_by_detector
-                            ? (selectedStageObj.details.counts_by_detector?.rolling_baseline || 0)
-                            : 'Unavailable'}
-                        </span>
-                        <span className="daily-ops-kpi-sub">24-hour moving window</span>
-                      </div>
-                      <div className="daily-ops-kpi-card">
-                        <span className="daily-ops-kpi-label">Low Power Factor</span>
-                        <span className="daily-ops-kpi-value">
-                          {(selectedStageObj.status === 'COMPLETED' || selectedStageObj.status === 'COMPLETED_WITH_WARNINGS') && selectedStageObj.details?.counts_by_detector
-                            ? (selectedStageObj.details.counts_by_detector?.low_power_factor || 0)
-                            : 'Unavailable'}
-                        </span>
-                        <span className="daily-ops-kpi-sub">PF {'<'} 0.900</span>
-                      </div>
-                      <div className="daily-ops-kpi-card">
-                        <span className="daily-ops-kpi-label">Standby Waste</span>
-                        <span className="daily-ops-kpi-value">
-                          {(selectedStageObj.status === 'COMPLETED' || selectedStageObj.status === 'COMPLETED_WITH_WARNINGS') && selectedStageObj.details?.counts_by_detector
-                            ? (selectedStageObj.details.counts_by_detector?.zero_production_standby || 0)
-                            : 'Unavailable'}
-                        </span>
-                        <span className="daily-ops-kpi-sub">0 line output intervals</span>
-                      </div>
-                    </div>
+                  <>
+                    {/* Detector Summary Strip */}
+                    {(() => {
+                      const counts = selectedStageObj.details?.counts_by_detector || {};
+                      const events = selectedStageObj.details?.events || [];
 
-                    {selectedStageObj.details.events && selectedStageObj.details.events.length > 0 && (
+                      const detectorItems = [
+                        {
+                          id: 'statistical_zscore',
+                          label: 'Statistical outliers',
+                          count: counts.statistical_zscore ?? events.filter((e) => e.detector === 'Statistical Z-Score').length,
+                          tooltip: 'Z-score threshold: > 3.0σ deviation from historical mean',
+                        },
+                        {
+                          id: 'rolling_baseline',
+                          label: 'Rolling excursions',
+                          count: counts.rolling_baseline ?? events.filter((e) => e.detector === 'Rolling Baseline').length,
+                          tooltip: 'Rolling window threshold: 24-hour moving window deviation > 2.5σ',
+                        },
+                        {
+                          id: 'low_power_factor',
+                          label: 'Low power factor',
+                          count: counts.low_power_factor ?? events.filter((e) => e.detector === 'Low Power Factor').length,
+                          tooltip: 'Power factor threshold: PF < 0.900 under active operating load',
+                        },
+                        {
+                          id: 'zero_production_standby',
+                          label: 'Standby waste',
+                          count: counts.zero_production_standby ?? events.filter((e) => e.detector === 'Zero-Production Standby').length,
+                          tooltip: 'Standby threshold: Consumption during zero line output intervals',
+                        },
+                      ];
+
+                      const comparableCount = events.filter(
+                        (e) => e.detector === 'Comparable-Period Shift' || e.type === 'COMPARABLE_PERIOD_ELECTRICITY_CHANGE'
+                      ).length || (counts.persistent_baseload && events.some((e) => e.detector?.includes('Comparable')) ? counts.persistent_baseload : 0);
+
+                      if (comparableCount > 0 || events.some((e) => e.detector === 'Comparable-Period Shift')) {
+                        detectorItems.push({
+                          id: 'comparable_period_shift',
+                          label: 'Comparable-period shift',
+                          count: comparableCount,
+                          tooltip: 'Shift comparison threshold: Deviation against comparable production operating periods',
+                        });
+                      }
+
+                      return (
+                        <div className="daily-ops-anomaly-summary-strip" role="region" aria-label="Detector Summary">
+                          {detectorItems.map((item) => (
+                            <div
+                              key={item.id}
+                              className="daily-ops-anomaly-summary-item"
+                              title={item.tooltip}
+                              aria-label={`${item.label}: ${item.count}. ${item.tooltip}`}
+                              tabIndex={0}
+                            >
+                              <span className="daily-ops-anomaly-summary-label">{item.label}</span>
+                              <span className={`daily-ops-anomaly-summary-count ${item.count > 0 ? 'has-findings' : 'zero-findings'}`}>
+                                {formatNumber(item.count)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+
+                    {/* Findings Table */}
+                    {selectedStageObj.details.events && selectedStageObj.details.events.length > 0 ? (
                       <div className="daily-ops-table-wrapper">
-                        <table className="daily-ops-table">
+                        <table className="daily-ops-anomaly-table">
                           <thead>
                             <tr>
-                              <th>Timestamp</th>
-                              <th>Detector</th>
-                              <th>Scope</th>
-                              <th>Severity</th>
-                              <th>Actual vs Baseline</th>
+                              <th scope="col">Finding</th>
+                              <th scope="col">Affected asset</th>
+                              <th scope="col">Detected at</th>
+                              <th scope="col">Severity</th>
+                              <th scope="col">Measurement</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {selectedStageObj.details.events.map((ev, i) => (
-                              <tr key={i}>
-                                <td>{ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'All Day'}</td>
-                                <td>{ev.detector}</td>
-                                <td>{ev.meter_id || ev.line_id || plantId}</td>
-                                <td>
-                                  <span className={`daily-ops-status-badge ${ev.severity?.toLowerCase() === 'critical' ? 'failed' : ev.severity?.toLowerCase() === 'high' ? 'warning' : 'completed'}`}>
-                                    {ev.severity || 'MEDIUM'}
-                                  </span>
-                                </td>
-                                <td>
-                                  {ev.actual_kwh ? `${ev.actual_kwh.toFixed(2)} kWh` : ev.power_factor ? `PF: ${ev.power_factor.toFixed(3)}` : 'Deviation observed'}
-                                  {ev.baseline_kwh ? ` (Base: ${ev.baseline_kwh.toFixed(2)} kWh)` : ''}
-                                </td>
-                              </tr>
-                            ))}
+                            {selectedStageObj.details.events.map((ev, i) => {
+                              const findingName = ev.detector || (ev.anomaly_type ? ev.anomaly_type.replace(/_/g, ' ') : 'Anomaly');
+                              const assetName = ev.meter_id || ev.line_id || plantId || 'Plant';
+                              const detectedAt = ev.timestamp
+                                ? new Date(ev.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
+                                : 'All day';
+                              const sev = (ev.severity || 'MEDIUM').toUpperCase();
+                              const sevClass = sev === 'CRITICAL' ? 'sev-critical' : sev === 'HIGH' ? 'sev-high' : sev === 'LOW' ? 'sev-low' : 'sev-medium';
+                              const measurementText = formatAnomalyMeasurement(ev);
+
+                              return (
+                                <tr key={ev.id || i}>
+                                  <td className="daily-ops-anomaly-finding-cell">
+                                    <span className="daily-ops-anomaly-finding-title">{findingName}</span>
+                                  </td>
+                                  <td className="daily-ops-anomaly-asset-cell">
+                                    <span className="daily-ops-anomaly-asset-tag">{assetName}</span>
+                                  </td>
+                                  <td className="daily-ops-anomaly-time-cell">{detectedAt}</td>
+                                  <td className="daily-ops-anomaly-sev-cell">
+                                    <span className={`daily-ops-sev-badge ${sevClass}`}>{sev}</span>
+                                  </td>
+                                  <td className="daily-ops-anomaly-measurement-cell">{measurementText}</td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
+                    ) : (
+                      <div className="daily-ops-alert-banner info" style={{ margin: 0 }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                          <circle cx="12" cy="12" r="10" />
+                          <line x1="12" y1="16" x2="12" y2="12" />
+                          <line x1="12" y1="8" x2="12.01" y2="8" />
+                        </svg>
+                        <span>No anomalies detected for this run. All monitored assets operating within baseline bounds.</span>
+                      </div>
                     )}
-                  </div>
+                  </>
                 ) : (
                   <p style={{ color: 'var(--text-secondary)' }}>
                     Click "Run Downstream Pipeline" in the top toolbar to execute anomaly detection.
@@ -1039,170 +1209,274 @@ export default function DailyOperationsPipeline({
             )}
 
             {/* STAGE 8: INVESTIGATION HANDOFF */}
-            {selectedStageKey === 'investigation_handoff' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-                  <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                    Review detected anomalies and hand off investigations to the Findings Centre.
-                  </p>
-                  <div style={{ display: 'flex', gap: '0.75rem' }}>
-                    <button
-                      type="button"
-                      className="daily-ops-btn daily-ops-btn-secondary"
-                      onClick={() => navigate('/investigation-actions')}
-                    >
-                      Go to Investigation Centre
-                    </button>
-                    <button
-                      type="button"
-                      className="daily-ops-btn daily-ops-btn-primary"
-                      onClick={handleSyncFindings}
-                      disabled={syncingFindings || (selectedStageObj.status !== 'COMPLETED' && selectedStageObj.status !== 'COMPLETED_WITH_WARNINGS')}
-                      title={selectedStageObj.status !== 'COMPLETED' && selectedStageObj.status !== 'COMPLETED_WITH_WARNINGS' ? 'Investigation handoff must complete successfully before syncing' : undefined}
-                    >
-                      {syncingFindings ? 'Syncing to Investigation Centre...' : 'Sync All to Investigation Centre'}
-                    </button>
-                  </div>
-                </div>
+            {selectedStageKey === 'investigation_handoff' && (() => {
+              const handoffItems = selectedStageObj.details?.items || [];
+              const totalAnomalies = handoffItems.length;
+              const linkedCount = handoffItems.filter((item) => Boolean(item.finding_id)).length;
+              const unlinkedCount = totalAnomalies - linkedCount;
+              const anomalySummary = `${totalAnomalies} ${totalAnomalies === 1 ? 'anomaly' : 'anomalies'} · ${linkedCount} linked · ${unlinkedCount} unlinked`;
 
-                {selectedStageObj.details?.items && selectedStageObj.details.items.length > 0 ? (
-                  <div className="daily-ops-table-wrapper">
-                    <table className="daily-ops-table">
-                      <thead>
-                        <tr>
-                          <th>Timestamp</th>
-                          <th>Anomaly &amp; Detector</th>
-                          <th>Entity Scope</th>
-                          <th>Suggested Priority</th>
-                          <th>Finding Status</th>
-                          <th>Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {selectedStageObj.details.items.map((item, i) => (
-                          <tr key={i}>
-                            <td>{item.timestamp ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'All Day'}</td>
-                            <td>
-                              <strong>{item.detector}</strong>
-                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{item.priority_reason}</div>
-                            </td>
-                            <td>{item.meter_id || item.line_id || plantId}</td>
-                            <td>
-                              <span className={`daily-ops-status-badge ${item.suggested_priority === 'CRITICAL' ? 'failed' : item.suggested_priority === 'HIGH' ? 'warning' : 'not-started'}`}>
-                                {item.suggested_priority} (Suggested)
-                              </span>
-                            </td>
-                            <td>
-                              {item.finding_id ? (
-                                <span style={{ fontSize: '0.8rem', color: '#10b981', fontWeight: 600 }}>
-                                  {item.finding_id} ({item.finding_status || 'ACTIVE'})
-                                </span>
-                              ) : (
-                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Unlinked</span>
-                              )}
-                            </td>
-                            <td>
-                              {item.finding_id ? (
-                                <button
-                                  type="button"
-                                  className="daily-ops-btn daily-ops-btn-secondary"
-                                  style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
-                                  onClick={() => navigate(`/investigation-actions?finding_id=${encodeURIComponent(item.finding_id)}`)}
-                                >
-                                  Investigate
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="daily-ops-btn daily-ops-btn-secondary"
-                                  style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
-                                  onClick={() => navigate(`/investigation-actions?plant_id=${plantId}`)}
-                                >
-                                  View in Centre
-                                </button>
-                              )}
-                            </td>
+              return (
+                <div className="daily-ops-handoff-container">
+                  {/* Toolbar: Live summary on left, sync & navigation controls on right */}
+                  <div className="daily-ops-handoff-toolbar">
+                    <div className="daily-ops-handoff-summary">
+                      {anomalySummary}
+                    </div>
+                    <div className="daily-ops-handoff-actions">
+                      <button
+                        type="button"
+                        className="daily-ops-btn daily-ops-btn-secondary"
+                        onClick={() => navigate(`/investigation-actions?plant_id=${encodeURIComponent(plantId)}`)}
+                      >
+                        Open Investigation Centre
+                      </button>
+                      <button
+                        type="button"
+                        className="daily-ops-btn daily-ops-btn-primary"
+                        onClick={handleSyncFindings}
+                        disabled={syncingFindings || (selectedStageObj.status !== 'COMPLETED' && selectedStageObj.status !== 'COMPLETED_WITH_WARNINGS')}
+                        title={selectedStageObj.status !== 'COMPLETED' && selectedStageObj.status !== 'COMPLETED_WITH_WARNINGS' ? 'Investigation handoff must complete successfully before syncing' : undefined}
+                      >
+                        {syncingFindings ? 'Syncing...' : 'Sync all'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Findings correlation table */}
+                  {handoffItems.length > 0 ? (
+                    <div className="daily-ops-table-wrapper">
+                      <table className="daily-ops-table daily-ops-handoff-table">
+                        <thead>
+                          <tr>
+                            <th>Anomaly</th>
+                            <th>Asset</th>
+                            <th>Detected at</th>
+                            <th>Suggested priority</th>
+                            <th>Finding</th>
+                            <th style={{ textAlign: 'right' }}>Action</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="daily-ops-alert-banner info">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="16" x2="12" y2="12" />
-                      <line x1="12" y1="8" x2="12.01" y2="8" />
-                    </svg>
-                    <span><strong>Investigation Status:</strong> No anomalies detected for this date; all operating equipment is within compliance bounds.</span>
-                  </div>
-                )}
-              </div>
-            )}
+                        </thead>
+                        <tbody>
+                          {handoffItems.map((item, i) => {
+                            const prio = (item.suggested_priority || item.severity || 'MEDIUM').toUpperCase();
+                            const prioLabel = prio.charAt(0) + prio.slice(1).toLowerCase();
+                            const isLinked = Boolean(item.finding_id);
+                            const isExpanded = Boolean(expandedHandoffRows[i]);
+
+                            // Short supporting fact only when adding information
+                            let shortFact = '';
+                            if (item.actual_value !== undefined && item.actual_value !== null) {
+                              const actVal = Number(item.actual_value);
+                              const actStr = !isNaN(actVal) ? actVal.toFixed(2) : String(item.actual_value);
+                              const baseVal = item.baseline_value !== undefined && item.baseline_value !== null ? Number(item.baseline_value) : null;
+                              const baseStr = baseVal !== null && !isNaN(baseVal) ? baseVal.toFixed(2) : null;
+                              shortFact = baseStr ? `Recorded ${actStr} vs ${baseStr} baseline` : `Recorded ${actStr}`;
+                            } else if (item.deviation_pct !== undefined && item.deviation_pct !== null) {
+                              const dev = Number(item.deviation_pct);
+                              if (!isNaN(dev)) {
+                                shortFact = `Deviation: ${(dev * 100).toFixed(1)}%`;
+                              }
+                            }
+
+                            // Finding status display
+                            const findingStatusRaw = item.finding_status || 'NEW';
+                            const findingStatusFormatted = findingStatusRaw.charAt(0) + findingStatusRaw.slice(1).toLowerCase();
+                            const findingLabel = isLinked ? `Linked · ${findingStatusFormatted}` : 'Unlinked';
+
+                            // Detection timestamp
+                            const timeStr = item.timestamp
+                              ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                              : 'All Day';
+
+                            // Asset display
+                            const assetStr = item.meter_id || item.line_id || plantId;
+
+                            return (
+                              <React.Fragment key={i}>
+                                <tr className={isExpanded ? 'daily-ops-row-expanded' : ''}>
+                                  <td className="daily-ops-col-anomaly">
+                                    <div className="daily-ops-anomaly-name-row">
+                                      <button
+                                        type="button"
+                                        className="daily-ops-row-expand-btn"
+                                        onClick={() => setExpandedHandoffRows(prev => ({ ...prev, [i]: !prev[i] }))}
+                                        aria-expanded={isExpanded}
+                                        title={isExpanded ? 'Collapse details' : 'Expand details'}
+                                      >
+                                        <svg
+                                          width="12"
+                                          height="12"
+                                          viewBox="0 0 24 24"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          strokeWidth="2.5"
+                                          style={{ transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s ease' }}
+                                        >
+                                          <polyline points="9 18 15 12 9 6" />
+                                        </svg>
+                                      </button>
+                                      <strong className="daily-ops-anomaly-title">{item.detector || item.anomaly_type || 'Anomaly'}</strong>
+                                    </div>
+                                    {shortFact && (
+                                      <div className="daily-ops-anomaly-fact">{shortFact}</div>
+                                    )}
+                                  </td>
+                                  <td className="daily-ops-col-asset">
+                                    <span className="daily-ops-asset-id">{assetStr}</span>
+                                  </td>
+                                  <td className="daily-ops-col-time">
+                                    <span className="daily-ops-time-val">{timeStr}</span>
+                                  </td>
+                                  <td className="daily-ops-col-prio">
+                                    <span className={`daily-ops-badge badge-${prio.toLowerCase()}`}>
+                                      {prioLabel}
+                                    </span>
+                                  </td>
+                                  <td className="daily-ops-col-finding">
+                                    <span
+                                      className={`daily-ops-finding-pill ${isLinked ? 'is-linked' : 'is-unlinked'}`}
+                                      title={isLinked ? `Finding ID: ${item.finding_id}` : undefined}
+                                    >
+                                      {findingLabel}
+                                    </span>
+                                  </td>
+                                  <td className="daily-ops-col-action" style={{ textAlign: 'right' }}>
+                                    {isLinked ? (
+                                      <button
+                                        type="button"
+                                        className="daily-ops-btn daily-ops-btn-secondary daily-ops-btn-sm"
+                                        onClick={() => navigate(`/investigation-actions?finding_id=${encodeURIComponent(item.finding_id)}`)}
+                                      >
+                                        Open finding
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="daily-ops-btn daily-ops-btn-secondary daily-ops-btn-sm"
+                                        onClick={() => navigate(`/investigation-actions?plant_id=${encodeURIComponent(plantId)}`)}
+                                      >
+                                        Open directory
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                                {isExpanded && (
+                                  <tr className="daily-ops-detail-expanded-row">
+                                    <td colSpan={6}>
+                                      <div className="daily-ops-handoff-row-details">
+                                        {item.priority_reason && (
+                                          <div className="daily-ops-detail-item">
+                                            <span className="daily-ops-detail-label">Description:</span>
+                                            <span className="daily-ops-detail-val">{item.priority_reason}</span>
+                                          </div>
+                                        )}
+                                        {item.finding_id && (
+                                          <div className="daily-ops-detail-item">
+                                            <span className="daily-ops-detail-label">Finding ID:</span>
+                                            <code className="daily-ops-detail-code">{item.finding_id}</code>
+                                          </div>
+                                        )}
+                                        {item.evidence_classification && (
+                                          <div className="daily-ops-detail-item">
+                                            <span className="daily-ops-detail-label">Classification:</span>
+                                            <span className="daily-ops-detail-val">{item.evidence_classification}</span>
+                                          </div>
+                                        )}
+                                        {item.anomaly_type && (
+                                          <div className="daily-ops-detail-item">
+                                            <span className="daily-ops-detail-label">Detector Type:</span>
+                                            <span className="daily-ops-detail-val">{item.anomaly_type}</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="daily-ops-alert-banner info">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="16" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12.01" y2="8" />
+                      </svg>
+                      <span><strong>Investigation Status:</strong> No anomalies detected for this date; all operating equipment is within compliance bounds.</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </motion.div>
         </AnimatePresence>
       </div>
 
       {/* OPPORTUNITIES TO REVIEW */}
-      <div className="daily-ops-opportunities-section">
-        <div className="daily-ops-opportunities-header">
-          <div className="daily-ops-opportunities-top-row">
-            <div className="daily-ops-opportunities-title-row">
-              <h3 className="daily-ops-opportunities-title">
-                Opportunities to Review
-              </h3>
-              <span
-                className="daily-ops-opportunities-badge"
-                style={{
-                  background: opportunities.length > 0 ? 'rgba(59, 130, 246, 0.15)' : 'rgba(100, 116, 139, 0.15)',
-                  color: opportunities.length > 0 ? '#2563eb' : '#64748b',
-                }}
-              >
-                {opportunities.length} Surfaced
-              </span>
+      <div className={`daily-ops-opportunities-section ${opportunities.length === 0 || loadingOpportunities ? 'is-empty' : ''}`}>
+        {loadingOpportunities ? (
+          <div className="daily-ops-opportunities-empty-row">
+            <div className="daily-ops-opportunities-empty-left">
+              <span className="daily-ops-opportunities-empty-title">Opportunities to review</span>
+              <span className="daily-ops-opportunities-empty-text">Checking for opportunities…</span>
             </div>
             <button
               type="button"
               className="daily-ops-btn daily-ops-btn-secondary daily-ops-opportunities-action"
-              style={{ fontSize: '13px', padding: '0.35rem 0.8rem' }}
               onClick={() => navigate(`/investigation-actions?plant_id=${encodeURIComponent(plantId)}`)}
             >
-              Open All in Investigation Centre →
+              Open in Investigation Centre →
             </button>
           </div>
-          <p className="daily-ops-opportunities-subtitle">
-            Deterministic ranking based on recurrence, consumption during comparable stoppages, data coverage, and load controllability.
-          </p>
-        </div>
-
-        {loadingOpportunities ? (
-          <div className="daily-ops-opp-scanning" style={{ padding: '16px 0', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 400 }}>
-            Scanning pipeline findings for trial and evidence opportunities...
-          </div>
         ) : opportunities.length === 0 ? (
-          <div className="daily-ops-alert-banner info" style={{ margin: 0 }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="16" x2="12" y2="12" />
-              <line x1="12" y1="8" x2="12.01" y2="8" />
-            </svg>
-            <span>
-              <strong>Opportunities Review:</strong> No recurring standby or load opportunities requiring review for plant {plantId} on {reportingDate}.
-            </span>
+          <div className="daily-ops-opportunities-empty-row">
+            <div className="daily-ops-opportunities-empty-left">
+              <span className="daily-ops-opportunities-empty-title">Opportunities to review · 0</span>
+              <span className="daily-ops-opportunities-empty-text">None for {plantId} on {reportingDate}.</span>
+            </div>
+            <button
+              type="button"
+              className="daily-ops-btn daily-ops-btn-secondary daily-ops-opportunities-action"
+              onClick={() => navigate(`/investigation-actions?plant_id=${encodeURIComponent(plantId)}`)}
+            >
+              Open in Investigation Centre →
+            </button>
           </div>
         ) : (
-          <div className="daily-ops-opp-grid">
-            {opportunities.map((opp) => {
-              const isTrial = opp.opportunity_type === 'TRIAL_CANDIDATE';
-              const isEvidence = opp.opportunity_type === 'EVIDENCE_GATHERING';
+          <>
+            <div className="daily-ops-opportunities-header">
+              <div className="daily-ops-opportunities-title-group">
+                <h4 className="daily-ops-opportunities-title">
+                  Opportunities to review
+                </h4>
+                <span className="daily-ops-opportunities-badge has-opps">
+                  {opportunities.length}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="daily-ops-btn daily-ops-btn-secondary daily-ops-opportunities-action"
+                onClick={() => navigate(`/investigation-actions?plant_id=${encodeURIComponent(plantId)}`)}
+              >
+                Open in Investigation Centre →
+              </button>
+            </div>
+            <div className="daily-ops-opp-grid">
+              {opportunities.map((opp) => {
+                const isTrial = opp.opportunity_type === 'TRIAL_CANDIDATE';
+                const isEvidence = opp.opportunity_type === 'EVIDENCE_GATHERING';
 
-              const typeBadgeColor = isTrial ? { bg: '#eff6ff', text: '#1d4ed8', border: '#bfdbfe' }
-                : isEvidence ? { bg: '#fffbeb', text: '#b45309', border: '#fde68a' }
-                : { bg: '#f5f3ff', text: '#6d28d9', border: '#ddd6fe' };
+                const typeBadgeColor = isTrial ? { bg: '#eff6ff', text: '#1d4ed8', border: '#bfdbfe' }
+                  : isEvidence ? { bg: '#fffbeb', text: '#b45309', border: '#fde68a' }
+                  : { bg: '#f5f3ff', text: '#6d28d9', border: '#ddd6fe' };
 
-              const severityColor = opp.severity === 'CRITICAL' ? { bg: '#fee2e2', text: '#b91c1c' }
-                : opp.severity === 'HIGH' ? { bg: '#ffedd5', text: '#c2410c' }
-                : { bg: '#f1f5f9', text: '#475569' };
+                const severityColor = opp.severity === 'CRITICAL' ? { bg: '#fee2e2', text: '#b91c1c' }
+                  : opp.severity === 'HIGH' ? { bg: '#ffedd5', text: '#c2410c' }
+                  : { bg: '#f1f5f9', text: '#475569' };
 
               const savingsColor = (opp.savings_potential === 'HIGH' || opp.savings_potential === 'VERY_HIGH')
                 ? { bg: '#dcfce7', text: '#15803d' }
@@ -1328,6 +1602,7 @@ export default function DailyOperationsPipeline({
               );
             })}
           </div>
+          </>
         )}
       </div>
     </div>

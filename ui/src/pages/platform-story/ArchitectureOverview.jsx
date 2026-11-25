@@ -1,8 +1,24 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { energyIntensityApi } from '../../services/energyIntensityApi';
-import { checkBackendHealth } from '../../services/api';
 import { formatNumber, formatCurrency } from '../../utils/formatters';
+
+import stage1Img from '../../assets/pipeline/stage1-factory-inputs.png';
+import stage2Img from '../../assets/pipeline/stage2-intake-storage.png';
+import stage3Img from '../../assets/pipeline/stage3-energy-analysis.png';
+import stage4Img from '../../assets/pipeline/Plant engineer reviewing a checklist.png';
+import stage5Img from '../../assets/pipeline/stage5-assessment.png';
+
+// 9 local row illustrations
+import rowMeterReadingsImg from '../../assets/pipeline/rows/meter-readings.png';
+import rowProductionLogsImg from '../../assets/pipeline/rows/production-logs.png';
+import rowOperatingContextImg from '../../assets/pipeline/rows/operating-context.png';
+import rowMatchPlantHoursImg from '../../assets/pipeline/rows/match-plant-hours.png';
+import rowCalculateUnitCostImg from '../../assets/pipeline/rows/calculate-unit-cost.png';
+import rowFlagUnusualUseImg from '../../assets/pipeline/rows/flag-unusual-use.png';
+import rowComparePeriodsImg from '../../assets/pipeline/rows/compare-periods.png';
+import rowCheckOutputImg from '../../assets/pipeline/rows/check-output.png';
+import rowAssessSavingsImg from '../../assets/pipeline/rows/assess-savings.png';
 
 /**
  * 5 System Architecture Stages Configuration
@@ -12,13 +28,54 @@ const SYSTEM_STAGES = [
     id: 1,
     number: '1',
     headerLabel: 'Factory inputs',
-    headerColor: '#dc2626',
+    headerSub: '(Data ingestion)',
+    headerColor: '#b91c1c',
+    image: stage1Img,
+    fallbackImage: '/pipeline/stage1-factory-inputs.png',
+    pictogram: 'factory',
+    layoutType: 'rows',
     title: 'Factory inputs & operating context',
     badge: 'Stage 1 of 5',
     items: [
-      { text: 'Meter readings', icon: 'zap', hint: 'Hourly kWh, PF, voltage' },
-      { text: 'Production reports', icon: 'box', hint: 'Good units, scrap, downtime' },
-      { text: 'Operating context', icon: 'sliders', hint: 'Utility baseload, tariffs' },
+      {
+        id: 'meter-readings',
+        text: 'Meter readings',
+        icon: 'zap',
+        iconImg: rowMeterReadingsImg,
+        fallbackImg: '/pipeline/rows/meter-readings.png',
+        hint: 'Hourly kWh, PF, voltage',
+        tint: 'tint-blue',
+        explanation: [
+          'In Daily Operations, the user selects a plant and date, then enters or pastes hourly electricity readings for a meter.',
+          'After validation, the app saves those readings in PostgreSQL so energy analysis can compare electricity use with production for the same plant and hour.',
+        ],
+      },
+      {
+        id: 'production-logs',
+        text: 'Production logs',
+        icon: 'box',
+        iconImg: rowProductionLogsImg,
+        fallbackImg: '/pipeline/rows/production-logs.png',
+        hint: 'Good units, scrap, downtime',
+        tint: 'tint-green',
+        explanation: [
+          'In Daily Operations, the user enters hourly production output, good finished units, scrap, and stoppage time.',
+          'The app stores these records to calculate unit electricity cost and protect production throughput against unverified savings claims.',
+        ],
+      },
+      {
+        id: 'operating-context',
+        text: 'Operating context',
+        icon: 'sliders',
+        iconImg: rowOperatingContextImg,
+        fallbackImg: '/pipeline/rows/operating-context.png',
+        hint: 'Utility baseload, tariffs',
+        tint: 'tint-purple',
+        explanation: [
+          'Defines plant working hours, shifts, baseline thresholds, and tariffs.',
+          'Used to classify operating versus non-operating hours and convert energy use into electricity cost.',
+        ],
+      },
     ],
     explanation:
       'Factory energy telemetry, submeter hierarchy, hourly production logs, and utility operating context are aggregated from shop-floor CSV/XLSX reports across plants.',
@@ -39,13 +96,37 @@ const SYSTEM_STAGES = [
     id: 2,
     number: '2',
     headerLabel: 'Intake & storage',
-    headerColor: '#2563eb',
+    headerSub: '(Storage & lineage)',
+    headerColor: '#1d4ed8',
+    image: stage2Img,
+    fallbackImage: '/pipeline/stage2-intake-storage.png',
+    pictogram: 'database',
+    layoutType: 'illustration',
     title: 'Intake validation & atomic storage',
     badge: 'Stage 2 of 5',
     items: [
-      { text: 'Validate files', icon: 'shield-check', hint: 'Bounds, monotonicity, schema' },
-      { text: 'PostgreSQL store', icon: 'database', hint: 'Immutable star schema tables' },
-      { text: 'Source revisions', icon: 'git-commit', hint: 'Atomic batch provenance' },
+      {
+        id: 'validate-entries',
+        text: 'Validate entries',
+        icon: 'shield-check',
+        hint: 'Bounds, monotonicity, schema',
+        tint: 'tint-blue',
+        explanation: [
+          'In Daily Operations, the user triggers validation after data entry.',
+          'The app verifies that readings are within physical limits, non-negative, and continuous before any record is stored.',
+        ],
+      },
+      {
+        id: 'store-postgresql',
+        text: 'Store in PostgreSQL',
+        icon: 'database',
+        hint: 'Immutable star schema tables',
+        tint: 'tint-cyan',
+        explanation: [
+          'Commits validated readings to the database.',
+          'These records populate the dashboard, the energy heatmap, and the investigation centre.',
+        ],
+      },
     ],
     explanation:
       'FastAPI executes two-stage schema, voltage, and power factor validation before atomically committing confirmed readings and their source revisions to PostgreSQL.',
@@ -66,13 +147,51 @@ const SYSTEM_STAGES = [
     id: 3,
     number: '3',
     headerLabel: 'Energy analysis',
-    headerColor: '#7c3aed',
+    headerSub: '(Anomaly surveillance)',
+    headerColor: '#6b21a8',
+    image: stage3Img,
+    fallbackImage: '/pipeline/stage3-energy-analysis.png',
+    pictogram: 'chart',
+    layoutType: 'rows',
     title: 'Energy analysis & anomaly surveillance',
     badge: 'Stage 3 of 5',
     items: [
-      { text: 'Match plant-hours', icon: 'clock', hint: 'Temporal coverage audit' },
-      { text: 'Calculate unit cost', icon: 'calculator', hint: 'kWh & ₹ per good unit' },
-      { text: 'Detect deviations', icon: 'activity', hint: 'Z-score, standby, low PF' },
+      {
+        id: 'match-plant-hours',
+        text: 'Match plant hours',
+        icon: 'clock',
+        iconImg: rowMatchPlantHoursImg,
+        fallbackImg: '/pipeline/rows/match-plant-hours.png',
+        hint: 'Temporal coverage audit',
+        tint: 'tint-purple',
+        explanation: [
+          'Aligns hourly electricity consumption with production logs for the same timestamp so energy use is assessed only during active operational hours.',
+        ],
+      },
+      {
+        id: 'calculate-unit-cost',
+        text: 'Calculate unit cost',
+        icon: 'calculator',
+        iconImg: rowCalculateUnitCostImg,
+        fallbackImg: '/pipeline/rows/calculate-unit-cost.png',
+        hint: 'kWh & ₹ per good unit',
+        tint: 'tint-cyan',
+        explanation: [
+          'Calculates electricity cost per good unit, specific energy consumption (SEC), and cost per operating hour from the active filters.',
+        ],
+      },
+      {
+        id: 'flag-unusual-use',
+        text: 'Flag unusual use',
+        icon: 'activity',
+        iconImg: rowFlagUnusualUseImg,
+        fallbackImg: '/pipeline/rows/flag-unusual-use.png',
+        hint: 'Z-score, standby, low PF',
+        tint: 'tint-amber',
+        explanation: [
+          'Flags baseload spikes, standby consumption during zero-production hours, and low power factor (< 0.90) as active findings.',
+        ],
+      },
     ],
     explanation:
       'Matches electricity with production by plant and hour, calculates Specific Energy Consumption (SEC) per good finished unit, and runs multi-algorithm anomaly surveillance.',
@@ -93,13 +212,35 @@ const SYSTEM_STAGES = [
     id: 4,
     number: '4',
     headerLabel: 'Human review',
-    headerColor: '#4338ca',
+    headerSub: '(M&V governance)',
+    headerColor: '#3730a3',
+    image: stage4Img,
+    fallbackImage: '/pipeline/Plant engineer reviewing a checklist.png',
+    pictogram: 'people',
+    layoutType: 'illustration',
     title: 'Human review & M&V plan approval',
     badge: 'Stage 4 of 5',
     items: [
-      { text: 'Review finding', icon: 'search', hint: 'Trace telemetry provenance' },
-      { text: 'Approve action', icon: 'user-check', hint: 'Assign engineering tasks' },
-      { text: 'Freeze plan', icon: 'lock', hint: 'Pre-approve output limits' },
+      {
+        id: 'review-findings',
+        text: 'Review findings',
+        icon: 'search',
+        hint: 'Trace telemetry provenance',
+        tint: 'tint-blue',
+        explanation: [
+          'In the Investigation Centre, the plant engineer reviews flagged anomalies, checks telemetry evidence, and adds investigation notes before acting.',
+        ],
+      },
+      {
+        id: 'approve-action',
+        text: 'Approve action',
+        icon: 'user-check',
+        hint: 'Assign engineering tasks',
+        tint: 'tint-green',
+        explanation: [
+          'When a finding warrants action, the engineer documents the planned corrective measure and commits it to the audit log.',
+        ],
+      },
     ],
     explanation:
       'Facilities and Production engineers investigate detected findings, agree on corrective actions, and freeze prospective measurement plans with preapproved operational limits.',
@@ -120,13 +261,51 @@ const SYSTEM_STAGES = [
     id: 5,
     number: '5',
     headerLabel: 'Assessment',
-    headerColor: '#be123c',
+    headerSub: '(Savings verification)',
+    headerColor: '#881337',
+    image: stage5Img,
+    fallbackImage: '/pipeline/stage5-assessment.png',
+    pictogram: 'checklist',
+    layoutType: 'rows',
     title: 'Action assessment & savings verification',
     badge: 'Stage 5 of 5',
     items: [
-      { text: 'Compare periods', icon: 'columns', hint: 'Half-open window intervals' },
-      { text: 'Check production', icon: 'check-circle-2', hint: 'Evaluate 4 guardrails' },
-      { text: 'Assess savings', icon: 'award', hint: 'Counterfactual attribution' },
+      {
+        id: 'compare-periods',
+        text: 'Compare periods',
+        icon: 'columns',
+        iconImg: rowComparePeriodsImg,
+        fallbackImg: '/pipeline/rows/compare-periods.png',
+        hint: 'Half-open window intervals',
+        tint: 'tint-amber',
+        explanation: [
+          'Compares electricity use and production between pre-intervention and post-intervention periods using matching operational conditions.',
+        ],
+      },
+      {
+        id: 'check-output',
+        text: 'Check output',
+        icon: 'check-circle-2',
+        iconImg: rowCheckOutputImg,
+        fallbackImg: '/pipeline/rows/check-output.png',
+        hint: 'Evaluate 4 guardrails',
+        tint: 'tint-green',
+        explanation: [
+          'Confirms that production throughput, good units, and product quality did not drop before attributing lower energy use to an efficiency gain.',
+        ],
+      },
+      {
+        id: 'assess-savings',
+        text: 'Assess savings',
+        icon: 'award',
+        iconImg: rowAssessSavingsImg,
+        fallbackImg: '/pipeline/rows/assess-savings.png',
+        hint: 'Counterfactual attribution',
+        tint: 'tint-rose',
+        explanation: [
+          'Reconciles verified electricity reduction against baseline tariffs to compute audited financial savings and update the ledger.',
+        ],
+      },
     ],
     explanation:
       'Facilities and Production compare electricity use before and after a recorded action, check output and quality, and review the evidence for any savings claim.',
@@ -361,6 +540,61 @@ function StageIcon({ name }) {
 }
 
 /**
+ * Recognizable white header pictograms for the infographic pipeline diagram
+ */
+function StagePictogram({ name }) {
+  switch (name) {
+    case 'factory':
+      return (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" />
+          <path d="M17 18h1" />
+          <path d="M12 18h1" />
+          <path d="M7 18h1" />
+        </svg>
+      );
+    case 'database':
+      return (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+          <ellipse cx="12" cy="5" rx="9" ry="3" />
+          <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+          <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+          <path d="M21 12v7c0 1.66-4 3-9 3s-9-1.34-9-3v-7" />
+        </svg>
+      );
+    case 'chart':
+      return (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="18" y1="20" x2="18" y2="10" />
+          <line x1="12" y1="20" x2="12" y2="4" />
+          <line x1="6" y1="20" x2="6" y2="14" />
+          <line x1="2" y1="20" x2="22" y2="20" />
+        </svg>
+      );
+    case 'users':
+    case 'people':
+      return (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+        </svg>
+      );
+    case 'checklist':
+      return (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+          <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+          <path d="m9 14 2 2 4-4" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
+/**
  * ArchitectureOverview Component
  * 
  * Implements the 4-panel executive operations layout:
@@ -379,46 +613,56 @@ export default function ArchitectureOverview({
   // Internal stage selection state if not driven externally
   const [activeStageId, setActiveStageId] = useState(selectedStageId || 5);
   const [selectedProblemId, setSelectedProblemId] = useState(null);
+  const [selectedItemId, setSelectedItemId] = useState(null);
 
   // Sync prop changes
   useEffect(() => {
     if (selectedStageId && selectedStageId !== activeStageId) {
       setActiveStageId(selectedStageId);
+      setSelectedItemId(null);
     }
   }, [selectedStageId]);
 
   const handleStageClick = useCallback((id) => {
     setActiveStageId(id);
+    setSelectedItemId(null);
     setSelectedProblemId(null);
     if (onSelectStageId) onSelectStageId(id);
+  }, [onSelectStageId]);
+
+  const handleItemClick = useCallback((stageId, itemId) => {
+    setActiveStageId(stageId);
+    setSelectedItemId(itemId);
+    setSelectedProblemId(null);
+    if (onSelectStageId) onSelectStageId(stageId);
   }, [onSelectStageId]);
 
   const handleProblemClick = useCallback((prob) => {
     setSelectedProblemId(prob.id);
     setActiveStageId(prob.linkedStageId);
+    setSelectedItemId(null);
     if (onSelectStageId) onSelectStageId(prob.linkedStageId);
   }, [onSelectStageId]);
-
-  // Backend Connectivity Status
-  const [backendHealth, setBackendHealth] = useState({ connected: true, version: '1.0.0', loading: false });
-  useEffect(() => {
-    let isMounted = true;
-    checkBackendHealth().then((res) => {
-      if (isMounted) {
-        if (res.success) {
-          setBackendHealth({ connected: true, version: res.data?.version || '1.0.0', loading: false });
-        } else {
-          setBackendHealth({ connected: false, version: null, loading: false });
-        }
-      }
-    });
-    return () => { isMounted = false; };
-  }, []);
 
   // Active Stage Object
   const currentStage = useMemo(() => {
     return SYSTEM_STAGES.find((s) => s.id === activeStageId) || SYSTEM_STAGES[4];
   }, [activeStageId]);
+
+  // Active Selected Item
+  const selectedItem = useMemo(() => {
+    if (!selectedItemId) return null;
+    for (const stage of SYSTEM_STAGES) {
+      const match = stage.items?.find((it) => it.id === selectedItemId);
+      if (match) {
+        return {
+          ...match,
+          stage,
+        };
+      }
+    }
+    return null;
+  }, [selectedItemId]);
 
   const activeProblem = useMemo(() => {
     return CORE_PROBLEMS.find((p) => p.id === selectedProblemId);
@@ -562,32 +806,16 @@ export default function ArchitectureOverview({
             <span>Executive Overview &amp; Analytics</span>
           </button>
         </div>
-
-        <div className="ps-ref-control-status">
-          <span className="ps-ref-status-source">Database Grounding:</span>
-          {backendHealth.connected && (
-            <span className="ps-ref-status-db is-connected">
-              <span className="ps-ref-status-val">Neon PostgreSQL 16 Star Schema</span>
-              <span className="ps-ref-status-dot" aria-hidden="true" />
-              <span>Connected{backendHealth.version ? ` (v${backendHealth.version})` : ''}</span>
-            </span>
-          )}
-          {!backendHealth.connected && !backendHealth.loading && (
-            <span className="ps-ref-status-db is-disconnected">
-              <span className="ps-ref-status-val">Neon PostgreSQL 16 Star Schema</span>
-              <span className="ps-ref-status-dot" aria-hidden="true" />
-              <span>Backend Offline</span>
-            </span>
-          )}
-        </div>
       </div>
 
-      {/* 2. FOUR-PANEL TWO-COLUMN GRID */}
+      {/* 2. MAIN ARCHITECTURE COMMAND LAYOUT */}
       <div className="ps-ref-main-grid home-architecture-grid">
-        {/* ===================================================================
-            PANEL 1 (TOP-LEFT): SYSTEM ARCHITECTURE PIPELINE
-            =================================================================== */}
-        <section className="ps-ref-card ps-panel-pipeline home-pipeline" aria-labelledby="pipeline-heading">
+        {/* ROW 1: System Architecture Pipeline (Left ~72%) & Problems Solved by the Agent (Right ~28%) */}
+        <div className="ps-architecture-top-row">
+          {/* ===================================================================
+              PANEL 1 (TOP-LEFT): SYSTEM ARCHITECTURE PIPELINE
+              =================================================================== */}
+          <section className="ps-ref-card ps-panel-pipeline home-pipeline" aria-labelledby="pipeline-heading">
           <div className="ps-ref-card-header">
             <div className="ps-ref-card-header-left">
               <div className="ps-ref-header-icon ps-icon-purple" aria-hidden="true">
@@ -598,57 +826,145 @@ export default function ArchitectureOverview({
               </div>
               <h2 id="pipeline-heading" className="ps-ref-card-title">System Architecture Pipeline</h2>
             </div>
-            <span className="ps-ref-card-hint">Click any card to inspect details ▾</span>
+            <span className="ps-ref-card-hint">Select a stage or item to see how it works.</span>
           </div>
 
-          <div className="ps-pipeline-strip-flow" role="tablist" aria-label="System architecture pipeline stages">
+          <div className="ps-pipeline-strip-flow" role="region" aria-label="System architecture pipeline stages">
             {SYSTEM_STAGES.map((st, idx) => {
               const isSelected = st.id === activeStageId;
               return (
-                <React.Fragment key={st.id}>
-                  <div
-                    role="tab"
-                    id={`stage-tab-${st.id}`}
-                    aria-selected={isSelected}
-                    aria-controls="stage-inspector-panel"
-                    tabIndex={0}
-                    className={`ps-pipeline-stage-card ${isSelected ? 'is-selected' : ''}`}
+                <div
+                  key={st.id}
+                  id={`stage-card-${st.id}`}
+                  className={`ps-pipeline-stage-card stage-theme-${st.id} ${isSelected ? 'is-selected' : ''}`}
+                  style={{
+                    '--stage-color': st.headerColor,
+                    '--stage-tint': `${st.headerColor}0a`,
+                  }}
+                >
+                  {/* Full-width colored header band: Button to select stage overview */}
+                  <button
+                    type="button"
+                    className="ps-stage-header-band"
+                    style={{ background: st.headerColor }}
                     onClick={() => handleStageClick(st.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        handleStageClick(st.id);
-                      }
+                    aria-label={`Select Stage ${st.number}: ${st.headerLabel} overview`}
+                    aria-pressed={isSelected && !selectedItemId}
+                  >
+                    <div className="ps-stage-header-inner">
+                      <div className="ps-stage-header-icon-box" aria-hidden="true">
+                        <StagePictogram name={st.pictogram} />
+                      </div>
+                      <div className="ps-stage-header-title-box">
+                        <span className="ps-stage-header-title-text">{st.number}. {st.headerLabel}</span>
+                        {st.headerSub && <span className="ps-stage-header-sub-text">{st.headerSub}</span>}
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* Body: Two distinct layouts */}
+                  <div
+                    className="ps-stage-card-body"
+                    onClick={() => {
+                      if (selectedItemId) handleStageClick(st.id);
                     }}
                   >
-                    {/* Stage Header Strip */}
-                    <div className="ps-stage-header-strip" style={{ background: st.headerColor }}>
-                      <span className="ps-stage-header-text">{st.headerLabel}</span>
-                    </div>
-
-                    {/* Stage 3 Short Item Rows */}
-                    <div className="ps-stage-card-items">
-                      {st.items.map((it, itemIdx) => (
-                        <div key={itemIdx} className="ps-stage-item-row" title={it.hint}>
-                          <span className="ps-item-icon-wrap" aria-hidden="true">
-                            <StageIcon name={it.icon} />
-                          </span>
-                          <span className="ps-item-text">{it.text}</span>
+                    {st.layoutType === 'rows' ? (
+                      <div className="ps-stage-rows-body">
+                        {st.items.map((item) => {
+                          const isItemActive = isSelected && selectedItemId === item.id;
+                          return (
+                            <button
+                              type="button"
+                              key={item.id}
+                              className={`ps-stage-tint-row ${item.tint} ${isItemActive ? 'is-item-selected' : ''}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleItemClick(st.id, item.id);
+                              }}
+                              aria-label={`Inspect ${item.text}`}
+                              aria-pressed={isItemActive}
+                            >
+                              <div className="ps-stage-row-img-box">
+                                <img
+                                  src={item.iconImg || item.fallbackImg}
+                                  alt=""
+                                  className="ps-stage-row-img"
+                                  loading="eager"
+                                />
+                              </div>
+                              <div className="ps-stage-row-text-content">
+                                <span className="ps-stage-row-text">{item.text}</span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="ps-stage-illust-body">
+                        <div
+                          className="ps-stage-center-illust-box"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => handleStageClick(st.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handleStageClick(st.id);
+                            }
+                          }}
+                          aria-label={`Stage ${st.number} illustration, click for stage overview`}
+                        >
+                          <img
+                            src={st.image || st.fallbackImage}
+                            alt=""
+                            className="ps-stage-center-illust"
+                            loading="eager"
+                          />
                         </div>
-                      ))}
-                    </div>
+                        <div className="ps-stage-sublabels-box">
+                          {st.items.map((sub) => {
+                            const isSubActive = isSelected && selectedItemId === sub.id;
+                            return (
+                              <button
+                                type="button"
+                                key={sub.id}
+                                className={`ps-stage-sublabel-row ${isSubActive ? 'is-item-selected' : ''}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleItemClick(st.id, sub.id);
+                                }}
+                                aria-label={`Inspect ${sub.text}`}
+                                aria-pressed={isSubActive}
+                              >
+                                <span className="ps-stage-sublabel-text">{sub.text}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Arrow Connector between cards */}
+                  {/* Connecting arrow in gap between cards */}
                   {idx < SYSTEM_STAGES.length - 1 && (
-                    <div className="ps-pipeline-arrow-slot" aria-hidden="true">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="5" y1="12" x2="19" y2="12" />
-                        <polyline points="12 5 19 12 12 19" />
+                    <div className="ps-stage-connector-arrow" aria-hidden="true">
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <line x1="4" y1="12" x2="20" y2="12" />
+                        <polyline points="14 6 20 12 14 18" />
                       </svg>
                     </div>
                   )}
-                </React.Fragment>
+                </div>
               );
             })}
           </div>
@@ -668,14 +984,14 @@ export default function ArchitectureOverview({
               </div>
               <h2 id="problems-heading" className="ps-ref-card-title">Problems Solved by the Agent</h2>
             </div>
-            <span className="ps-badge-counter">5 CORE PROBLEMS</span>
+            <span className="ps-badge-counter">{CORE_PROBLEMS.length}</span>
           </div>
 
-          <div className="ps-problems-list-container">
+          <ol className="ps-problems-list-container">
             {CORE_PROBLEMS.map((prob) => {
               const isSelected = prob.id === selectedProblemId;
               return (
-                <div
+                <li
                   key={prob.id}
                   className={`ps-problem-row ${prob.colorClass} ${isSelected ? 'is-problem-active' : ''}`}
                   onClick={() => handleProblemClick(prob)}
@@ -689,121 +1005,203 @@ export default function ArchitectureOverview({
                   }}
                   title={`Inspect how the agent addresses problem ${prob.code}`}
                 >
-                  <div className="ps-problem-left">
-                    <span className="ps-problem-num">{prob.code}</span>
-                    <span className="ps-problem-label">{prob.label}</span>
-                  </div>
-                  <div className="ps-problem-icon-wrap" aria-hidden="true">
+                  <span className="ps-problem-num">{prob.code}</span>
+                  <span className="ps-problem-label">{prob.label}</span>
+                  <span className="ps-problem-icon-wrap" aria-hidden="true">
                     <StageIcon name={prob.icon} />
-                  </div>
-                </div>
+                  </span>
+                </li>
               );
             })}
-          </div>
+          </ol>
         </section>
+      </div>
 
+      {/* ROW 2: Selected Stage Inspector (Left) & Plant Energy Intensity Heatmap (Right) */}
+      <div className="ps-architecture-bottom-row">
         {/* ===================================================================
             PANEL 3 (BOTTOM-LEFT): SELECTED STAGE INSPECTOR
             =================================================================== */}
         <section
           id="stage-inspector-panel"
           className="ps-ref-card ps-panel-inspector home-inspector"
-          role="tabpanel"
-          aria-labelledby={`stage-tab-${currentStage.id}`}
+          role="region"
+          aria-labelledby="inspector-heading"
         >
-          {/* Header with Stage Title & Badge */}
-          <div className="ps-ref-card-header ps-inspector-header">
-            <div className="ps-inspector-header-left">
-              <span className="ps-stage-num-badge" style={{ background: currentStage.headerColor }}>
-                {currentStage.number}
-              </span>
-              <h3 className="ps-inspector-card-title">
-                {currentStage.number}. {currentStage.title.replace(/^\d+\.\s*/, '')}
-              </h3>
-            </div>
-            <span className="ps-badge-stage-tag" style={{ color: currentStage.headerColor, borderColor: `${currentStage.headerColor}40` }}>
-              STAGE {currentStage.id} OF {SYSTEM_STAGES.length}
-            </span>
-          </div>
-
-          {/* Active Problem Callout (when triggered from Top-Right list) */}
-          {activeProblem && (
-            <div className={`ps-inspector-problem-banner ${activeProblem.colorClass}`}>
-              <div className="ps-prob-banner-top">
-                <span className="ps-prob-banner-tag">Addressing Problem {activeProblem.code}</span>
+          {selectedItem ? (
+            <>
+              {/* Header with Parent Stage Label, Item Title & Stage Tag */}
+              <div className="ps-ref-card-header ps-inspector-header">
+                <div className="ps-inspector-header-left">
+                  <span className="ps-stage-num-badge" style={{ background: currentStage.headerColor }}>
+                    {currentStage.number}
+                  </span>
+                  <div className="ps-inspector-title-group">
+                    <span className="ps-inspector-parent-label">
+                      {currentStage.headerLabel} › {selectedItem.text}
+                    </span>
+                    <h3 id="inspector-heading" className="ps-inspector-card-title">
+                      {selectedItem.text}
+                    </h3>
+                  </div>
+                </div>
                 <button
                   type="button"
-                  className="ps-prob-banner-dismiss"
-                  onClick={() => setSelectedProblemId(null)}
-                  title="Dismiss problem highlight"
+                  className="ps-badge-stage-tag ps-inspector-stage-restore-btn"
+                  style={{ color: currentStage.headerColor, borderColor: `${currentStage.headerColor}40` }}
+                  onClick={() => setSelectedItemId(null)}
+                  title={`Clear item selection and view full Stage ${currentStage.number} overview`}
                 >
-                  ✕
+                  STAGE {currentStage.id} OF {SYSTEM_STAGES.length}
                 </button>
               </div>
-              <p className="ps-prob-banner-detail">{activeProblem.detail}</p>
-            </div>
-          )}
 
-          {/* Plain-English Explanation */}
-          <p className="ps-inspector-explanation">
-            {currentStage.explanation}
-          </p>
-
-          {/* Technical Details Strip in Expandable Section */}
-          <details className="ps-tech-details-accordion">
-            <summary className="ps-tech-accordion-summary">
-              <span>Technical details &amp; schema</span>
-              <svg className="ps-accordion-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-            </summary>
-            <div className="ps-tech-details-strip">
-              <div className="ps-tech-strip-item">
-                <span className="ps-tech-label">PROTOCOLS &amp; WORKSPACE:</span>
-                <span className="ps-tech-value">{currentStage.technicalDetails.protocols}</span>
+              {/* Item explanation bullets */}
+              <div className="ps-item-detail-content">
+                <ul className="ps-item-bullets-list" aria-label={`Explanations for ${selectedItem.text}`}>
+                  {selectedItem.explanation.map((bullet, idx) => (
+                    <li key={idx} className="ps-item-bullet-row">
+                      <span className="ps-item-bullet-marker" aria-hidden="true">•</span>
+                      <p className="ps-item-bullet-text">{bullet}</p>
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <div className="ps-tech-strip-item ps-tech-tables-row">
-                <span className="ps-tech-label">DATABASE TABLES:</span>
-                <div className="ps-tech-tables-list">
-                  {currentStage.technicalDetails.tables.map((tName) => (
-                    <code key={tName} className="ps-table-code-pill">{tName}</code>
+
+              {/* Destination Link Button */}
+              <div className="ps-inspector-footer">
+                <button
+                  type="button"
+                  className="ps-inspector-action-btn"
+                  onClick={() => navigate(currentStage.linkRoute)}
+                  title={`Navigate to ${currentStage.linkText}`}
+                >
+                  <span>{currentStage.linkText}</span>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                    <polyline points="12 5 19 12 12 19" />
+                  </svg>
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Header with Stage Title & Badge */}
+              <div className="ps-ref-card-header ps-inspector-header">
+                <div className="ps-inspector-header-left">
+                  <span className="ps-stage-num-badge" style={{ background: currentStage.headerColor }}>
+                    {currentStage.number}
+                  </span>
+                  <h3 id="inspector-heading" className="ps-inspector-card-title">
+                    {currentStage.number}. {currentStage.title.replace(/^\d+\.\s*/, '')}
+                  </h3>
+                </div>
+                <span className="ps-badge-stage-tag" style={{ color: currentStage.headerColor, borderColor: `${currentStage.headerColor}40` }}>
+                  STAGE {currentStage.id} OF {SYSTEM_STAGES.length}
+                </span>
+              </div>
+
+              {/* Detailed bullet points from selected stage */}
+              <div className="ps-inspector-items-strip" aria-label="Stage core deliverables">
+                {currentStage.items.map((it, itemIdx) => (
+                  <button
+                    type="button"
+                    key={it.id || itemIdx}
+                    className={`ps-inspector-item-badge ${it.tint || ''}`}
+                    title={it.hint || `Inspect ${it.text}`}
+                    onClick={() => handleItemClick(currentStage.id, it.id)}
+                  >
+                    <span className="ps-inspector-item-icon" aria-hidden="true">
+                      <StageIcon name={it.icon} />
+                    </span>
+                    <div className="ps-inspector-item-info">
+                      <strong className="ps-inspector-item-name">{it.text}</strong>
+                      {it.hint && <span className="ps-inspector-item-hint">{it.hint}</span>}
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Active Problem Callout (when triggered from Top-Right list) */}
+              {activeProblem && (
+                <div className={`ps-inspector-problem-banner ${activeProblem.colorClass}`}>
+                  <div className="ps-prob-banner-top">
+                    <span className="ps-prob-banner-tag">Addressing Problem {activeProblem.code}</span>
+                    <button
+                      type="button"
+                      className="ps-prob-banner-dismiss"
+                      onClick={() => setSelectedProblemId(null)}
+                      title="Dismiss problem highlight"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <p className="ps-prob-banner-detail">{activeProblem.detail}</p>
+                </div>
+              )}
+
+              {/* Plain-English Explanation */}
+              <p className="ps-inspector-explanation">
+                {currentStage.explanation}
+              </p>
+
+              {/* Technical Details Strip in Expandable Section */}
+              <details className="ps-tech-details-accordion">
+                <summary className="ps-tech-accordion-summary">
+                  <span>Technical details &amp; schema</span>
+                  <svg className="ps-accordion-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </summary>
+                <div className="ps-tech-details-strip">
+                  <div className="ps-tech-strip-item">
+                    <span className="ps-tech-label">PROTOCOLS &amp; WORKSPACE:</span>
+                    <span className="ps-tech-value">{currentStage.technicalDetails.protocols}</span>
+                  </div>
+                  <div className="ps-tech-strip-item ps-tech-tables-row">
+                    <span className="ps-tech-label">DATABASE TABLES:</span>
+                    <div className="ps-tech-tables-list">
+                      {currentStage.technicalDetails.tables.map((tName) => (
+                        <code key={tName} className="ps-table-code-pill">{tName}</code>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </details>
+
+              {/* Workflow & Operational Flow */}
+              <div className="ps-inspector-workflow-block">
+                <h4 className="ps-workflow-heading">{currentStage.flowHeading}</h4>
+                <div className="ps-workflow-steps-list">
+                  {currentStage.workflow.map((wf) => (
+                    <div key={wf.step} className="ps-workflow-step-row">
+                      <span className="ps-step-num-circle">{wf.step}</span>
+                      <div className="ps-step-text-content">
+                        <strong className="ps-step-title">{wf.title}:</strong>
+                        <span className="ps-step-desc"> {wf.desc}</span>
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
-            </div>
-          </details>
 
-          {/* Workflow & Operational Flow */}
-          <div className="ps-inspector-workflow-block">
-            <h4 className="ps-workflow-heading">{currentStage.flowHeading}</h4>
-            <div className="ps-workflow-steps-list">
-              {currentStage.workflow.map((wf) => (
-                <div key={wf.step} className="ps-workflow-step-row">
-                  <span className="ps-step-num-circle">{wf.step}</span>
-                  <div className="ps-step-text-content">
-                    <strong className="ps-step-title">{wf.title}:</strong>
-                    <span className="ps-step-desc"> {wf.desc}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Destination Link Button */}
-          <div className="ps-inspector-footer">
-            <button
-              type="button"
-              className="ps-inspector-action-btn"
-              onClick={() => navigate(currentStage.linkRoute)}
-              title={`Navigate to ${currentStage.linkText}`}
-            >
-              <span>{currentStage.linkText}</span>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <line x1="5" y1="12" x2="19" y2="12" />
-                <polyline points="12 5 19 12 12 19" />
-              </svg>
-            </button>
-          </div>
+              {/* Destination Link Button */}
+              <div className="ps-inspector-footer">
+                <button
+                  type="button"
+                  className="ps-inspector-action-btn"
+                  onClick={() => navigate(currentStage.linkRoute)}
+                  title={`Navigate to ${currentStage.linkText}`}
+                >
+                  <span>{currentStage.linkText}</span>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                    <polyline points="12 5 19 12 12 19" />
+                  </svg>
+                </button>
+              </div>
+            </>
+          )}
         </section>
 
         {/* ===================================================================
@@ -1000,5 +1398,6 @@ export default function ArchitectureOverview({
         </section>
       </div>
     </div>
-  );
+  </div>
+);
 }

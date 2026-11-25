@@ -81,15 +81,48 @@ export function formatDateTime(dtStr) {
   }
 }
 
+const DETECTOR_TITLE_MAP = {
+  LOW_POWER_FACTOR: 'Low power factor',
+  ROLLING_BASELINE_SPIKE: 'Rolling baseline spike',
+  ROLLING_BASELINE_DROP: 'Rolling baseline drop',
+  ENERGY_STATISTICAL_SPIKE: 'Energy statistical spike',
+  ENERGY_STATISTICAL_DROP: 'Energy statistical drop',
+  UNUSUALLY_LONG_STOPPAGE: 'Unusually long stoppage',
+  HIGH_STOPPAGE_ENERGY_RATE: 'High stoppage energy rate',
+  PERSISTENT_BASELOAD_INCREASE: 'Persistent baseload increase',
+  UNUSUAL_RESTART_BEHAVIOR: 'Unusual restart behavior',
+  ZERO_PRODUCTION_STANDBY_ENERGY: 'Zero production standby waste',
+  COMPARABLE_PERIOD_ELECTRICITY_INCREASE: 'Comparable period electricity increase',
+  COMPARABLE_PERIOD_ELECTRICITY_DECREASE: 'Comparable period electricity decrease',
+};
+
 /**
  * Format raw anomaly / detector code into clean sentence-case readable title.
  * e.g. "COMPARABLE_PERIOD_ELECTRICITY_DECREASE" -> "Comparable period electricity decrease"
+ * Never defaults to "Low power factor" - uses each record's actual detector or a neutral fallback.
  * @param {string|null|undefined} titleOrType
  * @returns {string}
  */
 export function formatFindingTitle(titleOrType) {
   if (!titleOrType) return 'Operational finding';
-  const text = String(titleOrType).trim();
+  // If an object is passed, extract its display field
+  if (typeof titleOrType === 'object' && titleOrType !== null) {
+    titleOrType =
+      titleOrType.title ||
+      titleOrType.display_title ||
+      titleOrType.finding_title ||
+      titleOrType.name ||
+      titleOrType.anomaly_type;
+  }
+  if (!titleOrType || typeof titleOrType !== 'string') return 'Operational finding';
+  const text = titleOrType.trim();
+  if (!text || text === '[object Object]') return 'Operational finding';
+
+  const normalized = text.toUpperCase().replace(/\s+/g, '_');
+  if (DETECTOR_TITLE_MAP[normalized]) {
+    return DETECTOR_TITLE_MAP[normalized];
+  }
+
   if (text.includes('_') || text === text.toUpperCase()) {
     const readable = text.replace(/_/g, ' ').toLowerCase();
     return readable.charAt(0).toUpperCase() + readable.slice(1);

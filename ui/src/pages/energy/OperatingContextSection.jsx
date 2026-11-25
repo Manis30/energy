@@ -1,6 +1,33 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { operatingContextApi } from '../../services';
 import { formatCurrency, formatDate, formatDateTime, formatNumber } from '../../utils/formatters';
+import './OperatingContextSection.css';
+
+function formatStoppageWindow(startStr, endStr) {
+  if (!startStr) return '—';
+  try {
+    const start = new Date(startStr);
+    if (isNaN(start.getTime())) return startStr;
+    const end = endStr ? new Date(endStr) : null;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const sDay = start.getDate();
+    const sMon = months[start.getMonth()];
+    const sYr = start.getFullYear();
+    const pad = (n) => String(n).padStart(2, '0');
+    const sTime = `${pad(start.getHours())}:${pad(start.getMinutes())}`;
+    if (!end || isNaN(end.getTime())) return `${sDay} ${sMon} ${sYr} · ${sTime}`;
+    const eDay = end.getDate();
+    const eMon = months[end.getMonth()];
+    const eYr = end.getFullYear();
+    const eTime = `${pad(end.getHours())}:${pad(end.getMinutes())}`;
+    if (sDay === eDay && sMon === eMon && sYr === eYr) {
+      return `${sDay} ${sMon} ${sYr} · ${sTime}–${eTime}`;
+    }
+    return `${sDay} ${sMon} ${sYr}, ${sTime} – ${eDay} ${eMon} ${eYr}, ${eTime}`;
+  } catch {
+    return startStr;
+  }
+}
 
 const LINES = [
   { id: 'ALL', label: 'All Production Lines' },
@@ -154,117 +181,30 @@ export default function OperatingContextSection({
     return LINES.filter((l) => l.id === 'ALL' || l.plant === selectedPlant);
   }, [selectedPlant]);
 
+  const coveragePct = useMemo(() => {
+    if (!summary || summary.total_observed_hours == null || summary.total_observed_hours <= 0) return null;
+    return Math.round(((summary.matched_hours || 0) / summary.total_observed_hours) * 100);
+  }, [summary]);
+
   return (
     <div className="energy-card operating-context-section chart-card" style={{ marginTop: '1.5rem', background: 'var(--bg-surface)', borderRadius: 'var(--radius-md, 8px)', padding: '1.25rem', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow-sm)' }}>
-      {/* 1. Header & Controls */}
-      <div className="energy-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
-            <span className="badge badge-purple" style={{ textTransform: 'uppercase', fontSize: '0.72rem', letterSpacing: '0.05em' }}>
-              Phase 3 • Operating Context
-            </span>
-            <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-              Operating Context & Line Stoppage Analysis
-            </h3>
-          </div>
-          <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Examine line electricity alongside production output. Inspect stoppage episodes, observed restart conditions, and descriptive historical comparisons.
-          </p>
-        </div>
-
-        {/* Filter Controls */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-          {/* Line Selector */}
-          <div>
-            <label style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>
-              Production Line
-            </label>
-            <select
-              className="form-select form-select-sm"
-              style={{ minWidth: '160px', backgroundColor: 'var(--bg-surface-subtle)', color: 'var(--text-primary)', borderColor: 'var(--border-color)' }}
-              value={selectedLine}
-              onChange={(e) => setSelectedLine(e.target.value)}
-            >
-              {visibleLines.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Downtime Reason Filter */}
-          <div>
-            <label style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>
-              Downtime Reason
-            </label>
-            <select
-              className="form-select form-select-sm"
-              style={{ minWidth: '140px', backgroundColor: 'var(--bg-surface-subtle)', color: 'var(--text-primary)', borderColor: 'var(--border-color)' }}
-              value={selectedReason}
-              onChange={(e) => setSelectedReason(e.target.value)}
-            >
-              <option value="ALL">All Reasons</option>
-              <option value="NONE">NONE (Standard / Idle)</option>
-              {availableReasons.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Min Duration Filter */}
-          <div>
-            <label style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>
-              Min Duration
-            </label>
-            <select
-              className="form-select form-select-sm"
-              style={{ minWidth: '100px', backgroundColor: 'var(--bg-surface-subtle)', color: 'var(--text-primary)', borderColor: 'var(--border-color)' }}
-              value={minDuration}
-              onChange={(e) => setMinDuration(Number(e.target.value))}
-            >
-              <option value={1}>≥ 1 hour</option>
-              <option value={2}>≥ 2 hours</option>
-              <option value={3}>≥ 3 hours</option>
-            </select>
-          </div>
-        </div>
-
-        {/* View Toggle Tabs */}
-        <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.85rem', width: '100%' }}>
+      {/* 1. Header & Navigation Tabs */}
+      <div className="operating-context-header">
+        <h3 className="operating-context-heading">Operating context</h3>
+        <div className="operating-context-tabs">
           <button
             type="button"
+            className={`operating-context-tab ${activeView === 'stoppages' ? 'active' : ''}`}
             onClick={() => setActiveView('stoppages')}
-            style={{
-              padding: '0.35rem 0.85rem',
-              fontSize: '0.78rem',
-              fontWeight: 600,
-              borderRadius: '6px',
-              border: '1px solid var(--border-color)',
-              background: activeView === 'stoppages' ? 'var(--brand-purple)' : 'var(--bg-surface-subtle)',
-              color: activeView === 'stoppages' ? '#ffffff' : 'var(--text-secondary)',
-              cursor: 'pointer',
-            }}
           >
-            Line Stoppage Analysis
+            Line stoppages
           </button>
           <button
             type="button"
+            className={`operating-context-tab ${activeView === 'utilities' ? 'active' : ''}`}
             onClick={() => setActiveView('utilities')}
-            style={{
-              padding: '0.35rem 0.85rem',
-              fontSize: '0.78rem',
-              fontWeight: 600,
-              borderRadius: '6px',
-              border: '1px solid var(--border-color)',
-              background: activeView === 'utilities' ? 'var(--brand-purple)' : 'var(--bg-surface-subtle)',
-              color: activeView === 'utilities' ? '#ffffff' : 'var(--text-secondary)',
-              cursor: 'pointer',
-            }}
           >
-            Utility Telemetry &amp; Compressed Air Quality
+            Utility telemetry &amp; air quality
           </button>
         </div>
       </div>
@@ -488,229 +428,274 @@ export default function OperatingContextSection({
       ) : (
         /* ---------------- STOPPAGES VIEW ---------------- */
         <>
+          {/* Stoppage Controls Toolbar */}
+          <div className="operating-context-toolbar">
+            <div className="operating-context-control-group">
+              <label className="operating-context-control-label">Production line</label>
+              <select
+                className="operating-context-select"
+                value={selectedLine}
+                onChange={(e) => setSelectedLine(e.target.value)}
+              >
+                {visibleLines.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-      {/* 2. Headline Observation & Coverage KPIs */}
-      {summary && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.85rem', margin: '1.25rem 0' }}>
-          {/* Card A: Telemetry Coverage */}
-          <div style={{ background: 'var(--bg-surface-subtle)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.9rem' }}>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              Observation Coverage
+            <div className="operating-context-control-group">
+              <label className="operating-context-control-label">Downtime reason</label>
+              <select
+                className="operating-context-select"
+                value={selectedReason}
+                onChange={(e) => setSelectedReason(e.target.value)}
+              >
+                <option value="ALL">All Reasons</option>
+                <option value="NONE">NONE (Standard / Idle)</option>
+                {availableReasons.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
             </div>
-            <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#38bdf8', marginTop: '0.25rem' }}>
-              {formatNumber(summary.matched_hours, 0)} <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>/ {formatNumber(summary.total_observed_hours, 0)} hrs</span>
-            </div>
-            <div style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: summary.missing_energy_hours === 0 && summary.missing_production_hours === 0 ? 'var(--status-success, #22c55e)' : 'var(--status-warning, #eab308)' }}>
-              {summary.missing_energy_hours === 0 && summary.missing_production_hours === 0
-                ? '● 100% Complete Observation Match'
-                : `Missing: ${summary.missing_energy_hours} energy, ${summary.missing_production_hours} production`}
+
+            <div className="operating-context-control-group">
+              <label className="operating-context-control-label">Minimum duration</label>
+              <select
+                className="operating-context-select"
+                value={minDuration}
+                onChange={(e) => setMinDuration(Number(e.target.value))}
+              >
+                <option value={1}>≥ 1 hour</option>
+                <option value={2}>≥ 2 hours</option>
+                <option value={3}>≥ 3 hours</option>
+              </select>
             </div>
           </div>
 
-          {/* Card B: Detected Stoppage Episodes */}
-          <div style={{ background: 'var(--bg-surface-subtle)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.9rem' }}>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              Stoppage Episodes
-            </div>
-            <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#f59e0b', marginTop: '0.25rem' }}>
-              {formatNumber(summary.stoppage_episode_count, 0)} <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>episodes</span>
-            </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-              Total Stoppage Time: <strong style={{ color: 'var(--text-primary)' }}>{formatNumber(summary.total_stoppage_hours, 0)} hours</strong>
-            </div>
-          </div>
-
-          {/* Card C: Target Production Lost */}
-          <div style={{ background: 'var(--bg-surface-subtle)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.9rem' }}>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              Target Output Lost
-            </div>
-            <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--status-danger, #ef4444)', marginTop: '0.25rem' }}>
-              {formatNumber(summary.total_target_lost, 0)} <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>units</span>
-            </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-              Observed Output: <strong style={{ color: 'var(--status-success, #22c55e)' }}>0 actual units</strong> during stoppage
-            </div>
-          </div>
-
-          {/* Card D: Standby Electricity Consumed */}
-          <div style={{ background: 'var(--bg-surface-subtle)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.9rem' }}>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              Standby Process Electricity
-            </div>
-            <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#a855f7', marginTop: '0.25rem' }}>
-              {formatNumber(summary.total_stoppage_kwh, 2)} <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>kWh</span>
-            </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-              Dedicated process meters (MTR-SMT / MTR-FAL)
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 3. Stoppage Episodes Table */}
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
-          <div className="spinner-border text-primary" role="status" style={{ marginBottom: '0.5rem' }} />
-          <div>Scanning and calculating operating stoppage episodes...</div>
-        </div>
-      ) : error ? (
-        <div className="alert alert-danger" style={{ margin: '1rem 0' }}>
-          {error}
-        </div>
-      ) : episodes.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)', background: 'var(--bg-surface-subtle)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
-          Zero stoppage episodes found matching the selected line and filter criteria.
-        </div>
-      ) : (
-        <div className="table-responsive" style={{ maxHeight: '450px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--bg-surface)' }}>
-          <table className="table table-hover table-sm" style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-            <thead style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-surface-subtle)', zIndex: 2, borderBottom: '2px solid var(--border-color)', color: 'var(--text-primary)' }}>
-              <tr>
-                <th>Episode ID</th>
-                <th>Plant / Line</th>
-                <th>Interval Window</th>
-                <th style={{ textAlign: 'right' }}>Duration</th>
-                <th style={{ textAlign: 'right' }}>Target Shortfall during Observed Hours</th>
-                <th style={{ textAlign: 'center' }}>Observed Output</th>
-                <th style={{ textAlign: 'right' }}>Process kWh</th>
-                <th style={{ textAlign: 'right' }}>Dataset Cost</th>
-                <th>Downtime Reasons</th>
-                <th>Restart Condition</th>
-                <th style={{ textAlign: 'center' }}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {episodes.map((ep) => {
-                const isSelected = selectedEpisodeId === ep.episode_id;
-                return (
-                  <tr
-                    key={ep.episode_id}
-                    style={{
-                      backgroundColor: isSelected ? 'rgba(56, 189, 248, 0.15)' : 'transparent',
-                      cursor: 'pointer',
-                    }}
-                    onClick={() => setSelectedEpisodeId(ep.episode_id)}
-                  >
-                    <td>
-                      <code style={{ color: 'var(--brand-blue, #38bdf8)', fontSize: '0.74rem' }}>{ep.episode_id}</code>
-                    </td>
-                    <td>
-                      <div>
-                        <strong style={{ color: 'var(--text-primary)' }}>{ep.line_id}</strong>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: '0.35rem' }}>({ep.plant_id})</span>
-                      </div>
-                      <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{ep.process}</div>
-                    </td>
-                    <td>
-                      <div style={{ color: 'var(--text-primary)' }}>{formatDateTime(ep.first_interval)}</div>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--brand-blue, #38bdf8)', fontFamily: 'monospace' }}>
-                        {ep.interval_window || `to ${formatDateTime(ep.last_interval)}`}
-                      </div>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <span className="badge badge-secondary" style={{ fontSize: '0.72rem' }}>
-                        {ep.observed_duration_hours} hr{ep.observed_duration_hours > 1 ? 's' : ''}
-                      </span>
-                    </td>
-                    <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--status-danger, #ef4444)' }}>
-                      {formatNumber(ep.target_shortfall ?? ep.target_qty_lost, 0)} units
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span className="badge badge-success" style={{ fontSize: '0.7rem' }}>
-                        0 actual (verified)
-                      </span>
-                    </td>
-                    <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--brand-purple, #a855f7)' }}>
-                      {ep.process_kwh !== null ? `${formatNumber(ep.process_kwh, 2)} kWh` : '—'}
-                    </td>
-                    <td style={{ textAlign: 'right', color: 'var(--brand-blue, #38bdf8)' }}>
-                      {ep.process_cost_inr !== null ? formatCurrency(ep.process_cost_inr) : '—'}
-                    </td>
-                    <td>
-                      {(ep.downtime_reasons_display || ep.downtime_reasons)?.map((r, i) => (
-                        <span key={i} className="badge badge-outline" style={{ fontSize: '0.68rem', marginRight: '0.25rem', borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
-                          {r === 'NONE' ? 'Reason unspecified' : r}
-                        </span>
-                      ))}
-                    </td>
-                    <td>
-                      {ep.next_restart_interval ? (
-                        <div style={{ fontSize: '0.72rem', color: 'var(--status-success, #10b981)' }}>
-                          ✓ Output resumed ({formatNumber(ep.next_restart_interval.actual_qty, 0)} units, {formatNumber(ep.next_restart_interval.consumption_kwh, 2)} kWh)
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                          No immediate restart recorded
-                        </div>
-                      )}
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <button
-                        type="button"
-                        className="btn btn-outline-primary btn-sm"
-                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedEpisodeId(ep.episode_id);
-                        }}
-                      >
-                        Inspect
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* 4. Episode Detail Inspection Drawer / Modal */}
-      {selectedEpisodeId && (
-        <div
-          style={{
-            marginTop: '1.5rem',
-            background: 'var(--bg-surface)',
-            border: '2px solid var(--brand-blue)',
-            borderRadius: '10px',
-            padding: '1.25rem',
-            position: 'relative',
-            boxShadow: 'var(--shadow-md)',
-          }}
-        >
-          {/* Close button */}
-          <button
-            type="button"
-            className="btn-close"
-            style={{ position: 'absolute', top: '1rem', right: '1rem', zIndex: 10 }}
-            onClick={() => setSelectedEpisodeId(null)}
-            aria-label="Close detail view"
-          />
-
-          {detailLoading ? (
-            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-              <div className="spinner-border text-info" role="status" style={{ marginBottom: '0.5rem' }} />
-              <div>Loading detailed episode context and historical comparison...</div>
-            </div>
-          ) : detailError ? (
-            <div className="alert alert-danger">{detailError}</div>
-          ) : episodeDetail ? (
-            <div>
-              {/* Detail Header */}
-              <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.85rem', marginBottom: '1rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-                  <span className="badge badge-primary" style={{ fontSize: '0.75rem' }}>
-                    Episode Inspection
-                  </span>
-                  <code style={{ fontSize: '0.9rem', color: 'var(--brand-blue)', fontWeight: 700 }}>
-                    {episodeDetail.episode.episode_id}
-                  </code>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    Line: <strong>{episodeDetail.episode.line_id}</strong> • Plant: <strong>{episodeDetail.episode.plant_id}</strong> ({episodeDetail.episode.process})
+          {/* 2. Headline Summary Strip */}
+          {summary && (
+            <div className="operating-context-summary-strip">
+              {/* Metric 1: Stoppages */}
+              <div className="operating-context-summary-item">
+                <span className="operating-context-summary-label">Stoppages</span>
+                <div className="operating-context-summary-val-row">
+                  <span className="operating-context-summary-val">
+                    {summary.stoppage_episode_count != null ? `${formatNumber(summary.stoppage_episode_count, 0)} episodes` : '—'}
                   </span>
                 </div>
+                <span className="operating-context-summary-sub">
+                  {summary.total_stoppage_hours != null ? `${formatNumber(summary.total_stoppage_hours, 0)} stoppage hours` : '—'}
+                </span>
               </div>
+
+              {/* Metric 2: Output shortfall */}
+              <div className="operating-context-summary-item">
+                <span className="operating-context-summary-label">Output shortfall</span>
+                <div className="operating-context-summary-val-row">
+                  <span className="operating-context-summary-val">
+                    {summary.total_target_lost != null ? `${formatNumber(summary.total_target_lost, 0)} units` : '—'}
+                  </span>
+                </div>
+                <span className="operating-context-summary-sub">
+                  Difference from target during stoppages
+                </span>
+              </div>
+
+              {/* Metric 3: Process electricity */}
+              <div className="operating-context-summary-item">
+                <span className="operating-context-summary-label">Process electricity</span>
+                <div className="operating-context-summary-val-row">
+                  <span className="operating-context-summary-val">
+                    {summary.total_stoppage_kwh != null ? `${formatNumber(summary.total_stoppage_kwh, 2)} kWh` : '—'}
+                  </span>
+                </div>
+                <span className="operating-context-summary-sub">
+                  Metered usage during observed stoppages
+                </span>
+              </div>
+
+              {/* Metric 4: Observation coverage */}
+              <div className="operating-context-summary-item">
+                <span className="operating-context-summary-label">Observation coverage</span>
+                <div className="operating-context-summary-val-row">
+                  <span className={`operating-context-summary-val ${(coveragePct !== null && coveragePct < 100) || summary.missing_energy_hours > 0 || summary.missing_production_hours > 0 ? 'has-warning' : ''}`}>
+                    {coveragePct != null ? `${coveragePct}%` : '—'}
+                  </span>
+                </div>
+                <span className="operating-context-summary-sub">
+                  {summary.matched_hours != null && summary.total_observed_hours != null
+                    ? `${formatNumber(summary.matched_hours, 0)} observed / ${formatNumber(summary.total_observed_hours, 0)} expected hrs`
+                    : '—'}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* 3. Stoppage Episodes Table */}
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+              <div className="spinner-border text-primary" role="status" style={{ marginBottom: '0.5rem' }} />
+              <div>Scanning and calculating operating stoppage episodes...</div>
+            </div>
+          ) : error ? (
+            <div className="alert alert-danger" style={{ margin: '0.5rem 0' }}>
+              {error}
+            </div>
+          ) : episodes.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', background: 'var(--bg-surface-subtle)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+              Zero stoppage episodes found matching the selected line and filter criteria.
+            </div>
+          ) : (
+            <div className="operating-context-table-container">
+              <table className="operating-context-table">
+                <thead>
+                  <tr>
+                    <th>Line / plant</th>
+                    <th>Stoppage window</th>
+                    <th className="col-num">Duration</th>
+                    <th className="col-num">Output shortfall (units)</th>
+                    <th className="col-num">Process energy (kWh)</th>
+                    <th>Restart</th>
+                    <th style={{ textAlign: 'center' }}>Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {episodes.map((ep) => {
+                    const isSelected = selectedEpisodeId === ep.episode_id;
+                    const hasRestart = ep.next_restart_interval && (ep.next_restart_interval.actual_qty > 0 || ep.next_restart_interval.good_qty > 0);
+                    const shortfall = ep.target_shortfall ?? ep.target_qty_lost;
+                    return (
+                      <tr
+                        key={ep.episode_id}
+                        className={isSelected ? 'is-selected' : ''}
+                        onClick={() => setSelectedEpisodeId(isSelected ? null : ep.episode_id)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <td>
+                          <span className="operating-context-line-id">{ep.line_id}</span>
+                          <span className="operating-context-plant-sub">{ep.plant_id}{ep.process ? ` · ${ep.process}` : ''}</span>
+                        </td>
+                        <td>
+                          <span className="operating-context-window">
+                            {formatStoppageWindow(ep.first_interval, ep.last_interval)}
+                          </span>
+                        </td>
+                        <td className="col-num">
+                          {ep.observed_duration_hours != null ? `${ep.observed_duration_hours} hr${ep.observed_duration_hours > 1 ? 's' : ''}` : '—'}
+                        </td>
+                        <td className="col-num" style={{ color: shortfall > 0 ? 'var(--status-danger, #ef4444)' : 'inherit', fontWeight: shortfall > 0 ? 600 : 'normal' }}>
+                          {shortfall != null ? `${formatNumber(shortfall, 0)} units` : '—'}
+                        </td>
+                        <td className="col-num" style={{ fontWeight: 600 }}>
+                          {ep.process_kwh != null ? `${formatNumber(ep.process_kwh, 2)} kWh` : '—'}
+                        </td>
+                        <td>
+                          {hasRestart ? (
+                            <span className="badge-restart-success">Output resumed</span>
+                          ) : (
+                            <span className="badge-restart-none">No restart recorded</span>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          <button
+                            type="button"
+                            className="btn btn-outline-primary btn-sm"
+                            style={{ fontSize: '12px', padding: '2px 8px', height: '26px' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedEpisodeId(isSelected ? null : ep.episode_id);
+                            }}
+                          >
+                            {isSelected ? 'Close' : 'Inspect'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* 4. Episode Detail Inspection Drawer / Modal */}
+          {selectedEpisodeId && (
+            <div className="operating-context-inspect-drawer">
+              {/* Close button */}
+              <button
+                type="button"
+                className="operating-context-inspect-close"
+                style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 10 }}
+                onClick={() => setSelectedEpisodeId(null)}
+                aria-label="Close detail view"
+              >
+                ✕
+              </button>
+
+              {detailLoading ? (
+                <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                  <div className="spinner-border text-info" role="status" style={{ marginBottom: '0.5rem' }} />
+                  <div>Loading detailed episode context and historical comparison...</div>
+                </div>
+              ) : detailError ? (
+                <div className="alert alert-danger">{detailError}</div>
+              ) : episodeDetail ? (
+                <div>
+                  {/* Detail Header */}
+                  <div className="operating-context-inspect-header">
+                    <div className="operating-context-inspect-title-group">
+                      <span className="badge badge-primary" style={{ fontSize: '11px', padding: '2px 6px' }}>
+                        Episode Inspection
+                      </span>
+                      <code style={{ fontSize: '13px', color: 'var(--brand-purple, #6f3dba)', fontWeight: 700 }}>
+                        {episodeDetail.episode.episode_id}
+                      </code>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                        Line: <strong style={{ color: 'var(--text-primary)' }}>{episodeDetail.episode.line_id}</strong> · Plant: <strong style={{ color: 'var(--text-primary)' }}>{episodeDetail.episode.plant_id}</strong> ({episodeDetail.episode.process})
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Key Stoppage Fact Row */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '8px', margin: '10px 0 12px 0', padding: '10px', background: 'var(--bg-surface-subtle)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                    <div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Episode ID</div>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{episodeDetail.episode.episode_id}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Observed Output</div>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--status-success, #10b981)' }}>
+                        {episodeDetail.episode.actual_qty ?? 0} actual units (verified)
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Electricity Cost</div>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--brand-purple, #a855f7)', whiteSpace: 'nowrap' }}>
+                        {episodeDetail.episode.process_cost_inr !== null ? formatCurrency(episodeDetail.episode.process_cost_inr) : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Downtime Reasons</div>
+                      <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>
+                        {(episodeDetail.episode.downtime_reasons_display || episodeDetail.episode.downtime_reasons)?.join(', ') || 'Reason unspecified'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Restart Measurements</div>
+                      <div style={{ fontSize: '13px', fontWeight: 500 }}>
+                        {episodeDetail.episode.next_restart_interval ? (
+                          <span style={{ color: 'var(--status-success, #10b981)' }}>
+                            Resumed ({formatNumber(episodeDetail.episode.next_restart_interval.actual_qty, 0)} units, {formatNumber(episodeDetail.episode.next_restart_interval.consumption_kwh, 2)} kWh)
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)' }}>No restart recorded</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
 
               {/* Chronological Lifecycle: Before -> Stoppage -> Restart */}
               <div style={{ marginBottom: '1.25rem' }}>

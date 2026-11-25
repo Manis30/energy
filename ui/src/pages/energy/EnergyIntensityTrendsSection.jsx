@@ -11,9 +11,24 @@ import {
 } from 'recharts';
 import { energyIntensityApi } from '../../services';
 import { formatCurrency, formatDate, formatNumber } from '../../utils/formatters';
+import './EnergyIntensityTrendsSection.css';
 
 const hasNumber = (value) =>
   value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+
+const formatCoverageBadge = (cov) => {
+  if (!cov) return { text: 'Unknown', statusClass: 'cov-unknown' };
+  const rawStatus = cov.coverage_status || 'UNKNOWN';
+  const statusLabel = rawStatus.charAt(0).toUpperCase() + rawStatus.slice(1).toLowerCase();
+  const pct = cov.coverage_percentage != null ? `${Math.round(Number(cov.coverage_percentage))}%` : '';
+  const text = pct ? `${statusLabel} · ${pct}` : statusLabel;
+
+  const isFull = rawStatus === 'FULL' || Number(cov.coverage_percentage) >= 99.5;
+  const isPartial = rawStatus === 'PARTIAL' || (Number(cov.coverage_percentage) >= 80 && !isFull);
+  const statusClass = isFull ? 'cov-full' : isPartial ? 'cov-partial' : 'cov-low';
+
+  return { text, statusClass };
+};
 
 function CustomIntensityTooltip({ active, payload, label }) {
   if (active && payload && payload.length) {
@@ -58,6 +73,7 @@ function CustomIntensityTooltip({ active, payload, label }) {
 export default function EnergyIntensityTrendsSection({
   selectedPlant = null,
   dateRange,
+  selectedShift = 'ALL',
 }) {
   const [grain, setGrain] = useState('daily');
   const [groupByPlant, setGroupByPlant] = useState(false);
@@ -219,28 +235,30 @@ export default function EnergyIntensityTrendsSection({
 
   const currentConfig = metricConfig[activeMetric] || metricConfig.electricity;
 
-  const renderSortTh = (label, field, align = 'left') => {
+  const renderSortTh = (label, field, unit = null, align = 'left') => {
     const isSorted = sortField === field;
     return (
       <th
-        style={{
-          padding: '0.5rem 0.75rem',
-          fontWeight: 600,
-          textAlign: align,
-          cursor: 'pointer',
-          userSelect: 'none',
-        }}
+        className={`intensity-th intensity-th-${align}`}
         onClick={() => handleSort(field)}
         title={`Sort by ${label}`}
         role="columnheader"
         aria-sort={isSorted ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleSort(field);
+          }
+        }}
       >
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-          <span>{label}</span>
-          <span style={{ fontSize: '0.68rem', color: isSorted ? 'var(--brand-purple)' : 'var(--text-muted)' }}>
+        <div className={`intensity-th-content intensity-th-align-${align}`}>
+          <span className="intensity-th-label">{label}</span>
+          <span className={`intensity-sort-arrow ${isSorted ? 'is-sorted' : ''}`}>
             {isSorted ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
           </span>
-        </span>
+        </div>
+        {unit && <div className="intensity-th-unit">{unit}</div>}
       </th>
     );
   };
@@ -267,6 +285,22 @@ export default function EnergyIntensityTrendsSection({
             >
               Denominator: Good Finished Units
             </span>
+            {selectedShift && selectedShift !== 'ALL' && (
+              <span
+                style={{
+                  fontSize: '0.72rem',
+                  padding: '0.15rem 0.5rem',
+                  borderRadius: '9999px',
+                  fontWeight: 600,
+                  backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                  color: '#b45309',
+                  border: '1px solid rgba(245, 158, 11, 0.25)',
+                }}
+                title="Intensity ratios require total facility finished output and are available for all shifts combined"
+              >
+                Facility-wide metric (available only for all shifts)
+              </span>
+            )}
           </div>
           <p style={{ margin: '0.25rem 0 0', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
             Strict ratio of sums across buckets (never averaged daily ratios). Segregates facility utilities to plant boundary.
@@ -439,128 +473,215 @@ export default function EnergyIntensityTrendsSection({
           </div>
 
           {/* Bucket Table & Inspection Container with Compact Pagination Footer */}
-          <div
-            style={{
-              border: '1px solid var(--border-color)',
-              borderRadius: '6px',
-              background: 'var(--bg-surface)',
-              overflow: 'hidden',
-            }}
-          >
+          <div className="intensity-table-container">
             {/* Scrollable Table Area (Horizontal scroll only wraps table rows) */}
-            <div style={{ overflowX: 'auto', width: '100%' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem', textAlign: 'left', color: 'var(--text-secondary)' }}>
+            <div className="intensity-table-scroll">
+              <table className="intensity-table">
                 <thead>
-                  <tr style={{ background: 'var(--bg-surface-subtle)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
-                    {renderSortTh('Period', 'period_start')}
-                    {renderSortTh('Plant', 'plant_id')}
-                    {renderSortTh('Electricity Intensity', 'electricity_intensity')}
-                    {renderSortTh('Cost Intensity', 'cost_intensity')}
-                    {renderSortTh('Emissions Intensity', 'emissions_intensity')}
-                    {renderSortTh('Good FAL Output', 'good_qty')}
-                    {renderSortTh('Coverage', 'coverage')}
-                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontWeight: 600 }}>Inspection</th>
+                  <tr>
+                    {renderSortTh('Date', 'period_start', null, 'left')}
+                    {renderSortTh('Plant', 'plant_id', null, 'left')}
+                    {renderSortTh('Electricity intensity', 'electricity_intensity', 'kWh/good unit', 'right')}
+                    {renderSortTh('Cost intensity', 'cost_intensity', '₹/good unit', 'right')}
+                    {renderSortTh('Emissions intensity', 'emissions_intensity', 'kg CO₂e/good unit', 'right')}
+                    {renderSortTh('Good finished output', 'good_qty', 'units', 'right')}
+                    {renderSortTh('Coverage', 'coverage', null, 'center')}
+                    <th className="intensity-th intensity-th-right" style={{ cursor: 'default' }}>
+                      <div className="intensity-th-content intensity-th-align-right">
+                        <span className="intensity-th-label">Details</span>
+                      </div>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {paginatedBuckets.map((b, idx) => {
                     const bucketKey = `${b.period_start}_${b.plant_id || 'ALL'}_${b.grain || grain}`;
                     const isExpanded = expandedBucketKey === bucketKey;
-                    const hasCoverage = b.coverage?.coverage_status === 'FULL';
+                    const covBadge = formatCoverageBadge(b.coverage);
                     return (
                       <React.Fragment key={bucketKey}>
-                        <tr
-                          style={{
-                            borderBottom: '1px solid var(--border-color)',
-                            background: isExpanded ? 'var(--bg-surface-subtle)' : (idx % 2 === 0 ? 'var(--bg-surface)' : 'var(--bg-surface-subtle)'),
-                          }}
-                        >
-                          <td style={{ padding: '0.5rem 0.75rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        <tr className={`intensity-table-row ${isExpanded ? 'is-expanded-row' : ''}`}>
+                          <td className="intensity-td intensity-td-date">
                             {b.grain === 'monthly' ? b.period_start.substring(0, 7) : formatDate(b.period_start)}
                           </td>
-                          <td style={{ padding: '0.5rem 0.75rem', color: 'var(--text-secondary)' }}>{b.plant_id}</td>
-                          <td style={{ padding: '0.5rem 0.75rem', fontWeight: 600, color: 'var(--brand-purple)' }}>
+                          <td className="intensity-td intensity-td-plant">{b.plant_id}</td>
+                          <td className="intensity-td intensity-td-num">
                             {hasNumber(b.electricity_intensity_kwh_per_good_unit)
-                              ? `${formatNumber(b.electricity_intensity_kwh_per_good_unit, 4)} kWh/good`
-                              : 'Unavailable'}
+                              ? formatNumber(b.electricity_intensity_kwh_per_good_unit, 4)
+                              : '—'}
                           </td>
-                          <td style={{ padding: '0.5rem 0.75rem', fontWeight: 600, color: 'var(--brand-blue)' }}>
+                          <td className="intensity-td intensity-td-num">
                             {hasNumber(b.cost_intensity_inr_per_good_unit)
-                              ? `${formatCurrency(b.cost_intensity_inr_per_good_unit)}/good`
-                              : 'Unavailable'}
+                              ? formatNumber(b.cost_intensity_inr_per_good_unit, 2)
+                              : '—'}
                           </td>
-                          <td style={{ padding: '0.5rem 0.75rem', fontWeight: 600, color: 'var(--brand-cyan)' }}>
+                          <td className="intensity-td intensity-td-num">
                             {hasNumber(b.emissions_intensity_co2e_per_good_unit)
-                              ? `${formatNumber(b.emissions_intensity_co2e_per_good_unit, 4)} kg CO₂e`
-                              : 'Unavailable'}
+                              ? formatNumber(b.emissions_intensity_co2e_per_good_unit, 4)
+                              : '—'}
                           </td>
-                          <td style={{ padding: '0.5rem 0.75rem', color: 'var(--text-primary)' }}>
-                            {hasNumber(b.matched_good_qty) ? `${formatNumber(b.matched_good_qty, 0)} units` : 'Unavailable'}
+                          <td className="intensity-td intensity-td-num">
+                            {hasNumber(b.matched_good_qty)
+                              ? formatNumber(b.matched_good_qty, 0)
+                              : '—'}
                           </td>
-                          <td style={{ padding: '0.5rem 0.75rem' }}>
-                            <span
-                              style={{
-                                display: 'inline-block',
-                                padding: '0.1rem 0.4rem',
-                                borderRadius: '4px',
-                                fontSize: '0.7rem',
-                                fontWeight: 600,
-                                backgroundColor: hasCoverage ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 138, 58, 0.15)',
-                                color: hasCoverage ? 'var(--status-success, #10b981)' : 'var(--status-warning, #f58a3a)',
-                              }}
-                            >
-                              {b.coverage?.coverage_status} ({b.coverage?.coverage_percentage}%)
+                          <td className="intensity-td intensity-td-center">
+                            <span className={`intensity-cov-badge ${covBadge.statusClass}`}>
+                              {covBadge.text}
                             </span>
                           </td>
-                          <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right' }}>
+                          <td className="intensity-td intensity-td-action">
                             <button
                               type="button"
+                              className={`intensity-inspect-btn ${isExpanded ? 'is-active' : ''}`}
                               onClick={() => setExpandedBucketKey(isExpanded ? null : bucketKey)}
-                              style={{
-                                padding: '0.2rem 0.5rem',
-                                fontSize: '0.72rem',
-                                background: 'var(--bg-surface)',
-                                border: '1px solid var(--border-color)',
-                                borderRadius: '4px',
-                                color: 'var(--text-secondary)',
-                                cursor: 'pointer',
-                              }}
+                              aria-expanded={isExpanded}
+                              aria-controls={`intensity-detail-${bucketKey}`}
+                              title={isExpanded ? 'Hide row details' : 'Inspect row details'}
                             >
-                              {isExpanded ? 'Hide' : 'Inspect'}
+                              <span>{isExpanded ? 'Hide details' : 'Inspect'}</span>
+                              <svg
+                                className={`intensity-chevron ${isExpanded ? 'is-expanded' : ''}`}
+                                width="12"
+                                height="12"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2.5"
+                                aria-hidden="true"
+                              >
+                                <polyline points="6 9 12 15 18 9" />
+                              </svg>
                             </button>
                           </td>
                         </tr>
 
                         {/* Expanded Inspection Drawer */}
                         {isExpanded && (
-                          <tr style={{ background: 'var(--bg-surface-subtle)', borderBottom: '1px solid var(--border-color)' }}>
-                            <td colSpan={8} style={{ padding: '0.85rem 1rem' }}>
-                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', fontSize: '0.76rem' }}>
-                                <div>
-                                  <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>Numerator Inspection</div>
-                                  <div style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                                    Eligible Energy: <strong style={{ color: 'var(--text-primary)' }}>{formatNumber(b.eligible_energy_kwh, 2)} kWh</strong><br />
-                                    Estimated Cost: <strong style={{ color: 'var(--text-primary)' }}>{formatCurrency(b.eligible_cost_inr)}</strong><br />
-                                    Estimated CO₂e: <strong style={{ color: 'var(--text-primary)' }}>{formatNumber(b.eligible_co2e_kg, 2)} kg</strong>
-                                  </div>
+                          <tr
+                            id={`intensity-detail-${bucketKey}`}
+                            className="intensity-inspect-row"
+                          >
+                            <td colSpan={8} className="intensity-inspect-cell">
+                              <div className="intensity-inspect-grid">
+                                {/* Group 1: Energy, cost & emissions */}
+                                <div className="intensity-inspect-group">
+                                  <h4 className="intensity-inspect-group-title">Energy, cost &amp; emissions</h4>
+                                  <dl className="intensity-inspect-dl">
+                                    <div className="intensity-inspect-field">
+                                      <dt className="intensity-inspect-label">Eligible energy</dt>
+                                      <dd className="intensity-inspect-data">
+                                        <span className="intensity-inspect-val">
+                                          {hasNumber(b.eligible_energy_kwh) ? `${formatNumber(b.eligible_energy_kwh, 2)} kWh` : 'Unavailable'}
+                                        </span>
+                                      </dd>
+                                    </div>
+                                    <div className="intensity-inspect-field">
+                                      <dt className="intensity-inspect-label">Estimated cost</dt>
+                                      <dd className="intensity-inspect-data">
+                                        <span className="intensity-inspect-val">
+                                          {hasNumber(b.eligible_cost_inr) ? formatCurrency(b.eligible_cost_inr) : 'Unavailable'}
+                                        </span>
+                                      </dd>
+                                    </div>
+                                    <div className="intensity-inspect-field">
+                                      <dt className="intensity-inspect-label">Estimated emissions</dt>
+                                      <dd className="intensity-inspect-data">
+                                        <span className="intensity-inspect-val">
+                                          {hasNumber(b.eligible_co2e_kg) ? `${formatNumber(b.eligible_co2e_kg, 2)} kg CO₂e` : 'Unavailable'}
+                                        </span>
+                                      </dd>
+                                    </div>
+                                  </dl>
                                 </div>
-                                <div>
-                                  <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>Denominator &amp; Production</div>
-                                  <div style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                                    Matched Good Output: <strong style={{ color: 'var(--status-success, #10b981)' }}>{formatNumber(b.matched_good_qty, 0)} units</strong><br />
-                                    Total Actual Output: <strong style={{ color: 'var(--text-primary)' }}>{formatNumber(b.matched_actual_qty, 0)} units</strong><br />
-                                    Yield Rate: <strong style={{ color: 'var(--text-primary)' }}>{b.production_context?.fal_yield_pct != null ? `${b.production_context.fal_yield_pct}%` : 'N/A'}</strong> (Scrap: {b.production_context?.fal_reject_qty || 0})<br />
-                                    FAL Downtime: <strong style={{ color: 'var(--text-primary)' }}>{formatNumber(b.production_context?.fal_downtime_line_minutes || 0, 0)} min</strong>
-                                  </div>
+
+                                {/* Group 2: Production */}
+                                <div className="intensity-inspect-group">
+                                  <h4 className="intensity-inspect-group-title">Production</h4>
+                                  <dl className="intensity-inspect-dl">
+                                    <div className="intensity-inspect-field">
+                                      <dt className="intensity-inspect-label">Matched good output</dt>
+                                      <dd className="intensity-inspect-data">
+                                        <span className="intensity-inspect-val">
+                                          {hasNumber(b.matched_good_qty) ? `${formatNumber(b.matched_good_qty, 0)} units` : 'Unavailable'}
+                                        </span>
+                                      </dd>
+                                    </div>
+                                    <div className="intensity-inspect-field">
+                                      <dt className="intensity-inspect-label">Actual output</dt>
+                                      <dd className="intensity-inspect-data">
+                                        <span className="intensity-inspect-val">
+                                          {hasNumber(b.matched_actual_qty) ? `${formatNumber(b.matched_actual_qty, 0)} units` : 'Unavailable'}
+                                        </span>
+                                      </dd>
+                                    </div>
+                                    <div className="intensity-inspect-field">
+                                      <dt className="intensity-inspect-label">Yield</dt>
+                                      <dd className="intensity-inspect-data">
+                                        <span className="intensity-inspect-val">
+                                          {b.production_context?.fal_yield_pct != null ? `${b.production_context.fal_yield_pct}%` : 'N/A'}
+                                        </span>
+                                      </dd>
+                                    </div>
+                                    <div className="intensity-inspect-field">
+                                      <dt className="intensity-inspect-label">Scrap</dt>
+                                      <dd className="intensity-inspect-data">
+                                        <span className="intensity-inspect-val">
+                                          {formatNumber(b.production_context?.fal_reject_qty || 0, 0)} units
+                                        </span>
+                                      </dd>
+                                    </div>
+                                    <div className="intensity-inspect-field">
+                                      <dt className="intensity-inspect-label">FAL downtime</dt>
+                                      <dd className="intensity-inspect-data">
+                                        <span className="intensity-inspect-val">
+                                          {formatNumber(b.production_context?.fal_downtime_line_minutes || 0, 0)} min
+                                        </span>
+                                      </dd>
+                                    </div>
+                                  </dl>
                                 </div>
-                                <div>
-                                  <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>Coverage &amp; Assumptions</div>
-                                  <div style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                                    Plant-Hours: <strong style={{ color: 'var(--text-primary)' }}>{b.coverage?.complete_matched_hours} / {b.coverage?.expected_plant_hours} hrs</strong> ({b.coverage?.coverage_status})<br />
-                                    Tariff Lineage: <span style={{ color: 'var(--status-warning, #f58a3a)' }}>₹8.25/kWh (dataset-derived, UNKNOWN)</span><br />
-                                    Emissions Factor: <span style={{ color: 'var(--status-warning, #f58a3a)' }}>0.716 kg/kWh (estimated, UNKNOWN)</span><br />
-                                    Actual-Output SEC: <strong style={{ color: 'var(--text-primary)' }}>{b.factory_sec_actual_kwh_per_unit != null ? `${formatNumber(b.factory_sec_actual_kwh_per_unit, 4)} kWh/unit` : 'Unavailable'}</strong>
-                                  </div>
+
+                                {/* Group 3: Coverage & assumptions */}
+                                <div className="intensity-inspect-group">
+                                  <h4 className="intensity-inspect-group-title">Coverage &amp; assumptions</h4>
+                                  <dl className="intensity-inspect-dl">
+                                    <div className="intensity-inspect-field">
+                                      <dt className="intensity-inspect-label">Observed vs expected hours</dt>
+                                      <dd className="intensity-inspect-data">
+                                        <span className="intensity-inspect-val">
+                                          {b.coverage?.complete_matched_hours ?? 0} / {b.coverage?.expected_plant_hours ?? 24} hrs
+                                        </span>
+                                        <span className="intensity-inspect-source">
+                                          {b.coverage?.coverage_status === 'FULL' ? 'Full coverage' : `${b.coverage?.coverage_status || 'Partial coverage'} (${b.coverage?.coverage_percentage ?? 0}%)`}
+                                        </span>
+                                      </dd>
+                                    </div>
+                                    <div className="intensity-inspect-field">
+                                      <dt className="intensity-inspect-label">Tariff</dt>
+                                      <dd className="intensity-inspect-data">
+                                        <span className="intensity-inspect-val">₹8.25 / kWh</span>
+                                        <span className="intensity-inspect-source">Dataset-derived</span>
+                                      </dd>
+                                    </div>
+                                    <div className="intensity-inspect-field">
+                                      <dt className="intensity-inspect-label">Emissions factor</dt>
+                                      <dd className="intensity-inspect-data">
+                                        <span className="intensity-inspect-val">0.716 kg CO₂e / kWh</span>
+                                        <span className="intensity-inspect-source">Estimated · Source unknown</span>
+                                      </dd>
+                                    </div>
+                                    <div className="intensity-inspect-field">
+                                      <dt className="intensity-inspect-label">Energy per actual output unit</dt>
+                                      <dd className="intensity-inspect-data">
+                                        <span className="intensity-inspect-val">
+                                          {b.factory_sec_actual_kwh_per_unit != null
+                                            ? `${formatNumber(b.factory_sec_actual_kwh_per_unit, 4)} kWh/unit`
+                                            : 'Unavailable'}
+                                        </span>
+                                      </dd>
+                                    </div>
+                                  </dl>
                                 </div>
                               </div>
                             </td>

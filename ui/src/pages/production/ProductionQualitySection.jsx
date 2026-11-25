@@ -4,7 +4,18 @@ import { formatNumber, formatPercent } from '../../utils/formatters';
 const hasNumber = (value) =>
   value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 
-export default function ProductionQualitySection({ summary }) {
+/**
+ * Section 2: Production count check
+ * Replaces the nested "Mathematical Quantity Balance Verification" panel with a compact
+ * "Production count check" section.
+ * - Scope explicitly declared as "All production stages"
+ * - Displays single equation: Actual output = Good units + Rejected units
+ * - Shows rework separately
+ * - Displays "Balanced", actual discrepancy, or "Insufficient data"
+ * - Uses "Good-output yield" for good ÷ actual
+ * - Accessible disclosure: "How these metrics are calculated"
+ */
+export default function ProductionQualitySection({ summary, selectedLine = null }) {
   const actualQty = summary?.actual_qty ?? null;
   const goodQty = summary?.good_qty ?? null;
   const rejectQty = summary?.reject_qty ?? null;
@@ -12,100 +23,155 @@ export default function ProductionQualitySection({ summary }) {
   const goodRate = summary?.good_rate ?? null;
   const rejectRate = summary?.reject_rate ?? null;
   const reworkRate = summary?.rework_rate ?? null;
-  const balanceValid = summary?.quantity_balance_valid;
-  const hasBalanceResult = typeof balanceValid === 'boolean';
-  const hasBalanceValues = [actualQty, goodQty, rejectQty].every((value) => hasNumber(value));
+
+  const hasBalanceValues = hasNumber(actualQty) && hasNumber(goodQty) && hasNumber(rejectQty);
+  const discrepancy = hasBalanceValues
+    ? Number(actualQty) - (Number(goodQty) + Number(rejectQty))
+    : null;
+  const isBalanced = hasBalanceValues && discrepancy === 0;
 
   return (
-    <div className="dashboard-section">
+    <div className="dashboard-section production-count-panel">
+      {/* 1. Header with Title, Scope, and Balance Status */}
       <div className="section-header">
         <div>
-          <h3 className="section-title">Production Quality &amp; Balance Verification</h3>
+          <h3 className="section-title">Production count check</h3>
           <p className="section-desc">
-            Good-output yield and deterministic quantity balance check across manufacturing operations.
+            Scope: {selectedLine ? `Line ${selectedLine}` : 'All production stages (SMT circuit boards + Final Assembly phones)'}
           </p>
         </div>
-        <div className="section-tag-group">
-          <span className="section-tag quality">
-            {goodRate !== null ? `Good-Output Yield: ${formatPercent(goodRate)}` : 'Yield unavailable'}
+
+        <div className="count-check-status-wrap">
+          {hasBalanceValues ? (
+            <span
+              className={`count-check-badge ${isBalanced ? 'balanced' : 'discrepancy'}`}
+            >
+              {isBalanced
+                ? '✓ Balanced'
+                : `⚠ Discrepancy: ${discrepancy > 0 ? `+${formatNumber(discrepancy)}` : formatNumber(discrepancy)} units`}
+            </span>
+          ) : (
+            <span className="count-check-badge insufficient">Insufficient data</span>
+          )}
+        </div>
+      </div>
+
+      {/* 2. Single Mathematical Equation Bar */}
+      <div className="equation-bar">
+        <div className="equation-formula">
+          <span className="formula-label">Equation:</span>{' '}
+          <span className="formula-text">Actual output = Good units + Rejected units</span>
+          {hasBalanceValues && (
+            <span className="formula-calc">
+              ({formatNumber(actualQty)} = {formatNumber(goodQty)} + {formatNumber(rejectQty)})
+            </span>
+          )}
+        </div>
+        <div className="equation-scope-note">
+          Rework is tracked separately and isolated from the output balance.
+        </div>
+      </div>
+
+      {/* 3. Four Compact Metrics in One Desktop Row */}
+      <div className="count-check-strip">
+        {/* Metric 1: Actual Output */}
+        <div className="count-check-segment">
+          <span className="count-check-label">Actual output</span>
+          <div className="count-check-value-row">
+            <span className="count-check-val">
+              {hasNumber(actualQty) ? formatNumber(actualQty) : '—'}
+            </span>
+            <span className="count-check-unit">units</span>
+          </div>
+          <span className="count-check-subtext">Total reported units produced</span>
+        </div>
+
+        {/* Metric 2: Good Units & Good-Output Yield */}
+        <div className="count-check-segment">
+          <span className="count-check-label">Good units</span>
+          <div className="count-check-value-row">
+            <span className="count-check-val">
+              {hasNumber(goodQty) ? formatNumber(goodQty) : '—'}
+            </span>
+            <span className="count-check-unit">units</span>
+          </div>
+          <span className="count-check-subtext">
+            {hasNumber(goodRate)
+              ? `${formatPercent(goodRate)} Good-output yield (good ÷ actual)`
+              : 'Yield unavailable'}
           </span>
-          <span className="section-tag scrap">
-            {rejectRate !== null ? `Rejection Rate: ${formatPercent(rejectRate)}` : 'Scrap unavailable'}
+        </div>
+
+        {/* Metric 3: Rejected Units & Scrap Rate */}
+        <div className="count-check-segment">
+          <span className="count-check-label">Rejected units</span>
+          <div className="count-check-value-row">
+            <span className="count-check-val">
+              {hasNumber(rejectQty) ? formatNumber(rejectQty) : '—'}
+            </span>
+            <span className="count-check-unit">units</span>
+          </div>
+          <span className="count-check-subtext">
+            {hasNumber(rejectRate)
+              ? `${formatPercent(rejectRate)} Rejection rate (reject ÷ actual)`
+              : 'Rate unavailable'}
+          </span>
+        </div>
+
+        {/* Metric 4: Reworked Units (Isolated) */}
+        <div className="count-check-segment">
+          <span className="count-check-label">Reworked units</span>
+          <div className="count-check-value-row">
+            <span className="count-check-val">
+              {hasNumber(reworkQty) ? formatNumber(reworkQty) : '—'}
+            </span>
+            <span className="count-check-unit">units</span>
+          </div>
+          <span className="count-check-subtext">
+            {hasNumber(reworkRate)
+              ? `${formatPercent(reworkRate)} Reworked · Tracked separately`
+              : 'Rework isolated'}
           </span>
         </div>
       </div>
 
-      <div className="quality-reconciliation-card">
-        <div className="quality-reconciliation-header">
-          <div>
-            <h4 className="chart-card-title">Mathematical Quantity Balance Verification</h4>
-            <span className="chart-card-subtitle">
-              Deterministic balance check: Actual Output = Good Units + Rejected Units (Rework is isolated)
-            </span>
+      {/* 4. Accessible Disclosure: How These Metrics Are Calculated */}
+      <details className="production-disclosure">
+        <summary>How these metrics are calculated</summary>
+        <div className="disclosure-grid">
+          <div className="disclosure-card">
+            <strong>Good-output yield</strong>
+            <p>
+              Calculated as <code>Good units ÷ Total actual output</code> (
+              {hasNumber(goodRate) ? formatPercent(goodRate) : '—'}). Evaluates good units produced against total line throughput.
+            </p>
           </div>
-          <span
-            className={`verified-balance-pill ${
-              balanceValid === true ? 'valid' : balanceValid === false ? 'invalid' : 'unavailable'
-            }`}
-          >
-            {hasBalanceResult
-              ? balanceValid
-                ? '✓ Quantity Balance Verified'
-                : '⚠ Balance Mismatch Detected'
-              : 'Balance check unavailable'}
-            {hasBalanceValues && `: ${formatNumber(actualQty)} = ${formatNumber(goodQty)} + ${formatNumber(rejectQty)}`}
-          </span>
-        </div>
-
-        <div className="quality-metrics-row">
-          <div className="quality-metric-item">
-            <span className="quality-metric-label">Total Actual Output</span>
-            <span className="quality-metric-val">{formatNumber(actualQty)}</span>
-            <span className="quality-metric-pct">Total reported units produced</span>
+          <div className="disclosure-card">
+            <strong>First-pass yield requirements</strong>
+            <p>
+              True first-pass yield requires verifying that each unit passed inspection on the initial run without any intermediate rework or re-testing. In this dataset, rework ({hasNumber(reworkQty) ? formatNumber(reworkQty) : '—'} units) is tracked as an offline segregated metric, so good-output yield is reported.
+            </p>
           </div>
-
-          <div className="quality-metric-item success">
-            <span className="quality-metric-label">Good Output Units</span>
-            <span className="quality-metric-val">{formatNumber(goodQty)}</span>
-            <span className="quality-metric-pct">
-              {goodRate !== null ? `${formatPercent(goodRate)} Good-Output Yield (Good / Actual)` : 'Yield unavailable'}
-            </span>
+          <div className="disclosure-card">
+            <strong>OEE limitations</strong>
+            <p>
+              Standard Overall Equipment Effectiveness (OEE) is not computed because production calendar shifts, ideal cycle times, and operational availability baselines are not established by this telemetry dataset.
+            </p>
           </div>
-
-          <div className="quality-metric-item danger">
-            <span className="quality-metric-label">Rejected Units</span>
-            <span className="quality-metric-val">{formatNumber(rejectQty)}</span>
-            <span className="quality-metric-pct">
-              {rejectRate !== null ? `${formatPercent(rejectRate)} Rejection Rate (Reject / Actual)` : 'Rate unavailable'}
-            </span>
+          <div className="disclosure-card">
+            <strong>Tariff &amp; emissions assumptions</strong>
+            <p>
+              Energy cost reflects a standard commercial tariff of ₹8.25/kWh. Carbon emissions reflect a regional grid emissions factor of 0.716 kg CO₂e/kWh based on regional generation mix.
+            </p>
           </div>
-
-          <div className="quality-metric-item warning">
-            <span className="quality-metric-label">Reworked Units</span>
-            <span className="quality-metric-val">{formatNumber(reworkQty)}</span>
-            <span className="quality-metric-pct">
-              {reworkRate !== null
-                ? `${formatPercent(reworkRate)} Rework Rate (Separate Quantity)`
-                : 'Rework isolated'}
-            </span>
+          <div className="disclosure-card">
+            <strong>Quantity balance equation</strong>
+            <p>
+              <code>Actual output = Good units + Rejected units</code>. Because rework operations take place offline, units undergoing rework are not double-counted in the physical line output balance.
+            </p>
           </div>
         </div>
-
-        {/* Compact Quality & OEE Boundary Note */}
-        <div className="segregation-callout-box" style={{ marginTop: '1rem' }}>
-          <div className="callout-title">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="16" x2="12" y2="12" />
-              <line x1="12" y1="8" x2="12.01" y2="8" />
-            </svg>
-            <span>Quality Accounting &amp; OEE Boundary</span>
-          </div>
-          <p className="callout-text">
-            First-pass yield evaluates good output against total actual output. Standard Overall Equipment Effectiveness (OEE) is not computed because production calendar schedules, availability baselines, and ideal cycle times are not established by this telemetry dataset.
-          </p>
-        </div>
-      </div>
+      </details>
     </div>
   );
 }

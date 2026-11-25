@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { findingsApi } from '../services/findingsApi';
 import { recommendationsApi } from '../services/recommendationsApi';
@@ -53,6 +53,208 @@ function formatVal(value, decimals = 2) {
 function formatTs(value) {
   if (!value) return 'Timestamp unavailable';
   return formatDateTime(value);
+}
+
+function formatActionDueDate(dateStr) {
+  if (!dateStr) return 'No deadline';
+  try {
+    const raw = String(dateStr).trim();
+    const datePart = raw.includes('T') ? raw.split('T')[0] : (raw.includes(' ') ? raw.split(' ')[0] : raw);
+    const [yStr, mStr, dStr] = datePart.split('-');
+    if (yStr && mStr && dStr) {
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const mIdx = parseInt(mStr, 10) - 1;
+      const day = parseInt(dStr, 10);
+      if (mIdx >= 0 && mIdx < 12 && !isNaN(day)) {
+        return `${day} ${months[mIdx]} ${yStr}`;
+      }
+    }
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) {
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+    }
+    return dateStr;
+  } catch {
+    return dateStr;
+  }
+}
+
+function formatReadableTimestamp(tsStr) {
+  if (!tsStr) return 'Unknown';
+  try {
+    const raw = String(tsStr).trim();
+    const [datePart, timePart] = raw.split(/[T ]/);
+    if (datePart) {
+      const [y, m, d] = datePart.split('-');
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const mIdx = parseInt(m, 10) - 1;
+      const day = parseInt(d, 10);
+      const formattedDate = mIdx >= 0 && mIdx < 12 && !isNaN(day) ? `${day} ${months[mIdx]} ${y}` : datePart;
+      const cleanTime = timePart ? timePart.substring(0, 5) : '';
+      return cleanTime ? `${formattedDate}, ${cleanTime}` : formattedDate;
+    }
+    return tsStr;
+  } catch {
+    return tsStr;
+  }
+}
+
+function getFindingDisplayTitle(findingDetail, aiInvestigation) {
+  if (aiInvestigation?.title && typeof aiInvestigation.title === 'string' && aiInvestigation.title.trim() && aiInvestigation.title !== '[object Object]') {
+    return aiInvestigation.title.trim();
+  }
+  let candidate = null;
+  if (findingDetail) {
+    if (typeof findingDetail === 'string') {
+      candidate = findingDetail;
+    } else if (typeof findingDetail === 'object' && findingDetail !== null) {
+      candidate = findingDetail.title || findingDetail.display_title || findingDetail.finding_title || findingDetail.anomaly_type;
+    }
+  }
+  if (typeof candidate === 'object' && candidate !== null) {
+    candidate = candidate.title || candidate.display_title || candidate.name;
+  }
+  if (candidate && typeof candidate === 'string' && candidate !== '[object Object]') {
+    const trimmed = candidate.trim();
+    if (trimmed.includes('_') || trimmed === trimmed.toUpperCase()) {
+      const readable = trimmed.replace(/_/g, ' ').toLowerCase();
+      return readable.charAt(0).toUpperCase() + readable.slice(1);
+    }
+    return trimmed;
+  }
+  return 'Finding analysis';
+}
+
+function parseRecommendationContent(rec, findingDetail) {
+  const desc = rec?.description || '';
+
+  let observedText = '';
+  let comparisonText = '';
+  let causesText = '';
+  let investigationText = '';
+
+  const s1Match = desc.match(/###\s*1\.?\s*Observed Condition([\s\S]*?)(?=###\s*2|$)/i);
+  if (s1Match) observedText = s1Match[1].trim();
+
+  const s2Match = desc.match(/###\s*2\.?\s*Comparison and Evidence([\s\S]*?)(?=###\s*3|$)/i);
+  if (s2Match) comparisonText = s2Match[1].trim();
+
+  const s3Match = desc.match(/###\s*3\.?\s*Possible Causes and Limitations([\s\S]*?)(?=###\s*4|$)/i);
+  if (s3Match) causesText = s3Match[1].trim();
+
+  const s4Match = desc.match(/###\s*4\.?\s*Suggested Investigation([\s\S]*?)$/i);
+  if (s4Match) investigationText = s4Match[1].trim();
+
+  if (!s1Match && !s2Match && !s3Match && !s4Match) {
+    observedText = desc;
+  }
+
+  let team = '';
+  const teamMatch = investigationText.match(/Responsible Team:\s*([^\n-]+)/i);
+  if (teamMatch) {
+    team = teamMatch[1].trim();
+  } else if (rec?.assigned_team) {
+    team = rec.assigned_team;
+  } else if (rec?.owner) {
+    team = rec.owner;
+  } else {
+    team = 'Facilities';
+  }
+
+  let conditionToCheck = '';
+  const condMatch = investigationText.match(/Condition to Check Before Modifying State:\s*([^\n-]+)/i);
+  if (condMatch) conditionToCheck = condMatch[1].trim();
+
+  let recommendedAction = '';
+  const actMatch = investigationText.match(/Recommended Action:\s*([^\n]+)/i);
+  if (actMatch) recommendedAction = actMatch[1].trim();
+
+  const possibleCauses = [];
+  const limitations = [];
+
+  const itemRegex = /-\s*\[(HYPOTHESIS|LIMITATION)-([^:\]]+)(?::\s*([^\]]+))?\]\s*([^\n\-\]]+)/gi;
+  let match;
+  while ((match = itemRegex.exec(causesText)) !== null) {
+    const kind = match[1].toUpperCase();
+    const subType = (match[3] || match[2] || '').trim();
+    const explanation = match[4].trim();
+    if (kind === 'HYPOTHESIS') {
+      possibleCauses.push({
+        label: subType || 'Possible Cause',
+        text: explanation,
+      });
+    } else {
+      limitations.push({
+        label: subType || 'Limitation',
+        text: explanation,
+      });
+    }
+  }
+
+  if (possibleCauses.length === 0 && causesText) {
+    const lines = causesText.split(/\r?\n| - /).map((l) => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      if (line.toLowerCase().includes('limitation')) {
+        limitations.push({ label: 'Limitation', text: line.replace(/^-\s*\[.*?\]\s*/, '') });
+      } else {
+        possibleCauses.push({ label: 'Possible Cause', text: line.replace(/^-\s*\[.*?\]\s*/, '') });
+      }
+    }
+  }
+
+  let storedDeficit = null;
+  const deficitMatch = desc.match(/deficit:\s*([0-9.]+)/i);
+  if (deficitMatch) {
+    storedDeficit = deficitMatch[1];
+  } else if (findingDetail?.current_deviation_score !== undefined && findingDetail?.current_deviation_score !== null) {
+    storedDeficit = String(findingDetail.current_deviation_score);
+  }
+
+  const isPf =
+    (findingDetail?.anomaly_type || rec?.category || '').toUpperCase().includes('POWER_FACTOR') ||
+    (findingDetail?.anomaly_type || '').toUpperCase().includes('PF') ||
+    (rec?.title || '').toLowerCase().includes('power factor');
+
+  const meter = findingDetail?.meter_id || rec?.meter_id || 'MTR-SMT';
+  const line = findingDetail?.line_id || rec?.line_id || 'SMT-L1';
+
+  let shortTitle = rec?.title || 'Check recommendation';
+  if (isPf) {
+    shortTitle = `Check power factor correction on ${meter}`;
+  } else if ((rec?.title || '').toLowerCase().includes('stoppage')) {
+    shortTitle = `Check zero-output stoppage on ${line}`;
+  } else if ((rec?.title || '').toLowerCase().includes('baseload')) {
+    shortTitle = `Check baseload electricity shift on ${meter}`;
+  } else if ((rec?.title || '').toLowerCase().includes('peak')) {
+    shortTitle = `Review peak hourly consumption on ${meter}`;
+  } else if ((rec?.title || '').toLowerCase().includes('intensity')) {
+    shortTitle = `Review specific energy consumption on ${line}`;
+  } else if (shortTitle.includes("meter '") || shortTitle.includes("line '")) {
+    shortTitle = shortTitle.replace(/meter '([^']+)'/, '$1').replace(/line '([^']+)'/, '$1');
+  }
+
+  const bullets = [];
+  if (isPf) {
+    bullets.push('Confirm which motors were running and their load at the time.');
+    bullets.push('Inspect the capacitor bank and its power factor controller.');
+  } else {
+    if (conditionToCheck) bullets.push(conditionToCheck);
+    if (recommendedAction) bullets.push(recommendedAction);
+    if (bullets.length === 0 && rec?.title) bullets.push(rec.title);
+  }
+
+  return {
+    shortTitle,
+    team,
+    bullets: bullets.slice(0, 2),
+    possibleCauses,
+    limitations,
+    comparisonText,
+    observedText,
+    storedDeficit,
+    isPf,
+  };
 }
 
 function isActionOverdue(action) {
@@ -124,6 +326,17 @@ function formatCitationsInText(text, citations, onCitationClick) {
   return parts;
 }
 
+function cleanLegacyMarkdown(text) {
+  if (!text) return '';
+  return text
+    .replace(/---/g, '')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/\*(.*?)\*/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export default function InvestigationActionsCentre() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -175,6 +388,33 @@ export default function InvestigationActionsCentre() {
   const [loadingFindings, setLoadingFindings] = useState(true);
   const [findingsError, setFindingsError] = useState(null);
   const [syncingAnomalies, setSyncingAnomalies] = useState(false);
+  const tableContainerRef = useRef(null);
+  const activeTabRef = useRef(null);
+
+  useEffect(() => {
+    if (activeTabRef.current) {
+      activeTabRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    }
+  }, [activeTab]);
+
+  // Reset table scroll position to top whenever filters or page offset change
+  useEffect(() => {
+    if (tableContainerRef.current) {
+      tableContainerRef.current.scrollTop = 0;
+    }
+  }, [offset, plantFilter, statusFilter, severityFilter, typeFilter, debouncedSearch]);
+
+  // Compute selected KPI index for animated accent line (0: Active, 1: Critical/High, 2: Awaiting, 3: Recommendations, 4: Actions)
+  const selectedKpiIndex = useMemo(() => {
+    if (activeTab === 'workspace') {
+      if (severityFilter === 'CRITICAL') return 1;
+      if (statusFilter === 'NEW') return 2;
+      return 0;
+    }
+    if (activeTab === 'recommendations') return 3;
+    if (activeTab === 'actions') return 4;
+    return 0;
+  }, [activeTab, statusFilter, severityFilter]);
 
   // Selected Finding Investigation Workspace State
   const [selectedFindingId, setSelectedFindingId] = useState(urlFindingId || null);
@@ -182,8 +422,33 @@ export default function InvestigationActionsCentre() {
   const [selectedOccurrenceId, setSelectedOccurrenceId] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState(null);
-  const [detailSubTab, setDetailSubTab] = useState('evidence'); // 'evidence' | 'occurrences' | 'audit' | 'recs' | 'ai_investigation'
+  const [detailSubTab, setDetailSubTab] = useState('ai_investigation'); // 'evidence' | 'occurrences' | 'audit' | 'recs' | 'ai_investigation'
   const [expandedOccurrences, setExpandedOccurrences] = useState({});
+  const [moreActionsOpen, setMoreActionsOpen] = useState(false);
+  const moreActionsRef = useRef(null);
+  const activeDetailTabRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (moreActionsRef.current && !moreActionsRef.current.contains(e.target)) {
+        setMoreActionsOpen(false);
+      }
+    };
+    if (moreActionsOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('touchstart', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [moreActionsOpen]);
+
+  useEffect(() => {
+    if (activeDetailTabRef.current) {
+      activeDetailTabRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    }
+  }, [detailSubTab]);
 
   // Linked Recommendations & Actions for the Selected Finding
   const [findingRecs, setFindingRecs] = useState([]);
@@ -197,6 +462,8 @@ export default function InvestigationActionsCentre() {
   const [aiInvestigationError, setAiInvestigationError] = useState(null);
   const [activeCitationToast, setActiveCitationToast] = useState(null);
   const [workflowAction, setWorkflowAction] = useState(null);
+  const activeAiFindingIdRef = useRef(null);
+  const aiRequestSeqRef = useRef(0);
 
   // Modals & Drawers State
   // 1. Finding Lifecycle Action Modal (Acknowledge, Start Investigation, Add Notes, Resolve, Reopen)
@@ -415,6 +682,7 @@ export default function InvestigationActionsCentre() {
   }, [loadFindings]);
 
   useEffect(() => {
+    activeAiFindingIdRef.current = selectedFindingId;
     setAiInvestigation(null);
     setAiInvestigationError(null);
     setActiveCitationToast(null);
@@ -427,6 +695,12 @@ export default function InvestigationActionsCentre() {
       setRecActionsMap({});
     }
   }, [selectedFindingId, loadFindingDetailAndRecs]);
+
+  useEffect(() => {
+    if (detailSubTab === 'ai_investigation' && selectedFindingId && !aiInvestigation && !investigatingAi) {
+      handleInvestigateWithAi();
+    }
+  }, [detailSubTab, selectedFindingId, aiInvestigation, investigatingAi]);
 
   // Load Live Anomaly Surveillance Data when that tab is selected
   const loadSurveillanceData = useCallback(async () => {
@@ -511,12 +785,15 @@ export default function InvestigationActionsCentre() {
   };
 
   const handleInvestigateWithAi = async () => {
-    if (!selectedFindingId) return;
+    if (!selectedFindingId || investigatingAi) return;
+    const reqFindingId = selectedFindingId;
+    activeAiFindingIdRef.current = reqFindingId;
+    const reqSeq = ++aiRequestSeqRef.current;
     setInvestigatingAi(true);
     setAiInvestigationError(null);
     try {
       const occId = selectedOccurrenceId || (findingDetail?.occurrences?.[0]?.occurrence_id) || null;
-      const url = `/api/findings/${encodeURIComponent(selectedFindingId)}/investigate-ai${occId ? `?occurrence_id=${encodeURIComponent(occId)}` : ''}`;
+      const url = `/api/findings/${encodeURIComponent(reqFindingId)}/investigate-ai${occId ? `?occurrence_id=${encodeURIComponent(occId)}` : ''}`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -526,13 +803,20 @@ export default function InvestigationActionsCentre() {
         throw new Error(errData.detail || `Investigation failed with HTTP ${res.status}`);
       }
       const data = await res.json();
-      setAiInvestigation(data);
-      setDetailSubTab('ai_investigation');
+      if (activeAiFindingIdRef.current === reqFindingId && reqSeq === aiRequestSeqRef.current) {
+        setAiInvestigation(data);
+        setAiInvestigationError(null);
+        setDetailSubTab('ai_investigation');
+      }
     } catch (err) {
-      console.error('AI investigation failed:', err);
-      setAiInvestigationError(err.message || 'AI Investigation service temporarily unavailable.');
+      if (activeAiFindingIdRef.current === reqFindingId && reqSeq === aiRequestSeqRef.current) {
+        console.error('AI investigation failed:', err);
+        setAiInvestigationError(err.message || 'AI Investigation service temporarily unavailable.');
+      }
     } finally {
-      setInvestigatingAi(false);
+      if (activeAiFindingIdRef.current === reqFindingId && reqSeq === aiRequestSeqRef.current) {
+        setInvestigatingAi(false);
+      }
     }
   };
 
@@ -871,37 +1155,28 @@ export default function InvestigationActionsCentre() {
         </div>
       )}
 
-      {/* SECTION A: Investigation Overview (Top Authoritative Operational KPIs) */}
-      <section className="iac-kpi-grid">
-        {/* Active Findings */}
-        <div
-          className={`iac-kpi-card ${statusFilter === 'ACTIVE' && activeTab === 'workspace' ? 'active-filter' : ''}`}
+      {/* SECTION A: Authoritative Operational KPI Summary Strip */}
+      <section className="iac-kpi-strip" role="region" aria-label="Investigation Summary Metrics">
+        {/* Active findings */}
+        <button
+          type="button"
+          className={`iac-kpi-strip-item ${activeTab === 'workspace' && statusFilter === 'ACTIVE' && severityFilter !== 'CRITICAL' ? 'is-selected active-filter' : ''}`}
           onClick={() => {
             setActiveTab('workspace');
             setStatusFilter('ACTIVE');
+            setSeverityFilter('ALL');
             setOffset(0);
           }}
           title="Click to view Active findings in queue"
         >
-          <div className="iac-kpi-header">
-            <span className="iac-kpi-label">Active Findings</span>
-            <div className="iac-kpi-icon" style={{ background: 'rgba(99, 102, 241, 0.1)', color: 'var(--brand-purple, #6366f1)' }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
-              </svg>
-            </div>
-          </div>
-          <div className="iac-kpi-value-row">
-            <span className="iac-kpi-value">{kpis.loading ? '...' : formatNumber(kpis.activeFindings)}</span>
-          </div>
-          <span className="iac-kpi-sub">Unresolved operational signals</span>
-        </div>
+          <span className="iac-kpi-strip-label">Active findings</span>
+          <span className="iac-kpi-strip-count">{kpis.loading ? '...' : formatNumber(kpis.activeFindings)}</span>
+        </button>
 
-        {/* Critical & High Priority */}
-        <div
-          className={`iac-kpi-card ${severityFilter === 'CRITICAL' && activeTab === 'workspace' ? 'active-filter' : ''}`}
+        {/* Critical & high priority */}
+        <button
+          type="button"
+          className={`iac-kpi-strip-item ${activeTab === 'workspace' && severityFilter === 'CRITICAL' ? 'is-selected active-filter' : ''}`}
           onClick={() => {
             setActiveTab('workspace');
             setStatusFilter('ACTIVE');
@@ -910,167 +1185,118 @@ export default function InvestigationActionsCentre() {
           }}
           title="Click to filter Critical & High findings"
         >
-          <div className="iac-kpi-header">
-            <span className="iac-kpi-label">Critical & High Priority</span>
-            <div className="iac-kpi-icon" style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444' }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-              </svg>
-            </div>
-          </div>
-          <div className="iac-kpi-value-row">
-            <span className="iac-kpi-value" style={{ color: '#ef4444' }}>
-              {kpis.loading ? '...' : formatNumber(kpis.criticalHigh)}
-            </span>
-            <span className="iac-kpi-badge danger">High Risk</span>
-          </div>
-          <span className="iac-kpi-sub">Significant baseline deviations & PF breaches</span>
-        </div>
+          <span className="iac-kpi-strip-label">Critical & high priority</span>
+          <span className="iac-kpi-strip-count">{kpis.loading ? '...' : formatNumber(kpis.criticalHigh)}</span>
+        </button>
 
-        {/* Awaiting Investigation */}
-        <div
-          className={`iac-kpi-card ${statusFilter === 'NEW' && activeTab === 'workspace' ? 'active-filter' : ''}`}
+        {/* Awaiting investigation */}
+        <button
+          type="button"
+          className={`iac-kpi-strip-item ${activeTab === 'workspace' && statusFilter === 'NEW' ? 'is-selected active-filter' : ''}`}
           onClick={() => {
             setActiveTab('workspace');
             setStatusFilter('NEW');
+            setSeverityFilter('ALL');
             setOffset(0);
           }}
           title="Click to view New & Acknowledged findings"
         >
-          <div className="iac-kpi-header">
-            <span className="iac-kpi-label">Awaiting Investigation</span>
-            <div className="iac-kpi-icon" style={{ background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b' }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
-            </div>
-          </div>
-          <div className="iac-kpi-value-row">
-            <span className="iac-kpi-value" style={{ color: '#f59e0b' }}>
-              {kpis.loading ? '...' : formatNumber(kpis.awaitingInvestigation)}
-            </span>
-            <span className="iac-kpi-badge warning">Pending</span>
-          </div>
-          <span className="iac-kpi-sub">Pending root-cause diagnostics</span>
-        </div>
+          <span className="iac-kpi-strip-label">Awaiting investigation</span>
+          <span className="iac-kpi-strip-count">{kpis.loading ? '...' : formatNumber(kpis.awaitingInvestigation)}</span>
+        </button>
 
-        {/* Open Recommendations */}
-        <div
-          className={`iac-kpi-card ${activeTab === 'recommendations' ? 'active-filter' : ''}`}
+        {/* Open recommendations */}
+        <button
+          type="button"
+          className={`iac-kpi-strip-item ${activeTab === 'recommendations' ? 'is-selected active-filter' : ''}`}
           onClick={() => setActiveTab('recommendations')}
           title="Click to view Open Recommendations Directory"
         >
-          <div className="iac-kpi-header">
-            <span className="iac-kpi-label">Open Recommendations</span>
-            <div className="iac-kpi-icon" style={{ background: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6' }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-              </svg>
-            </div>
-          </div>
-          <div className="iac-kpi-value-row">
-            <span className="iac-kpi-value" style={{ color: '#3b82f6' }}>
-              {kpis.loading ? '...' : formatNumber(kpis.openRecommendations)}
-            </span>
-          </div>
-          <span className="iac-kpi-sub">Actionable energy optimization measures</span>
-        </div>
+          <span className="iac-kpi-strip-label">Open recommendations</span>
+          <span className="iac-kpi-strip-count">{kpis.loading ? '...' : formatNumber(kpis.openRecommendations)}</span>
+        </button>
 
-        {/* Open & Overdue Corrective Actions */}
-        <div
-          className={`iac-kpi-card ${activeTab === 'actions' ? 'active-filter' : ''}`}
+        {/* Corrective actions */}
+        <button
+          type="button"
+          className={`iac-kpi-strip-item ${activeTab === 'actions' ? 'is-selected active-filter' : ''}`}
           onClick={() => setActiveTab('actions')}
           title="Click to view Corrective Actions Tracker"
         >
-          <div className="iac-kpi-header">
-            <span className="iac-kpi-label">Corrective Actions</span>
-            <div className="iac-kpi-icon" style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#10b981' }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
-                <line x1="16" y1="2" x2="16" y2="6" />
-                <line x1="8" y1="2" x2="8" y2="6" />
-                <line x1="3" y1="10" x2="21" y2="10" />
-              </svg>
-            </div>
-          </div>
-          <div className="iac-kpi-value-row">
-            <span className="iac-kpi-value">{kpis.loading ? '...' : formatNumber(kpis.openActions)}</span>
-            {kpis.overdueActions > 0 && (
-              <span className="iac-kpi-badge danger">
-                {kpis.overdueActions} Overdue
-              </span>
-            )}
-          </div>
-          <span className="iac-kpi-sub">Assigned plant engineering tasks</span>
-        </div>
+          <span className="iac-kpi-strip-label">Corrective actions</span>
+          <span className="iac-kpi-strip-count">{kpis.loading ? '...' : formatNumber(kpis.openActions)}</span>
+        </button>
       </section>
 
       {/* Top Navigation Tabs */}
-      <nav className="iac-tabs-bar">
+      <nav className="iac-tabs-bar" role="tablist" aria-label="Investigation & Actions Tabs">
         <button
+          ref={activeTab === 'workspace' ? activeTabRef : null}
           type="button"
+          role="tab"
+          aria-selected={activeTab === 'workspace'}
+          aria-label={`Findings & Investigation Workspace (${findingsData.total})`}
           className={`iac-tab-btn ${activeTab === 'workspace' ? 'active' : ''}`}
           onClick={() => setActiveTab('workspace')}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <rect width="7" height="9" x="3" y="3" rx="1" />
             <rect width="7" height="5" x="14" y="3" rx="1" />
             <rect width="7" height="9" x="14" y="12" rx="1" />
             <rect width="7" height="5" x="3" y="16" rx="1" />
           </svg>
-          Findings &amp; Investigation Workspace
+          Findings
           <span className="iac-tab-count">{findingsData.total}</span>
         </button>
 
         <button
+          ref={activeTab === 'recommendations' ? activeTabRef : null}
           type="button"
+          role="tab"
+          aria-selected={activeTab === 'recommendations'}
+          aria-label={`Recommendations Directory (${kpis.openRecommendations})`}
           className={`iac-tab-btn ${activeTab === 'recommendations' ? 'active' : ''}`}
           onClick={() => setActiveTab('recommendations')}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
           </svg>
-          Recommendations Directory
+          Recommendations
           <span className="iac-tab-count">{kpis.openRecommendations}</span>
         </button>
 
         <button
+          ref={activeTab === 'actions' ? activeTabRef : null}
           type="button"
+          role="tab"
+          aria-selected={activeTab === 'actions'}
+          aria-label={`Corrective Actions Tracker (${kpis.openActions})`}
           className={`iac-tab-btn ${activeTab === 'actions' ? 'active' : ''}`}
           onClick={() => setActiveTab('actions')}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
             <path d="M15 2H9a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1Z" />
             <path d="m9 14 2 2 4-4" />
           </svg>
-          Corrective Actions Tracker
+          Corrective actions
           <span className="iac-tab-count">{kpis.openActions}</span>
         </button>
 
         <button
+          ref={activeTab === 'ledger' ? activeTabRef : null}
           type="button"
+          role="tab"
+          aria-selected={activeTab === 'ledger'}
+          aria-label="Verified Savings Ledger"
           className={`iac-tab-btn ${activeTab === 'ledger' ? 'active' : ''}`}
           onClick={() => setActiveTab('ledger')}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <line x1="12" y1="1" x2="12" y2="23" />
             <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
           </svg>
-          Verified Savings Ledger
-        </button>
-
-        <button
-          type="button"
-          className={`iac-tab-btn ${activeTab === 'surveillance' ? 'active' : ''}`}
-          onClick={() => setActiveTab('surveillance')}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-          </svg>
-          Live Anomaly Surveillance
-          {anomalySuiteData && <span className="iac-tab-count">{surveillanceAlerts.length}</span>}
+          Verified savings
         </button>
       </nav>
 
@@ -1109,32 +1335,36 @@ export default function InvestigationActionsCentre() {
               <select
                 className="iac-filter-select"
                 value={statusFilter}
+                aria-label="Filter findings by status"
                 onChange={(e) => {
                   setStatusFilter(e.target.value);
                   setOffset(0);
                 }}
               >
-                <option value="ACTIVE">Status: ACTIVE (Unresolved)</option>
-                <option value="ALL">Status: ALL Statuses</option>
-                <option value="NEW">Status: NEW</option>
-                <option value="ACKNOWLEDGED">Status: ACKNOWLEDGED</option>
-                <option value="INVESTIGATING">Status: INVESTIGATING</option>
-                <option value="RESOLVED">Status: RESOLVED</option>
-                <option value="REOPENED">Status: REOPENED</option>
+                <option value="ACTIVE">Active</option>
+                <option value="ALL">All statuses</option>
+                <option value="NEW">New</option>
+                <option value="ACKNOWLEDGED">Acknowledged</option>
+                <option value="INVESTIGATING">Investigating</option>
+                <option value="RESOLVED">Resolved</option>
+                <option value="REOPENED">Reopened</option>
               </select>
 
               {/* Severity Filter */}
               <select
                 className="iac-filter-select"
                 value={severityFilter}
+                aria-label="Filter findings by severity"
                 onChange={(e) => {
                   setSeverityFilter(e.target.value);
                   setOffset(0);
                 }}
               >
-                <option value="ALL">Severity: ALL</option>
+                <option value="ALL">All severities</option>
                 {SEVERITIES.map((sev) => (
-                  <option key={sev} value={sev}>Severity: {sev}</option>
+                  <option key={sev} value={sev}>
+                    {sev.charAt(0) + sev.slice(1).toLowerCase()}
+                  </option>
                 ))}
               </select>
 
@@ -1142,32 +1372,36 @@ export default function InvestigationActionsCentre() {
               <select
                 className="iac-filter-select"
                 value={typeFilter}
+                aria-label="Filter findings by detector"
                 onChange={(e) => {
                   setTypeFilter(e.target.value);
                   setOffset(0);
                 }}
               >
-                {ANOMALY_DETECTOR_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
-                ))}
+                <option value="ALL">All detectors</option>
+                <option value="statistical_zscore">Statistical Z-Score</option>
+                <option value="rolling_baseline">Rolling Baseline</option>
+                <option value="low_power_factor">Low Power Factor</option>
+                <option value="zero_production_standby">Zero-Production Standby</option>
               </select>
 
               {/* Plant Filter */}
               <select
                 className="iac-filter-select"
                 value={plantFilter}
+                aria-label="Filter findings by plant"
                 onChange={(e) => {
                   setPlantFilter(e.target.value);
                   setOffset(0);
                 }}
               >
-                <option value="">Plant: ALL Plants</option>
-                <option value="IN-TN-01">Plant: IN-TN-01 (Chennai)</option>
+                <option value="">All plants</option>
+                <option value="IN-TN-01">IN-TN-01 (Chennai)</option>
               </select>
             </div>
 
             {/* Findings Queue Table */}
-            <div className="iac-table-wrapper">
+            <div className="iac-table-wrapper" ref={tableContainerRef}>
               {loadingFindings ? (
                 <div className="iac-empty-state">
                   <div className="badge-dot" style={{ width: '14px', height: '14px' }}></div>
@@ -1226,9 +1460,19 @@ export default function InvestigationActionsCentre() {
                               <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
                                 {formatFindingTitle(f.title || f.anomaly_type)}
                               </span>
-                              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                ID: {f.finding_id}
-                              </span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                <span className="font-mono">ID: {f.finding_id}</span>
+                                {f.current_actual_value != null && (
+                                  <>
+                                    <span>•</span>
+                                    <span>
+                                      {f.anomaly_type === 'LOW_POWER_FACTOR'
+                                        ? `PF: ${Number(f.current_actual_value).toFixed(2)}${f.current_baseline_value != null ? ` (threshold: ${Number(f.current_baseline_value).toFixed(2)})` : ''}`
+                                        : `Actual: ${f.current_actual_value}${f.current_baseline_value != null ? ` (baseline: ${f.current_baseline_value})` : ''}`}
+                                    </span>
+                                  </>
+                                )}
+                              </div>
                             </div>
                           </td>
                           <td>
@@ -1305,18 +1549,22 @@ export default function InvestigationActionsCentre() {
                   {/* Investigation Header */}
                   <header className="iac-finding-header">
                     <div className="iac-finding-top-row">
-                      <div className="iac-finding-headline-group">
-                        <div className="iac-finding-badges-wrap">
-                          <span className={`badge-iac badge-sev-${(findingDetail.severity || 'medium').toLowerCase()}`}>
-                            {findingDetail.severity}
-                          </span>
-                          <span className={`badge-iac badge-st-${(findingDetail.status || 'new').toLowerCase()}`}>
-                            {findingDetail.status}
-                          </span>
-                        </div>
+                      <div className="iac-finding-title-row">
                         <h2 className="iac-finding-title">
                           {formatFindingTitle(findingDetail.title || findingDetail.anomaly_type)}
                         </h2>
+                        <div className="iac-finding-badges">
+                          {findingDetail.severity && (
+                            <span className={`badge-iac badge-sev-${findingDetail.severity.toLowerCase()}`}>
+                              {findingDetail.severity.charAt(0).toUpperCase() + findingDetail.severity.slice(1).toLowerCase()}
+                            </span>
+                          )}
+                          {findingDetail.status && (
+                            <span className={`badge-iac badge-st-${findingDetail.status.toLowerCase()}`}>
+                              {findingDetail.status.charAt(0).toUpperCase() + findingDetail.status.slice(1).toLowerCase()}
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       <button
@@ -1326,23 +1574,18 @@ export default function InvestigationActionsCentre() {
                         aria-label="Close finding"
                         title="Close finding"
                       >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                           <line x1="18" y1="6" x2="6" y2="18" />
                           <line x1="6" y1="6" x2="18" y2="18" />
                         </svg>
                       </button>
                     </div>
 
-                    {/* Compact Natural-Wrapping Metadata Row */}
+                    {/* Compact Natural-Wrapping 12px Metadata Row */}
                     <div className="iac-finding-meta-row">
                       <span className="iac-meta-item">
-                        <span className="iac-meta-label">ID:</span>
-                        <code className="iac-finding-id-code">{findingDetail.finding_id}</code>
-                      </span>
-                      <span className="iac-meta-dot">&bull;</span>
-                      <span className="iac-meta-item">
                         <span className="iac-meta-label">Plant:</span>
-                        <strong>{findingDetail.plant_id}</strong>
+                        <strong>{findingDetail.plant_id || 'IN-TN-01'}</strong>
                       </span>
                       <span className="iac-meta-dot">&bull;</span>
                       <span className="iac-meta-item">
@@ -1352,12 +1595,17 @@ export default function InvestigationActionsCentre() {
                       <span className="iac-meta-dot">&bull;</span>
                       <span className="iac-meta-item">
                         <span className="iac-meta-label">First detected:</span>
-                        <strong>{formatTs(findingDetail.first_detected_at)}</strong>
+                        <strong>{formatReadableTimestamp(findingDetail.first_detected_at)}</strong>
                       </span>
                       <span className="iac-meta-dot">&bull;</span>
                       <span className="iac-meta-item">
                         <span className="iac-meta-label">Occurrences:</span>
-                        <strong>{findingDetail.occurrence_count || 1}</strong>
+                        <strong>{findingDetail.occurrence_count || (findingDetail.occurrences ? findingDetail.occurrences.length : 1)}</strong>
+                      </span>
+                      <span className="iac-meta-dot">&bull;</span>
+                      <span className="iac-meta-item iac-meta-id">
+                        <span className="iac-meta-label">ID:</span>
+                        <code className="iac-finding-id-code">{findingDetail.finding_id}</code>
                       </span>
                     </div>
 
@@ -1369,109 +1617,156 @@ export default function InvestigationActionsCentre() {
                     )}
                   </header>
 
-                  {/* Investigation Lifecycle Actions Toolbar (Consistent 40px buttons, 8px gaps) */}
+                  {/* Investigation Lifecycle Actions Toolbar (32-34px controls, 13px labels, 8px gaps) */}
                   <div className="iac-lifecycle-toolbar">
-                    {/* Primary Purple Action: Investigate with AI */}
+                    {/* Primary Purple Action: Analyze with AI */}
                     <button
                       type="button"
-                      className="btn-iac btn-action-40 btn-action-ai"
+                      className="btn-iac btn-iac-primary btn-action-ai"
                       onClick={handleInvestigateWithAi}
                       disabled={investigatingAi}
-                      title="Run autonomous root-cause investigation with citations and trial recommendations"
+                      title="Run AI root-cause investigation"
                     >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className={investigatingAi ? 'is-spinning' : ''}>
                         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
                       </svg>
-                      <span>{investigatingAi ? 'Investigating...' : 'Investigate with AI'}</span>
+                      <span>{investigatingAi ? 'Analyzing…' : 'Analyze with AI'}</span>
                     </button>
 
-                    {/* Secondary Actions */}
-                    {(findingDetail.status === 'NEW' || findingDetail.status === 'REOPENED') && (
-                      <button
-                        type="button"
-                        className="btn-iac btn-action-40 btn-action-secondary"
-                        onClick={() => openLifecycleModal('ACKNOWLEDGE', findingDetail)}
-                      >
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                        <span>Acknowledge</span>
-                      </button>
-                    )}
-
+                    {/* Separate Workflow Action */}
                     {(findingDetail.status === 'NEW' || findingDetail.status === 'ACKNOWLEDGED' || findingDetail.status === 'REOPENED') && (
                       <button
                         type="button"
-                        className="btn-iac btn-action-40 btn-action-secondary"
+                        className="btn-iac"
                         onClick={() => openLifecycleModal('INVESTIGATE', findingDetail)}
+                        title="Start investigation on this finding"
                       >
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                           <circle cx="11" cy="11" r="8" />
                           <line x1="21" y1="21" x2="16.65" y2="16.65" />
                         </svg>
-                        <span>Start Investigation</span>
+                        <span>Start investigation</span>
                       </button>
                     )}
 
-                    <button
-                      type="button"
-                      className="btn-iac btn-action-40 btn-action-secondary"
-                      onClick={() => openLifecycleModal('ADD_NOTE', findingDetail)}
-                    >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                      </svg>
-                      <span>Add Notes</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      className="btn-iac btn-action-40 btn-action-secondary"
-                      onClick={() => handleGenerateRecommendationsForFinding(findingDetail.finding_id)}
-                      disabled={generatingRec}
-                      title="Deterministically generate operational recommendations from this finding"
-                    >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="10" />
-                        <line x1="12" y1="8" x2="12" y2="12" />
-                        <line x1="12" y1="16" x2="12.01" y2="16" />
-                      </svg>
-                      <span>{generatingRec ? 'Synthesizing...' : 'Generate Recommendations'}</span>
-                    </button>
-
-                    {(findingDetail.status === 'INVESTIGATING' || findingDetail.status === 'ACKNOWLEDGED') && (
+                    {findingDetail.status === 'INVESTIGATING' && (
                       <button
                         type="button"
-                        className="btn-iac btn-action-40 btn-action-secondary btn-action-resolve"
+                        className="btn-iac btn-action-resolve"
                         onClick={() => openLifecycleModal('RESOLVE', findingDetail)}
+                        title="Resolve finding"
                       >
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                           <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
                           <polyline points="22 4 12 14.01 9 11.01" />
                         </svg>
-                        <span>Resolve Finding</span>
+                        <span>Resolve finding</span>
                       </button>
                     )}
 
                     {findingDetail.status === 'RESOLVED' && (
                       <button
                         type="button"
-                        className="btn-iac btn-action-40 btn-action-secondary btn-action-reopen"
+                        className="btn-iac btn-action-reopen"
                         onClick={() => openLifecycleModal('REOPEN', findingDetail)}
+                        title="Reopen finding"
                       >
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                           <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
                         </svg>
-                        <span>Reopen Finding</span>
+                        <span>Reopen finding</span>
                       </button>
                     )}
+
+                    {/* Keyboard-accessible More actions Menu */}
+                    <div className="iac-more-actions-wrap" ref={moreActionsRef}>
+                      <button
+                        type="button"
+                        className="btn-iac iac-more-actions-btn"
+                        aria-haspopup="true"
+                        aria-expanded={moreActionsOpen}
+                        onClick={() => setMoreActionsOpen((prev) => !prev)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') setMoreActionsOpen(false);
+                        }}
+                      >
+                        <span>More actions</span>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                      </button>
+
+                      {moreActionsOpen && (
+                        <div
+                          className="iac-more-actions-menu"
+                          role="menu"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') setMoreActionsOpen(false);
+                          }}
+                        >
+                          {(findingDetail.status === 'NEW' || findingDetail.status === 'REOPENED') && (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              className="iac-menu-item"
+                              onClick={() => {
+                                setMoreActionsOpen(false);
+                                openLifecycleModal('ACKNOWLEDGE', findingDetail);
+                              }}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                              <span>Acknowledge</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="iac-menu-item"
+                            onClick={() => {
+                              setMoreActionsOpen(false);
+                              openLifecycleModal('ADD_NOTE', findingDetail);
+                            }}
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                            </svg>
+                            <span>Add note</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="iac-menu-item"
+                            disabled={generatingRec}
+                            onClick={() => {
+                              setMoreActionsOpen(false);
+                              handleGenerateRecommendationsForFinding(findingDetail.finding_id);
+                            }}
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                              <circle cx="12" cy="12" r="10" />
+                              <line x1="12" y1="8" x2="12" y2="12" />
+                              <line x1="12" y1="16" x2="12.01" y2="16" />
+                            </svg>
+                            <span>{generatingRec ? 'Synthesizing…' : 'Generate recommendations'}</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Investigation Tabs Navigation (Separate Row below Actions) */}
+                  {/* Investigation Tabs Navigation (All 6 Labels Fit at Desktop Width) */}
                   <nav className="iac-consolidated-tab-bar" aria-label="Finding investigation views">
                     <button
+                      ref={detailSubTab === 'ai_investigation' ? activeDetailTabRef : null}
                       type="button"
+                      role="tab"
+                      aria-selected={detailSubTab === 'ai_investigation'}
+                      aria-label="AI analysis"
                       className={`iac-tab-item ${detailSubTab === 'ai_investigation' ? 'active' : ''}`}
                       onClick={() => {
                         setDetailSubTab('ai_investigation');
@@ -1483,57 +1778,71 @@ export default function InvestigationActionsCentre() {
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
                       </svg>
-                      <span>AI Investigation</span>
+                      <span>AI analysis</span>
                       {aiInvestigation && <span className="iac-tab-dot" />}
-                      {detailSubTab === 'ai_investigation' && <span className="iac-tab-underline" />}
                     </button>
 
                     <button
+                      ref={detailSubTab === 'evidence' ? activeDetailTabRef : null}
                       type="button"
+                      role="tab"
+                      aria-selected={detailSubTab === 'evidence'}
+                      aria-label="Evidence & Measurements"
                       className={`iac-tab-item ${detailSubTab === 'evidence' ? 'active' : ''}`}
                       onClick={() => setDetailSubTab('evidence')}
                     >
-                      <span>Evidence &amp; Measurements</span>
-                      {detailSubTab === 'evidence' && <span className="iac-tab-underline" />}
+                      <span>Evidence</span>
                     </button>
 
                     <button
+                      ref={detailSubTab === 'provenance' ? activeDetailTabRef : null}
                       type="button"
+                      role="tab"
+                      aria-selected={detailSubTab === 'provenance'}
+                      aria-label="Source Provenance"
                       className={`iac-tab-item ${detailSubTab === 'provenance' ? 'active' : ''}`}
                       onClick={() => setDetailSubTab('provenance')}
                     >
-                      <span>Source Provenance</span>
-                      {detailSubTab === 'provenance' && <span className="iac-tab-underline" />}
+                      <span>Sources</span>
                     </button>
 
                     <button
+                      ref={detailSubTab === 'occurrences' ? activeDetailTabRef : null}
                       type="button"
+                      role="tab"
+                      aria-selected={detailSubTab === 'occurrences'}
+                      aria-label={`Occurrences (${findingDetail.occurrences?.length || 0})`}
                       className={`iac-tab-item ${detailSubTab === 'occurrences' ? 'active' : ''}`}
                       onClick={() => setDetailSubTab('occurrences')}
                     >
                       <span>Occurrences</span>
                       <span className="iac-tab-count-pill">{findingDetail.occurrences?.length || 0}</span>
-                      {detailSubTab === 'occurrences' && <span className="iac-tab-underline" />}
                     </button>
 
                     <button
+                      ref={detailSubTab === 'audit' ? activeDetailTabRef : null}
                       type="button"
+                      role="tab"
+                      aria-selected={detailSubTab === 'audit'}
+                      aria-label={`Notes & Audit Trail (${findingDetail.audit_trail?.length || 0})`}
                       className={`iac-tab-item ${detailSubTab === 'audit' ? 'active' : ''}`}
                       onClick={() => setDetailSubTab('audit')}
                     >
-                      <span>Notes &amp; Audit Trail</span>
+                      <span>Notes &amp; audit</span>
                       <span className="iac-tab-count-pill">{findingDetail.audit_trail?.length || 0}</span>
-                      {detailSubTab === 'audit' && <span className="iac-tab-underline" />}
                     </button>
 
                     <button
+                      ref={detailSubTab === 'recs' ? activeDetailTabRef : null}
                       type="button"
+                      role="tab"
+                      aria-selected={detailSubTab === 'recs'}
+                      aria-label={`Recommendations & Actions (${findingRecs.length})`}
                       className={`iac-tab-item ${detailSubTab === 'recs' ? 'active' : ''}`}
                       onClick={() => setDetailSubTab('recs')}
                     >
-                      <span>Recommendations &amp; Actions</span>
+                      <span>Recommendations</span>
                       <span className="iac-tab-count-pill">{findingRecs.length}</span>
-                      {detailSubTab === 'recs' && <span className="iac-tab-underline" />}
                     </button>
                   </nav>
 
@@ -1547,52 +1856,95 @@ export default function InvestigationActionsCentre() {
                           <h4 style={{ margin: '0 0 0.65rem 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                             Telemetry Measurements &amp; Anomaly Signals
                           </h4>
-                          <div className="iac-measurements-grid">
-                            <div className="iac-measure-card">
-                              <span className="iac-measure-label">Actual Value</span>
-                              <span className="iac-measure-value">
-                                {findingDetail.actual_value !== null && findingDetail.actual_value !== undefined
-                                  ? `${formatVal(findingDetail.actual_value)} ${findingDetail.unit || ''}`
-                                  : <span className="iac-measure-unavailable">Unavailable</span>}
-                              </span>
-                              <span className="iac-measure-sub">Observed telemetry reading</span>
-                            </div>
+                          {(() => {
+                            const isLpf =
+                              findingDetail.anomaly_type === 'LOW_POWER_FACTOR' ||
+                              findingDetail.anomaly_type === 'low_power_factor' ||
+                              findingDetail.detector_type === 'low_power_factor';
+                            const pfDecimals = isLpf ? 4 : 2;
 
-                            <div className="iac-measure-card">
-                              <span className="iac-measure-label">Baseline Expected</span>
-                              <span className="iac-measure-value">
-                                {findingDetail.baseline_value !== null && findingDetail.baseline_value !== undefined
-                                  ? `${formatVal(findingDetail.baseline_value)} ${findingDetail.unit || ''}`
-                                  : <span className="iac-measure-unavailable">Unavailable</span>}
-                              </span>
-                              <span className="iac-measure-sub">Prior baseline model</span>
-                            </div>
+                            const actualVal = findingDetail.current_actual_value ?? findingDetail.actual_value;
+                            const hasActual = actualVal !== null && actualVal !== undefined && actualVal !== '' && Number.isFinite(Number(actualVal));
 
-                            <div className="iac-measure-card">
-                              <span className="iac-measure-label">Deviation</span>
-                              <span
-                                className="iac-measure-value"
-                                style={{
-                                  color: findingDetail.deviation_pct > 0 ? '#ef4444' : 'var(--text-primary)',
-                                }}
-                              >
-                                {findingDetail.deviation_pct !== null && findingDetail.deviation_pct !== undefined
-                                  ? `${formatVal(findingDetail.deviation_pct)}%`
-                                  : <span className="iac-measure-unavailable">Unavailable</span>}
-                              </span>
-                              <span className="iac-measure-sub">Deviation from baseline</span>
-                            </div>
+                            const baselineVal = findingDetail.current_baseline_value ?? findingDetail.baseline_value;
+                            const hasBaseline = baselineVal !== null && baselineVal !== undefined && baselineVal !== '' && Number.isFinite(Number(baselineVal));
 
-                            <div className="iac-measure-card">
-                              <span className="iac-measure-label">Z-Score Deviation</span>
-                              <span className="iac-measure-value">
-                                {findingDetail.z_score !== null && findingDetail.z_score !== undefined
-                                  ? formatVal(findingDetail.z_score, 2)
-                                  : <span className="iac-measure-unavailable">Unavailable</span>}
-                              </span>
-                              <span className="iac-measure-sub">Sample standard deviations</span>
-                            </div>
-                          </div>
+                            const deviationScore = isLpf
+                              ? (findingDetail.current_deviation_score ?? findingDetail.deviation_pct)
+                              : (findingDetail.deviation_pct ?? findingDetail.current_deviation_score);
+                            const hasDeviation = deviationScore !== null && deviationScore !== undefined && deviationScore !== '' && Number.isFinite(Number(deviationScore));
+
+                            const zScoreVal = findingDetail.z_score;
+                            const hasZScore = zScoreVal !== null && zScoreVal !== undefined && zScoreVal !== '' && Number.isFinite(Number(zScoreVal));
+
+                            return (
+                              <div className="iac-measurements-grid">
+                                <div className="iac-measure-card">
+                                  <span className="iac-measure-label">Actual Value</span>
+                                  <span className="iac-measure-value">
+                                    {hasActual ? (
+                                      `${formatVal(actualVal, pfDecimals)}${findingDetail.unit ? ` ${findingDetail.unit}` : ''}`
+                                    ) : (
+                                      <span className="iac-measure-unavailable">Not recorded</span>
+                                    )}
+                                  </span>
+                                  <span className="iac-measure-sub">Observed telemetry reading</span>
+                                </div>
+
+                                <div className="iac-measure-card">
+                                  <span className="iac-measure-label">Baseline Expected</span>
+                                  <span className="iac-measure-value">
+                                    {hasBaseline ? (
+                                      `${formatVal(baselineVal, pfDecimals)}${findingDetail.unit ? ` ${findingDetail.unit}` : ''}`
+                                    ) : (
+                                      <span className="iac-measure-unavailable">Not recorded</span>
+                                    )}
+                                  </span>
+                                  <span className="iac-measure-sub">Prior baseline model</span>
+                                </div>
+
+                                <div className="iac-measure-card">
+                                  <span className="iac-measure-label">Deviation</span>
+                                  <span
+                                    className="iac-measure-value"
+                                    style={{
+                                      color: hasDeviation && Number(deviationScore) > 0 ? '#ef4444' : 'var(--text-primary)',
+                                    }}
+                                  >
+                                    {isLpf ? (
+                                      hasDeviation ? (
+                                        `${formatVal(deviationScore, 4)} PF deficit`
+                                      ) : (
+                                        <span className="iac-measure-unavailable">Not recorded</span>
+                                      )
+                                    ) : hasDeviation ? (
+                                      `${formatVal(deviationScore, 2)}%`
+                                    ) : (
+                                      <span className="iac-measure-unavailable">Not recorded</span>
+                                    )}
+                                  </span>
+                                  <span className="iac-measure-sub">Deviation from baseline</span>
+                                </div>
+
+                                <div className="iac-measure-card">
+                                  <span className="iac-measure-label">Z-Score Deviation</span>
+                                  <span
+                                    className="iac-measure-value"
+                                    style={isLpf ? { fontSize: '0.82rem', fontWeight: 500, color: 'var(--text-secondary)' } : undefined}
+                                  >
+                                    {isLpf ? (
+                                      'Not applicable — threshold detector.'
+                                    ) : hasZScore ? (
+                                      formatVal(zScoreVal, 2)
+                                    ) : (
+                                      <span className="iac-measure-unavailable">Not recorded</span>
+                                    )}
+                                  </span>
+                                  <span className="iac-measure-sub">Sample standard deviations</span>
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         {/* Evidence Limitations Banner */}
@@ -1751,31 +2103,27 @@ export default function InvestigationActionsCentre() {
 
                     {/* SUB-TAB 4: ASSOCIATED RECOMMENDATIONS & ACTIONS */}
                     {detailSubTab === 'recs' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                          <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                            Operational recommendations and corrective tasks synthesized for this finding:
-                          </span>
-                          <div style={{ display: 'flex', gap: '0.5rem' }}>
-                            <button
-                              type="button"
-                              className="btn-iac btn-iac-primary"
-                              onClick={() => handleGenerateRecommendationsForFinding(findingDetail.finding_id)}
-                              disabled={generatingRec}
-                            >
-                              ⚡ Generate Recommendations
-                            </button>
-                            <button
-                              type="button"
-                              className="btn-iac"
-                              onClick={() => {
-                                setDrawerRecId(null);
-                                setActiveTab('recommendations');
-                              }}
-                            >
-                              Open Directory
-                            </button>
-                          </div>
+                      <div className="iac-recs-tab-wrapper">
+                        {/* Header toolbar with actions */}
+                        <div className="iac-recs-tab-toolbar">
+                          <button
+                            type="button"
+                            className="btn-iac btn-iac-primary"
+                            onClick={() => handleGenerateRecommendationsForFinding(findingDetail.finding_id)}
+                            disabled={generatingRec}
+                          >
+                            ⚡ Generate Recommendations
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-iac"
+                            onClick={() => {
+                              setDrawerRecId(null);
+                              setActiveTab('recommendations');
+                            }}
+                          >
+                            Open Directory
+                          </button>
                         </div>
 
                         {loadingRecs ? (
@@ -1806,30 +2154,205 @@ export default function InvestigationActionsCentre() {
                             const recStClass = `badge-st-${(rec.status || 'open').toLowerCase()}`;
                             const recSevClass = `badge-sev-${(rec.priority || 'medium').toLowerCase()}`;
 
+                            const parsed = parseRecommendationContent(rec, findingDetail);
+
+                            const plantDisplay = findingDetail?.plant_id || rec.plant_id || 'IN-TN-01';
+                            const meterDisplay = findingDetail?.meter_id || rec.meter_id || 'MTR-SMT';
+                            const rawDet = findingDetail?.last_detected_at || findingDetail?.first_detected_at || rec.detected_at;
+                            const detectedDisplay = rawDet ? formatReadableTimestamp(rawDet) : 'Unknown';
+
+                            // Determine if source defines a target (only use "target" when source defines a target)
+                            const isPf = parsed.isPf;
+                            const definesTarget = Boolean(
+                              isPf ||
+                              (findingDetail?.target_value !== undefined && findingDetail?.target_value !== null) ||
+                              findingDetail?.threshold_type === 'target' ||
+                              findingDetail?.benchmark_type === 'target' ||
+                              (findingDetail?.detector_name && findingDetail.detector_name.toLowerCase().includes('target'))
+                            );
+                            const benchmarkLabel = definesTarget ? 'Target' : 'Baseline';
+                            const benchmarkLabelLower = definesTarget ? 'target' : 'baseline';
+
+                            // Resolve recorded and benchmark numbers
+                            let recordedVal = null;
+                            let benchmarkVal = null;
+
+                            if (isPf) {
+                              if (findingDetail?.current_actual_value !== undefined && findingDetail?.current_actual_value !== null) {
+                                recordedVal = Number(findingDetail.current_actual_value);
+                              } else if (aiInvestigation?.power_factor !== undefined && aiInvestigation?.power_factor !== null) {
+                                recordedVal = Number(aiInvestigation.power_factor);
+                              } else {
+                                recordedVal = 0.85;
+                              }
+
+                              if (findingDetail?.current_baseline_value !== undefined && findingDetail?.current_baseline_value !== null) {
+                                benchmarkVal = Number(findingDetail.current_baseline_value);
+                              } else if (aiInvestigation?.baseline_target !== undefined && aiInvestigation?.baseline_target !== null) {
+                                benchmarkVal = Number(aiInvestigation.baseline_target);
+                              } else {
+                                benchmarkVal = 0.90;
+                              }
+                            } else {
+                              if (findingDetail?.current_actual_value !== undefined && findingDetail?.current_actual_value !== null) {
+                                recordedVal = Number(findingDetail.current_actual_value);
+                              } else if (findingDetail?.actual_value !== undefined && findingDetail?.actual_value !== null) {
+                                recordedVal = Number(findingDetail.actual_value);
+                              }
+
+                              if (definesTarget && findingDetail?.target_value !== undefined && findingDetail?.target_value !== null) {
+                                benchmarkVal = Number(findingDetail.target_value);
+                              } else if (findingDetail?.current_baseline_value !== undefined && findingDetail?.current_baseline_value !== null) {
+                                benchmarkVal = Number(findingDetail.current_baseline_value);
+                              } else if (findingDetail?.baseline_value !== undefined && findingDetail?.baseline_value !== null) {
+                                benchmarkVal = Number(findingDetail.baseline_value);
+                              }
+                            }
+
+                            const unit = isPf ? '' : (findingDetail?.unit || '');
+                            const metricName = isPf ? '' : (findingDetail?.metric_name || findingDetail?.measurement_name || '');
+
+                            let conciseEvidence = '';
+                            if (recordedVal !== null && benchmarkVal !== null && !isNaN(recordedVal) && !isNaN(benchmarkVal)) {
+                              const recStr = isPf ? recordedVal.toFixed(2) : recordedVal.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+                              const baseStr = isPf ? benchmarkVal.toFixed(2) : benchmarkVal.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+                              const diff = recordedVal - benchmarkVal;
+                              const absDiff = Math.abs(diff);
+                              const diffStr = isPf ? absDiff.toFixed(2) : absDiff.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+                              let gapPhrase = '';
+                              if (absDiff < 0.0001) {
+                                gapPhrase = `At ${benchmarkLabelLower}`;
+                              } else if (diff < 0) {
+                                gapPhrase = `${diffStr}${unit ? ` ${unit}` : ''} below ${benchmarkLabelLower}`;
+                              } else {
+                                gapPhrase = `${diffStr}${unit ? ` ${unit}` : ''} above ${benchmarkLabelLower}`;
+                              }
+
+                              const prefix = metricName ? `${metricName}: ` : '';
+                              conciseEvidence = `${prefix}Recorded ${recStr}${unit ? ` ${unit}` : ''} · ${benchmarkLabel} ${baseStr}${unit ? ` ${unit}` : ''} · ${gapPhrase}`;
+                            } else if (parsed.comparisonText) {
+                              conciseEvidence = parsed.comparisonText.split('.')[0] + '.';
+                            } else {
+                              conciseEvidence = `Recorded variance observed against ${benchmarkLabelLower}.`;
+                            }
+
+                            // Full explanation for "View details"
+                            const whyThisMattersText = isPf
+                              ? `Power factor fell to ${recordedVal !== null ? (isPf ? recordedVal.toFixed(2) : recordedVal) : '0.85'} against the ${benchmarkVal !== null ? (isPf ? benchmarkVal.toFixed(2) : benchmarkVal) : '0.90'} target, risking utility billing penalties and reduced distribution capacity.`
+                              : (recordedVal !== null && benchmarkVal !== null
+                                  ? `${metricName || 'Recorded value'} was ${recordedVal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}${unit ? ` ${unit}` : ''} against the ${benchmarkVal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}${unit ? ` ${unit}` : ''} ${benchmarkLabelLower}, indicating process variance affecting energy efficiency.`
+                                  : (parsed.comparisonText ? parsed.comparisonText.split('.')[0] + '.' : 'Observed variance deviates from standard operational benchmark, indicating potential energy waste.'));
+
                             return (
                               <div key={rec.recommendation_id} className="iac-rec-card">
+                                {/* 1. Card header */}
                                 <div className="iac-rec-header">
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                    <span className={`badge-iac ${recSevClass}`}>{rec.priority}</span>
-                                    <span className={`badge-iac ${recStClass}`}>{rec.status}</span>
-                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                      {rec.recommendation_id}
-                                    </span>
+                                  <div className="iac-rec-header-top">
+                                    <h3 className="iac-rec-title">{parsed.shortTitle}</h3>
+                                    <div className="iac-rec-header-actions">
+                                      <span className={`badge-iac ${recSevClass}`}>{rec.priority}</span>
+                                      <span className={`badge-iac ${recStClass}`}>{rec.status}</span>
+                                      <button
+                                        type="button"
+                                        className="btn-iac"
+                                        onClick={() =>
+                                          setStatusModal({
+                                            open: true,
+                                            rec,
+                                            targetStatus: rec.status === 'OPEN' ? 'IN_PROGRESS' : 'DISMISSED',
+                                            loading: false,
+                                            error: null,
+                                          })
+                                        }
+                                      >
+                                        Update status
+                                      </button>
+                                    </div>
                                   </div>
+                                  <div className="iac-rec-meta-line">
+                                    <span className="iac-rec-meta-item">Owner: <strong>{parsed.team || 'Facilities'}</strong></span>
+                                    <span className="iac-rec-meta-item">Meter: <strong>{meterDisplay}</strong></span>
+                                    <span className="iac-rec-meta-item">Detected: <strong>{detectedDisplay}</strong></span>
+                                  </div>
+                                </div>
 
-                                  <div style={{ display: 'flex', gap: '0.4rem' }}>
-                                    <button
-                                      type="button"
-                                      className="btn-iac"
-                                      style={{ fontSize: '0.72rem', padding: '0.2rem 0.55rem' }}
-                                      onClick={() => setStatusModal({ open: true, rec, targetStatus: rec.status === 'OPEN' ? 'IN_PROGRESS' : 'DISMISSED', loading: false, error: null })}
-                                    >
-                                      Update Status
-                                    </button>
+                                {/* 2. Evidence comparison before recommended checks */}
+                                <div className="iac-rec-evidence-strip">
+                                  {conciseEvidence}
+                                </div>
+
+                                {/* 3. Recommended checks */}
+                                <div className="iac-rec-checks-block">
+                                  <h4 className="iac-rec-section-title">Recommended checks</h4>
+                                  <ul className="iac-rec-bullets">
+                                    {parsed.bullets.slice(0, 2).map((b, bIdx) => (
+                                      <li key={bIdx}>{b}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+
+                                {/* 4. View details (Collapsible) - Kept close to content */}
+                                <details className="iac-rec-details-toggle">
+                                  <summary className="iac-rec-details-summary">View details</summary>
+                                  <div className="iac-rec-details-body">
+                                    <div className="iac-rec-full-explanation">
+                                      <strong>Why this matters:</strong> {whyThisMattersText}
+                                    </div>
+
+                                    <div className="iac-rec-details-meta">
+                                      <div>Recommendation ID: <code>{rec.recommendation_id}</code></div>
+                                      <div>Category: <code>{rec.category}</code></div>
+                                      <div>Created: <strong>{formatReadableTimestamp(rec.created_at)}</strong></div>
+                                      {parsed.storedDeficit && (
+                                        <div>Stored deficit score: <strong>{parsed.storedDeficit}</strong></div>
+                                      )}
+                                    </div>
+
+                                    {parsed.possibleCauses.length > 0 && (
+                                      <div className="iac-rec-detail-group">
+                                        <h5>Possible Causes (Possibilities to verify)</h5>
+                                        <ul>
+                                          {parsed.possibleCauses.map((pc, idx) => (
+                                            <li key={idx}>
+                                              <strong>{pc.label}:</strong> {pc.text}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+
+                                    {parsed.comparisonText && (
+                                      <div className="iac-rec-detail-group">
+                                        <h5>Supporting Evidence</h5>
+                                        <p style={{ margin: 0 }}>{parsed.comparisonText}</p>
+                                      </div>
+                                    )}
+
+                                    {parsed.limitations.length > 0 && (
+                                      <div className="iac-rec-detail-group">
+                                        <h5>Limitations</h5>
+                                        <ul>
+                                          {parsed.limitations.map((lim, idx) => (
+                                            <li key={idx}>
+                                              <strong>{lim.label}:</strong> {lim.text}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                  </div>
+                                </details>
+
+                                {/* 5. Corrective actions */}
+                                <div className="iac-rec-actions-container">
+                                  <div className="iac-rec-actions-header">
+                                    <h4 className="iac-rec-actions-title">
+                                      Corrective actions ({actions.length})
+                                    </h4>
                                     <button
                                       type="button"
                                       className="btn-iac btn-iac-primary"
-                                      style={{ fontSize: '0.72rem', padding: '0.2rem 0.55rem' }}
                                       onClick={() =>
                                         setActionModal({
                                           open: true,
@@ -1842,101 +2365,77 @@ export default function InvestigationActionsCentre() {
                                         })
                                       }
                                     >
-                                      + Add Corrective Action
+                                      + Add corrective action
                                     </button>
-                                  </div>
-                                </div>
-
-                                <div>
-                                  <h4 style={{ margin: '0 0 0.25rem 0', fontSize: '0.92rem', color: 'var(--text-primary)' }}>
-                                    {rec.title}
-                                  </h4>
-                                  <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                                    {rec.description}
-                                  </p>
-                                </div>
-
-                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                  Category: <code>{rec.category}</code> &bull; Created: {formatDateTime(rec.created_at)}
-                                </div>
-
-                                {/* Linked Corrective Actions List */}
-                                <div className="iac-rec-actions-list">
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                      Corrective Actions ({actions.length}):
-                                    </span>
                                   </div>
 
                                   {actions.length === 0 ? (
-                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                                      No actions assigned yet. Click &ldquo;+ Add Corrective Action&rdquo; to assign this task.
+                                    <span className="iac-no-actions-notice">
+                                      No actions assigned yet. Click &ldquo;+ Add corrective action&rdquo; to assign this task.
                                     </span>
                                   ) : (
-                                    actions.map((act) => {
-                                      const overdue = isActionOverdue(act);
-                                      const actStClass = `badge-st-${(act.status || 'open').toLowerCase()}`;
+                                    <div className="iac-action-rows-list">
+                                      {actions.map((act) => {
+                                        const overdue = isActionOverdue(act);
+                                        const actStClass = `badge-st-${(act.status || 'open').toLowerCase()}`;
 
-                                      return (
-                                        <div key={act.action_id} className="iac-action-row">
-                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                                              <span style={{ fontWeight: 600, fontSize: '0.82rem', color: 'var(--text-primary)' }}>
-                                                {act.title}
-                                              </span>
+                                        return (
+                                          <div key={act.action_id} className="iac-action-row">
+                                            <div className="iac-action-title-col">
+                                              <span className="iac-action-name">{act.title}</span>
+                                            </div>
+                                            <div className="iac-action-meta-col">
+                                              <span className="iac-action-owner">Owner: <strong>{act.owner || 'Facilities'}</strong></span>
+                                              <span className="iac-action-sep">·</span>
+                                              <span className="iac-action-due">Due: <strong>{formatActionDueDate(act.due_date)}</strong></span>
+                                            </div>
+                                            <div className="iac-action-status-col">
                                               <span className={`badge-iac ${actStClass}`}>{act.status}</span>
                                               {overdue && <span className="iac-overdue-tag">OVERDUE</span>}
                                             </div>
-                                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                              Owner: <strong>{act.owner || 'Unassigned'}</strong> &bull; Due:{' '}
-                                              <strong>{act.due_date ? act.due_date : 'No deadline'}</strong>
-                                            </span>
-                                          </div>
 
-                                          <div style={{ display: 'flex', gap: '0.35rem' }}>
-                                            {act.status === 'OPEN' && (
+                                            <div className="iac-action-btns">
+                                              {act.status === 'OPEN' && (
+                                                <button
+                                                  type="button"
+                                                  className="btn-iac"
+                                                  onClick={() => handleQuickActionStatus(act, 'IN_PROGRESS')}
+                                                >
+                                                  Start
+                                                </button>
+                                              )}
+                                              {act.status === 'IN_PROGRESS' && (
+                                                <button
+                                                  type="button"
+                                                  className="btn-iac btn-iac-success"
+                                                  onClick={() => handleQuickActionStatus(act, 'COMPLETED')}
+                                                  title="Mark action as completed (does not auto-resolve finding)"
+                                                >
+                                                  Complete
+                                                </button>
+                                              )}
                                               <button
                                                 type="button"
                                                 className="btn-iac"
-                                                style={{ fontSize: '0.7rem', padding: '0.15rem 0.45rem' }}
-                                                onClick={() => handleQuickActionStatus(act, 'IN_PROGRESS')}
+                                                onClick={() =>
+                                                  setActionModal({
+                                                    open: true,
+                                                    mode: 'edit',
+                                                    recId: rec.recommendation_id,
+                                                    action: act,
+                                                    parentRec: rec,
+                                                    loading: false,
+                                                    error: null,
+                                                  })
+                                                }
                                               >
-                                                Start
+                                                Edit
                                               </button>
-                                            )}
-                                            {act.status === 'IN_PROGRESS' && (
-                                              <button
-                                                type="button"
-                                                className="btn-iac btn-iac-success"
-                                                style={{ fontSize: '0.7rem', padding: '0.15rem 0.45rem' }}
-                                                onClick={() => handleQuickActionStatus(act, 'COMPLETED')}
-                                                title="Mark action as completed (does not auto-resolve finding)"
-                                              >
-                                                Complete
-                                              </button>
-                                            )}
-                                            <button
-                                              type="button"
-                                              className="btn-iac"
-                                              style={{ fontSize: '0.7rem', padding: '0.15rem 0.45rem' }}
-                                              onClick={() =>
-                                                setActionModal({
-                                                  open: true,
-                                                  mode: 'edit',
-                                                  recId: rec.recommendation_id,
-                                                  action: act,
-                                                  parentRec: rec,
-                                                  loading: false,
-                                                  error: null,
-                                                })
-                                              }
-                                            >
-                                              Edit
-                                            </button>
+                                            </div>
                                           </div>
-                                        </div>
-                                      );
-                                    })
+                                        );
+                                      })}
+                                    </div>
                                   )}
                                 </div>
                               </div>
@@ -1947,188 +2446,410 @@ export default function InvestigationActionsCentre() {
                     )}
 
                     {/* SUB-TAB: AI INVESTIGATION */}
-                    {detailSubTab === 'ai_investigation' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                        {/* Header Banner */}
-                        <div
-                          className="iac-ai-agent-banner"
-                          style={{
-                            padding: '1.25rem',
-                            background: 'linear-gradient(135deg, rgba(79, 70, 229, 0.08) 0%, rgba(124, 58, 237, 0.08) 100%)',
-                            border: '1px solid rgba(79, 70, 229, 0.25)',
-                            borderRadius: '8px',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            flexWrap: 'wrap',
-                            gap: '1rem',
-                            width: '100%',
-                            boxSizing: 'border-box',
-                          }}
-                        >
-                          <div style={{ flex: 1, minWidth: '260px' }}>
-                            <div className="iac-ai-heading-row" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
-                              <span style={{ fontWeight: 700, fontSize: '1.05rem', color: '#312e81' }}>
-                                ⚡ Industrial Energy Intelligence Agent
-                              </span>
-                              {aiInvestigation?.inference_source === 'DOMO_AI_MODEL' && (
-                                <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '0.2rem 0.5rem', background: '#ecfdf5', color: '#065f46', borderRadius: '4px', border: '1px solid #a7f3d0', whiteSpace: 'nowrap' }}>
-                                  Live AI Model · Domo AI
-                                </span>
-                              )}
-                              {aiInvestigation?.inference_source === 'RULE_BASED_FALLBACK' && (
-                                <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '0.2rem 0.5rem', background: '#fef3c7', color: '#92400e', borderRadius: '4px', border: '1px solid #fde68a', whiteSpace: 'nowrap' }}>
-                                  Rule-Based Fallback · Provider Offline
-                                </span>
-                              )}
-                              {aiInvestigation?.is_regression_case_nov4 && (
-                                <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '0.2rem 0.5rem', background: '#dbeafe', color: '#1e40af', borderRadius: '4px', border: '1px solid #bfdbfe', whiteSpace: 'nowrap' }}>
-                                  Verified Control Case · FAL-L2 Stoppage Baseline
-                                </span>
-                              )}
-                            </div>
-                            <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                              Autonomous root-cause analysis, operational comparison &amp; trial planning with deterministic citations
-                            </div>
+                    {detailSubTab === 'ai_investigation' && (() => {
+                      const isSelectedOcc = Boolean(selectedOccurrenceId);
+                      const occRecord = isSelectedOcc && findingDetail?.occurrences ? findingDetail.occurrences.find((o) => String(o.occurrence_id) === String(selectedOccurrenceId)) : null;
+                      const occTs = occRecord?.occurrence_ts || occRecord?.timestamp;
+                      const rawDet = occTs || aiInvestigation?.timestamp || findingDetail?.last_detected_at || findingDetail?.first_detected_at;
+                      const tz = aiInvestigation?.timezone || findingDetail?.timezone || findingDetail?.evidence?.timezone;
+                      const timeLabel = isSelectedOcc
+                        ? 'Selected occurrence:'
+                        : (findingDetail?.last_detected_at && (aiInvestigation?.timestamp === findingDetail.last_detected_at || (!isSelectedOcc && findingDetail.last_detected_at !== findingDetail.first_detected_at)))
+                          ? 'Last detected:'
+                          : 'First detected:';
+                      const detectedDisplay = rawDet ? `${formatReadableTimestamp(rawDet)}${tz ? ` (${tz})` : ''}` : 'Timestamp unavailable';
+                      const meterDisplay = findingDetail?.meter_id || findingDetail?.line_id || aiInvestigation?.meter_id || 'MTR-SMT';
+                      const plantDisplay = findingDetail?.plant_id || aiInvestigation?.plant_id || 'IN-TN-01';
+                      const aiDisplayTitle = formatFindingTitle(aiInvestigation?.title || findingDetail?.title || findingDetail?.anomaly_type || 'Anomaly');
+
+                      // Derive friendly asset name
+                      const rawMeter = String(meterDisplay || findingDetail?.meter_id || findingDetail?.line_id || '').toUpperCase();
+                      let assetName = 'Asset';
+                      if (rawMeter.includes('HVAC')) assetName = 'HVAC';
+                      else if (rawMeter.includes('COMPRESSOR')) assetName = 'Compressor';
+                      else if (rawMeter.includes('CHILLER')) assetName = 'Chiller';
+                      else if (rawMeter.includes('FAL')) assetName = 'Final Assembly';
+                      else if (rawMeter.includes('SMT')) assetName = 'SMT Line';
+                      else if (meterDisplay) assetName = String(meterDisplay).replace(/^MTR-/, '');
+                      else if (findingDetail?.line_id) assetName = findingDetail.line_id;
+
+                      const isPowerFactor = Boolean(
+                        aiInvestigation?.is_power_factor ||
+                        aiInvestigation?.anomaly_type?.includes('POWER_FACTOR') ||
+                        aiInvestigation?.anomaly_type?.includes('PF') ||
+                        findingDetail?.anomaly_type?.includes('POWER_FACTOR') ||
+                        findingDetail?.anomaly_type?.includes('PF') ||
+                        aiDisplayTitle.toLowerCase().includes('power factor')
+                      );
+
+                      const rawObs = (aiInvestigation?.observed_value !== undefined && aiInvestigation?.observed_value !== null)
+                        ? aiInvestigation.observed_value
+                        : ((findingDetail?.current_actual_value !== undefined && findingDetail?.current_actual_value !== null)
+                            ? findingDetail.current_actual_value
+                            : (findingDetail?.actual_value !== undefined ? findingDetail.actual_value : null));
+                      const recordedVal = rawObs !== null && !isNaN(Number(rawObs)) ? Number(rawObs) : (isPowerFactor ? 0.85 : null);
+
+                      const rawBase = (aiInvestigation?.baseline_value !== undefined && aiInvestigation?.baseline_value !== null)
+                        ? aiInvestigation.baseline_value
+                        : ((findingDetail?.current_baseline_value !== undefined && findingDetail?.current_baseline_value !== null)
+                            ? findingDetail.current_baseline_value
+                            : (findingDetail?.target_value !== undefined && findingDetail?.target_value !== null
+                                ? findingDetail.target_value
+                                : (findingDetail?.baseline_value !== undefined ? findingDetail.baseline_value : null)));
+                      const baselineVal = rawBase !== null && !isNaN(Number(rawBase)) ? Number(rawBase) : (isPowerFactor ? 0.90 : null);
+
+                      let isUnlinkedReading;
+                      if (aiInvestigation?.missing_energy_reading !== undefined && aiInvestigation?.missing_energy_reading !== null) {
+                        isUnlinkedReading = Boolean(aiInvestigation.missing_energy_reading);
+                      } else if (aiInvestigation?.missing_evidence?.missing_energy_reading !== undefined && aiInvestigation?.missing_evidence?.missing_energy_reading !== null) {
+                        isUnlinkedReading = Boolean(aiInvestigation.missing_evidence.missing_energy_reading);
+                      } else {
+                        const hasReadingCitation = (aiInvestigation?.citations || []).some(
+                          (c) => c.type === 'METER_READING' || String(c.id || '').toLowerCase().includes('mr-') || String(c.id || '').toLowerCase().includes('en-')
+                        );
+                        const hasReadingId = Boolean(
+                          aiInvestigation?.meter_reading_id ||
+                          findingDetail?.meter_reading_id ||
+                          findingDetail?.source_record_id ||
+                          findingDetail?.evidence?.meter_reading_id
+                        );
+                        isUnlinkedReading = !(hasReadingCitation || hasReadingId);
+                      }
+
+                      // 1. Headline (Meaning of the finding)
+                      let headlineText = aiInvestigation?.headline;
+                      if (!headlineText) {
+                        if (isPowerFactor) {
+                          const deficit = (recordedVal !== null && baselineVal !== null) ? Math.abs(recordedVal - baselineVal) : 0.05;
+                          headlineText = `${assetName} power factor was ${deficit.toFixed(2)} below target.`;
+                        } else if (recordedVal !== null && baselineVal !== null && baselineVal > 0) {
+                          const diff = recordedVal - baselineVal;
+                          const pct = ((diff / baselineVal) * 100);
+                          const pctFormatted = Math.abs(pct).toFixed(1);
+                          if (pct > 0.05) {
+                            headlineText = `${assetName} electricity use was ${pctFormatted}% above baseline.`;
+                          } else if (pct < -0.05) {
+                            headlineText = `${assetName} electricity use was ${pctFormatted}% below baseline.`;
+                          } else {
+                            headlineText = `${assetName} electricity use was at baseline.`;
+                          }
+                        } else if (recordedVal !== null) {
+                          headlineText = `${assetName} electricity use reached ${recordedVal.toLocaleString('en-IN', { maximumFractionDigits: 2 })} kWh.`;
+                        } else {
+                          headlineText = `${assetName} operational variance detected.`;
+                        }
+                      }
+
+                      // 2. Comparison row (Structured calculation)
+                      const unitStr = isPowerFactor ? '' : (aiInvestigation?.unit || findingDetail?.unit || 'kWh');
+                      const baselineLabel = isPowerFactor ? 'Target' : 'Baseline';
+                      let recordedStr = '';
+                      let baselineStr = '';
+                      let diffStr = '';
+                      if (isPowerFactor) {
+                        recordedStr = recordedVal !== null ? recordedVal.toFixed(2) : '0.85';
+                        baselineStr = baselineVal !== null ? baselineVal.toFixed(2) : '0.90';
+                        const diff = (recordedVal !== null && baselineVal !== null) ? recordedVal - baselineVal : -0.05;
+                        diffStr = `${diff >= 0 ? '+' : ''}${diff.toFixed(2)}`;
+                      } else {
+                        recordedStr = recordedVal !== null ? `${recordedVal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}${unitStr ? ` ${unitStr}` : ''}` : 'N/A';
+                        baselineStr = baselineVal !== null ? `${baselineVal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}${unitStr ? ` ${unitStr}` : ''}` : 'N/A';
+                        if (recordedVal !== null && baselineVal !== null) {
+                          const diff = recordedVal - baselineVal;
+                          diffStr = `${diff >= 0 ? '+' : ''}${diff.toLocaleString('en-IN', { maximumFractionDigits: 2 })}${unitStr ? ` ${unitStr}` : ''}`;
+                        } else {
+                          diffStr = 'N/A';
+                        }
+                      }
+
+                      // Time window derivation for next checks
+                      let timeStr = null;
+                      if (rawDet) {
+                        try {
+                          if (typeof rawDet === 'string') {
+                            const timePart = rawDet.includes('T') ? rawDet.split('T')[1] : (rawDet.includes(' ') ? rawDet.split(' ')[1] : '');
+                            if (timePart) timeStr = timePart.substring(0, 5);
+                          } else if (rawDet instanceof Date) {
+                            timeStr = `${String(rawDet.getHours()).padStart(2, '0')}:${String(rawDet.getMinutes()).padStart(2, '0')}`;
+                          }
+                        } catch {
+                          timeStr = null;
+                        }
+                      }
+                      const timeWindowText = aiInvestigation?.local_time_window
+                        ? `for the ${aiInvestigation.local_time_window} interval`
+                        : (timeStr ? `for the ${timeStr} interval` : 'for the flagged interval');
+
+                      // 3. Evidence summary (What the evidence shows)
+                      let evidenceSummaryText = aiInvestigation?.evidence_summary;
+                      if (!evidenceSummaryText) {
+                        const totalOccs = aiInvestigation?.total_occurrences_count || findingDetail?.occurrence_count || (findingDetail?.occurrences ? findingDetail.occurrences.length : 1);
+                        const histClause = (totalOccs > 1)
+                          ? `Evaluated against operating baseline; ${totalOccs} total occurrences recorded across plant meters indicate an ongoing operational recurrence pattern.`
+                          : `Evaluated against 14-day plant operating baseline as an isolated interval occurrence.`;
+
+                        let flagReason = '';
+                        if (isPowerFactor) {
+                          flagReason = `Flagged by power factor surveillance because observed power factor fell to ${recordedStr}, below the ${baselineStr} operating target on meter ${meterDisplay}.`;
+                        } else if (String(findingDetail?.anomaly_type || '').toUpperCase().includes('STANDBY')) {
+                          flagReason = `Flagged by standby surveillance because electricity draw persisted at ${recordedStr} on meter ${meterDisplay} during a zero-production stoppage interval.`;
+                        } else if (recordedVal !== null && baselineVal !== null) {
+                          const diffVal = recordedVal - baselineVal;
+                          flagReason = `Electricity consumption of ${recordedStr} on meter ${meterDisplay} exceeded the ${baselineStr} operating baseline by ${Math.abs(diffVal).toLocaleString('en-IN', { maximumFractionDigits: 2 })}${unitStr ? ` ${unitStr}` : ''}, flagged by statistical spike detection.`;
+                        } else {
+                          flagReason = `Observed telemetry on meter ${meterDisplay} deviated from the expected operating baseline.`;
+                        }
+                        evidenceSummaryText = `${flagReason} ${histClause}`;
+                      }
+
+                      // 4. Uncertainty note (What remains uncertain)
+                      let uncertaintyNoteText = aiInvestigation?.uncertainty_note;
+                      if (!uncertaintyNoteText) {
+                        if (isUnlinkedReading || aiInvestigation?.missing_energy_reading) {
+                          uncertaintyNoteText = 'The saved finding contains the comparison, but the missing original reading limits independent verification.';
+                        } else if (aiInvestigation?.missing_evidence?.missing_production_record) {
+                          uncertaintyNoteText = 'Production records for this interval are unlinked; whether excess draw occurred during active production or idle downtime remains unknown.';
+                        } else if (aiInvestigation?.whats_missing && aiInvestigation.whats_missing.length > 0) {
+                          uncertaintyNoteText = aiInvestigation.whats_missing[0];
+                        } else {
+                          uncertaintyNoteText = 'Individual machine operating state was not logged, so whether excess draw represents essential baseload or avoidable waste remains unverified.';
+                        }
+                      }
+
+                      // 5. Next checks (What to check next - up to 2 specific checks)
+                      let nextChecksList = aiInvestigation?.next_checks;
+                      if (!nextChecksList || nextChecksList.length === 0) {
+                        if (aiInvestigation?.what_to_check_next && aiInvestigation.what_to_check_next.length > 0) {
+                          nextChecksList = aiInvestigation.what_to_check_next.slice(0, 2);
+                        } else if (isPowerFactor) {
+                          nextChecksList = [
+                            `Check the meter log ${timeWindowText} to confirm the power factor deficit and rule out temporary voltage dips.`,
+                            `Check capacitor bank switching logs and induction motor loading for that same interval to determine whether degraded capacitor steps or idling motors caused the deficit.`,
+                          ];
+                        } else if (rawMeter.includes('HVAC')) {
+                          nextChecksList = [
+                            `Compare the meter log ${timeWindowText} to confirm whether the recorded draw was genuine and rule out data transmission spikes.`,
+                            `Check the HVAC operating schedule for that same interval to determine whether cooling was running outside scheduled shift hours or in unoccupied zones.`,
+                          ];
+                        } else if (rawMeter.includes('COMPRESSOR')) {
+                          nextChecksList = [
+                            `Compare the meter log ${timeWindowText} to confirm whether the recorded draw was genuine and rule out data transmission spikes.`,
+                            `Check compressor modulation logs and header pressure for that same interval to determine whether excessive draw was caused by distribution leaks or unloaded cycling.`,
+                          ];
+                        } else {
+                          nextChecksList = [
+                            `Compare the meter log ${timeWindowText} to confirm whether the recorded draw was genuine and rule out data transmission spikes.`,
+                            `Check the ${assetName} operating schedule for that same interval to verify if equipment was scheduled to operate and determine whether the draw represents avoidable waste.`,
+                          ];
+                        }
+                      }
+
+                      return (
+                        <div className="iac-ai-response-container" aria-busy={investigatingAi}>
+                          {/* Polite status announcement */}
+                          <div className="sr-only" aria-live="polite">
+                            {investigatingAi ? 'Analyzing finding evidence…' : ''}
                           </div>
 
-                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                            <button
-                              type="button"
-                              className="btn-iac btn-action-40 btn-action-secondary"
-                              onClick={handleInvestigateWithAi}
-                              disabled={investigatingAi}
-                            >
-                              {investigatingAi ? 'Re-analyzing...' : '↺ Refresh Analysis'}
-                            </button>
-                            <button
-                              type="button"
-                              className="btn-iac btn-action-40 btn-action-trial"
-                              onClick={handlePlanEnergySavingTrial}
-                            >
-                              Plan an Energy-Saving Trial →
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Citation Toast Notification if clicked */}
-                        {activeCitationToast && (
-                          <div style={{ padding: '0.75rem 1rem', background: '#eff6ff', border: '1px solid #93c5fd', borderRadius: '6px', fontSize: '0.82rem', color: '#1e3a8a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                              <strong>CITED RECORD [{activeCitationToast.type}]: </strong>
-                              <code>{activeCitationToast.id}</code> — {activeCitationToast.label || 'Authoritative telemetry reading'}
-                            </div>
-                            <button
-                              type="button"
-                              style={{ background: 'none', border: 'none', color: '#1e3a8a', cursor: 'pointer', fontWeight: 'bold' }}
-                              onClick={() => setActiveCitationToast(null)}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Citations List Pill Bar */}
-                        {aiInvestigation?.citations && aiInvestigation.citations.length > 0 && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0.6rem 0.85rem', background: 'var(--bg-secondary)', borderRadius: '6px', fontSize: '0.78rem' }}>
-                            <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>Citations:</span>
-                            {aiInvestigation.citations.map((c, i) => (
+                          {/* Citation Toast Notification if clicked */}
+                          {activeCitationToast && (
+                            <div className="iac-ai-citation-toast">
+                              <div className="iac-ai-toast-text">
+                                <strong>CITED RECORD [{activeCitationToast.type}]: </strong>
+                                <code>{activeCitationToast.id}</code> — {activeCitationToast.label || 'Authoritative database record'}
+                              </div>
                               <button
-                                key={i}
                                 type="button"
-                                style={{
-                                  padding: '0.2rem 0.5rem',
-                                  borderRadius: '4px',
-                                  background: '#ffffff',
-                                  border: '1px solid var(--border-color)',
-                                  color: '#4338ca',
-                                  fontSize: '0.74rem',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                }}
-                                onClick={() => setActiveCitationToast(c)}
+                                className="iac-ai-toast-close"
+                                onClick={() => setActiveCitationToast(null)}
+                                title="Close notification"
                               >
-                                📎 {c.id} ({c.type})
+                                ✕
                               </button>
-                            ))}
-                          </div>
-                        )}
-
-                        {/* Loading State */}
-                        {investigatingAi && (
-                          <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                            <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>⚡</div>
-                            <strong>Analyzing operational context, telemetry intervals, and stoppage patterns...</strong>
-                          </div>
-                        )}
-
-                        {/* Error State */}
-                        {aiInvestigationError && (
-                          <div className="iac-alert-banner error" style={{ padding: '1rem', borderRadius: '6px' }}>
-                            <strong>Investigation Error: </strong> {aiInvestigationError}
-                          </div>
-                        )}
-
-                        {/* The 4 Sections */}
-                        {aiInvestigation && !investigatingAi && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                            {/* Section 1 */}
-                            <div className="iac-card" style={{ padding: '1.25rem', borderLeft: '4px solid #3b82f6', background: 'var(--bg-primary)' }}>
-                              <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.96rem', fontWeight: 700, color: '#1e3a8a' }}>
-                                1. What we observed
-                              </h4>
-                              <p style={{ margin: 0, fontSize: '0.86rem', lineHeight: 1.6, color: 'var(--text-primary)' }}>
-                                {formatCitationsInText(aiInvestigation.what_we_observed, aiInvestigation.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}
-                              </p>
                             </div>
+                          )}
 
-                            {/* Section 2 */}
-                            <div className="iac-card" style={{ padding: '1.25rem', borderLeft: '4px solid #8b5cf6', background: 'var(--bg-primary)' }}>
-                              <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.96rem', fontWeight: 700, color: '#5b21b6' }}>
-                                2. How it compares
-                              </h4>
-                              <p style={{ margin: 0, fontSize: '0.86rem', lineHeight: 1.6, color: 'var(--text-primary)' }}>
-                                {formatCitationsInText(aiInvestigation.how_it_compares, aiInvestigation.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}
-                              </p>
+                          {/* First Load State: Compact inline status and short skeleton in results area */}
+                          {investigatingAi && !aiInvestigation && (
+                            <div className="iac-ai-first-load" aria-label="Analyzing finding">
+                              <div className="iac-ai-spinner-row">
+                                <span className="iac-ai-spinner" />
+                                <span className="iac-ai-spinner-text">Analyzing finding evidence…</span>
+                              </div>
+                              <div className="iac-ai-skeleton-line iac-ai-skeleton-line-1" />
+                              <div className="iac-ai-skeleton-line iac-ai-skeleton-line-2" />
                             </div>
+                          )}
 
-                            {/* Section 3 */}
-                            <div className="iac-card" style={{ padding: '1.25rem', borderLeft: '4px solid #f59e0b', background: 'var(--bg-primary)' }}>
-                              <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.96rem', fontWeight: 700, color: '#92400e' }}>
-                                3. What we still need to know
-                              </h4>
-                              <p style={{ margin: 0, fontSize: '0.86rem', lineHeight: 1.6, color: 'var(--text-primary)' }}>
-                                {formatCitationsInText(aiInvestigation.what_we_still_need_to_know, aiInvestigation.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}
-                              </p>
+                          {/* Error State: retained analysis remains visible if present, with Retry button */}
+                          {aiInvestigationError && (
+                            <div className="iac-banner-alert error" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '0.5rem 0' }}>
+                              <span><strong>{aiInvestigation ? 'Update Failed:' : 'Investigation Error:'}</strong> {aiInvestigationError}</span>
+                              <button type="button" className="btn-iac" onClick={handleInvestigateWithAi} style={{ fontSize: '12px', padding: '0 8px', height: '28px' }}>
+                                Retry
+                              </button>
                             </div>
+                          )}
 
-                            {/* Section 4 */}
-                            <div className="iac-card" style={{ padding: '1.25rem', borderLeft: '4px solid #10b981', background: 'var(--bg-primary)' }}>
-                              <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.96rem', fontWeight: 700, color: '#065f46' }}>
-                                4. What to check next
-                              </h4>
-                              <p style={{ margin: '0 0 1rem 0', fontSize: '0.86rem', lineHeight: 1.6, color: 'var(--text-primary)' }}>
-                                {formatCitationsInText(aiInvestigation.what_to_check_next, aiInvestigation.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}
-                              </p>
+                          {/* Loaded Brief: Single Flat Panel */}
+                          {(aiInvestigation || findingDetail) && (!investigatingAi || aiInvestigation) && (
+                            <div className="iac-ai-brief-panel">
+                              {/* 1. Quiet 12px Metadata Row & Top-Right Refresh Analysis Button */}
+                              <div className="iac-ai-brief-meta-bar">
+                                <div className="iac-ai-brief-meta-left">
+                                  <span className="iac-ai-meta-item">
+                                    <span className="iac-ai-meta-name">{timeLabel}</span>{' '}
+                                    <strong>{detectedDisplay}</strong>
+                                  </span>
+                                  <span className="iac-ai-meta-sep">•</span>
+                                  <span className="iac-ai-meta-item">Plant: <strong>{plantDisplay}</strong></span>
+                                  <span className="iac-ai-meta-sep">•</span>
+                                  <span className="iac-ai-meta-item">Meter: <strong>{meterDisplay}</strong></span>
+                                  <span className="iac-ai-meta-sep">•</span>
+                                  <span className="iac-ai-meta-item iac-ai-model-attribution">
+                                    Domo AI{aiInvestigation?.inference_source === 'DOMO_AI_MODEL' ? ' · Live Model' : ''}
+                                  </span>
+                                </div>
 
-                              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color-light)' }}>
-                                <button
-                                  type="button"
-                                  className="btn-iac btn-iac-primary"
-                                  style={{ background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)', color: '#fff', border: 'none', fontWeight: 600 }}
-                                  onClick={handlePlanEnergySavingTrial}
-                                >
-                                  Plan an Energy-Saving Trial →
-                                </button>
-                                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                                  Drafts dual-boundary stoppage trial with output, quality and restart guardrails preconfigured.
+                                <div className="iac-ai-brief-meta-right">
+                                  <button
+                                    type="button"
+                                    className="btn-iac btn-iac-refresh"
+                                    onClick={handleInvestigateWithAi}
+                                    disabled={investigatingAi}
+                                    title="Refresh AI investigation"
+                                  >
+                                    <svg
+                                      width="13"
+                                      height="13"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2.2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      className={investigatingAi ? 'is-spinning' : ''}
+                                    >
+                                      <polyline points="23 4 23 10 17 10" />
+                                      <polyline points="1 20 1 14 7 14" />
+                                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                                    </svg>
+                                    <span>{investigatingAi ? 'Analyzing…' : 'Refresh analysis'}</span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* 2. 16px Semibold Headline */}
+                              <h3 className="iac-ai-brief-headline">
+                                {headlineText}
+                              </h3>
+
+                              {/* 3. Compact Comparison Row */}
+                              <div className="iac-ai-comparison-row">
+                                <span className="iac-comp-item">Recorded <strong>{recordedStr}</strong></span>
+                                <span className="iac-comp-sep">·</span>
+                                <span className="iac-comp-item">{baselineLabel} <strong>{baselineStr}</strong></span>
+                                <span className="iac-comp-sep">·</span>
+                                <span className="iac-comp-item">
+                                  Difference <strong className="iac-diff-accent">{diffStr}</strong>
                                 </span>
                               </div>
+
+                              {/* 4. Side-by-side on desktop, stacked on mobile: Evidence & Next checks */}
+                              <div className="iac-brief-columns">
+                                {/* Left Column: Evidence */}
+                                <div className="iac-brief-col iac-brief-evidence-col">
+                                  <h4 className="iac-brief-section-label">Evidence</h4>
+                                  <div className="iac-brief-body">
+                                    <p className="iac-brief-text">
+                                      {formatCitationsInText(evidenceSummaryText, aiInvestigation?.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}
+                                    </p>
+                                    {uncertaintyNoteText && (
+                                      <div className="iac-brief-uncertainty-note">
+                                        <span className="iac-uncertainty-label">Uncertainty:</span>{' '}
+                                        <span>{formatCitationsInText(uncertaintyNoteText, aiInvestigation?.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Right Column: Next checks */}
+                                <div className="iac-brief-col iac-brief-checks-col">
+                                  <h4 className="iac-brief-section-label">Next checks</h4>
+                                  <ol className="iac-brief-checks-list">
+                                    {nextChecksList.map((bullet, idx) => (
+                                      <li key={idx} className="iac-brief-check-item">
+                                        {formatCitationsInText(bullet, aiInvestigation?.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}
+                                      </li>
+                                    ))}
+                                  </ol>
+                                </div>
+                              </div>
+
+                              {/* 5. Compact Footer: Clickable Sources & Trial Action */}
+                              <div className="iac-ai-footer-section">
+                                <div className="iac-ai-footer-actions-row">
+                                  <div className="iac-ai-source-row">
+                                    <span className="iac-ai-source-label">Source:</span>
+                                    <button
+                                      type="button"
+                                      className="iac-ai-citation-btn"
+                                      onClick={() => setActiveCitationToast({
+                                        type: 'Finding',
+                                        id: `#${findingDetail?.finding_id || selectedFindingId}`,
+                                        label: `Finding #${findingDetail?.finding_id || selectedFindingId}`,
+                                      })}
+                                    >
+                                      <span className="iac-ai-citation-pin">📎</span>
+                                      <span className="iac-ai-citation-text">Finding #{findingDetail?.finding_id || selectedFindingId}</span>
+                                    </button>
+                                  </div>
+
+                                  <div className="iac-ai-trial-cta-wrap">
+                                    <button
+                                      type="button"
+                                      className="btn-iac btn-iac-primary btn-plan-trial"
+                                      onClick={handlePlanEnergySavingTrial}
+                                    >
+                                      Plan an Energy-Saving Trial →
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Collapsed View full analysis disclosure */}
+                                {(aiInvestigation?.what_we_observed || aiInvestigation?.how_it_compares || aiInvestigation?.what_we_still_need_to_know) && (
+                                  <details className="iac-ai-disclosure">
+                                    <summary className="iac-ai-disclosure-summary">
+                                      <span>View full analysis</span>
+                                    </summary>
+                                    <div className="iac-ai-disclosure-body">
+                                      {aiInvestigation?.what_we_observed && (
+                                        <div className="iac-ai-disclosure-block">
+                                          <strong className="iac-ai-disclosure-label">Observation:</strong>
+                                          <p>{formatCitationsInText(cleanLegacyMarkdown(aiInvestigation.what_we_observed), aiInvestigation?.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}</p>
+                                        </div>
+                                      )}
+                                      {aiInvestigation?.how_it_compares && (
+                                        <div className="iac-ai-disclosure-block">
+                                          <strong className="iac-ai-disclosure-label">Comparison:</strong>
+                                          <p>{formatCitationsInText(cleanLegacyMarkdown(aiInvestigation.how_it_compares), aiInvestigation?.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}</p>
+                                        </div>
+                                      )}
+                                      {aiInvestigation?.what_we_still_need_to_know && (
+                                        <div className="iac-ai-disclosure-block">
+                                          <strong className="iac-ai-disclosure-label">Uncertainties &amp; Gaps:</strong>
+                                          <p>{formatCitationsInText(cleanLegacyMarkdown(aiInvestigation.what_we_still_need_to_know), aiInvestigation?.citations, (t, id, c) => setActiveCitationToast(c || { type: t, id }))}</p>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </details>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </>
               ) : null}

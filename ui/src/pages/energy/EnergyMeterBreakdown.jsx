@@ -1,260 +1,192 @@
-import React from 'react';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Cell,
-} from 'recharts';
+import React, { useState, useMemo } from 'react';
 import { formatCurrency, formatNumber, formatPercent } from '../../utils/formatters';
+import './EnergyMeterBreakdown.css';
 
 const hasNumber = (value) =>
   value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 
 const METER_COLOR_MAP = {
-  'MTR-SMT': 'var(--brand-purple)',
-  'MTR-COMPRESSOR': 'var(--chart-cat-4)',
-  'MTR-CHILLER': 'var(--brand-cyan)',
-  'MTR-FAL': 'var(--brand-blue)',
-  'MTR-HVAC': 'var(--brand-orange)',
+  'MTR-SMT': 'var(--brand-purple, #6f3dba)',
+  'MTR-COMPRESSOR': 'var(--chart-cat-4, #10b981)',
+  'MTR-CHILLER': 'var(--brand-cyan, #06b6d4)',
+  'MTR-FAL': 'var(--brand-blue, #3b82f6)',
+  'MTR-HVAC': 'var(--brand-orange, #f97316)',
 };
 
-function CustomMeterTooltip({ active, payload }) {
-  if (active && payload && payload.length) {
-    const data = payload[0].payload;
-    const isCompressor = data.meter_id === 'MTR-COMPRESSOR';
-    return (
-      <div className="custom-chart-tooltip">
-        <div className="tooltip-title">
-          {data.meter_id} ({data.area})
-          {isCompressor && (
-            <div style={{ fontSize: '0.72rem', color: 'var(--brand-purple)', fontWeight: 500, marginTop: '2px' }}>
-              Compressor electricity consumption (kWh) — electrical input distinct from air delivery
-            </div>
-          )}
-        </div>
-        <div className="tooltip-row">
-          <span className="tooltip-label">Consumption:</span>
-          <span className="tooltip-val font-bold">
-            {hasNumber(data.consumption_kwh) ? `${formatNumber(data.consumption_kwh, 2)} kWh` : 'Unavailable'}
-          </span>
-        </div>
-        <div className="tooltip-row">
-          <span className="tooltip-label">Energy Share:</span>
-          <span className="tooltip-val">
-            {hasNumber(data.percentage_of_total) ? formatPercent(data.percentage_of_total) : 'Unavailable'}
-          </span>
-        </div>
-        {hasNumber(data.peak_kwh) && (
-          <div className="tooltip-row">
-            <span className="tooltip-label">Peak hour load:</span>
-            <span className="tooltip-val">{formatNumber(data.peak_kwh, 2)} kWh</span>
-          </div>
-        )}
-        {hasNumber(data.cost_inr) && (
-          <div className="tooltip-row">
-            <span className="tooltip-label">Dataset cost:</span>
-            <span className="tooltip-val">{formatCurrency(data.cost_inr)}</span>
-          </div>
-        )}
-        {hasNumber(data.avg_power_factor) && (
-          <div className="tooltip-row">
-            <span className="tooltip-label">Average PF:</span>
-            <span className="tooltip-val">{Number(data.avg_power_factor).toFixed(4)}</span>
-          </div>
-        )}
-      </div>
+export default function EnergyMeterBreakdown({ byMeter = [], dataAvailable = true, selectedShift = 'ALL' }) {
+  const [expandedMeters, setExpandedMeters] = useState({});
+
+  const toggleMeter = (meterId) => {
+    setExpandedMeters((prev) => ({
+      ...prev,
+      [meterId]: !prev[meterId],
+    }));
+  };
+
+  const sortedMeters = useMemo(() => {
+    return [...(byMeter || [])].sort(
+      (a, b) => (hasNumber(b.consumption_kwh) ? Number(b.consumption_kwh) : -Infinity)
+        - (hasNumber(a.consumption_kwh) ? Number(a.consumption_kwh) : -Infinity)
     );
-  }
-  return null;
-}
+  }, [byMeter]);
 
-export default function EnergyMeterBreakdown({ byMeter = [], dataAvailable = true }) {
-  const sortedMeters = [...(byMeter || [])].sort(
-    (a, b) => (hasNumber(b.consumption_kwh) ? Number(b.consumption_kwh) : -Infinity)
-      - (hasNumber(a.consumption_kwh) ? Number(a.consumption_kwh) : -Infinity)
-  );
-
-  const chartData = sortedMeters.map((m) => ({
-    ...m,
-    consumption_num: hasNumber(m.consumption_kwh) ? Number(m.consumption_kwh) : null,
-  }));
-  const validChartData = chartData.filter((item) => hasNumber(item.consumption_num));
-
-  const topMeter = sortedMeters.length > 0 ? sortedMeters[0] : null;
+  const maxConsumption = useMemo(() => {
+    return sortedMeters.reduce((max, m) => {
+      const val = hasNumber(m.consumption_kwh) ? Number(m.consumption_kwh) : 0;
+      return val > max ? val : max;
+    }, 0);
+  }, [sortedMeters]);
 
   return (
-    <div className="dashboard-section" style={{ marginBottom: '1.25rem' }}>
-      <div className="section-header">
-        <div className="section-title-group">
-          <h3 className="section-title">Energy Consumption by Meter</h3>
-        </div>
-        <div className="section-tag-group">
-          {topMeter && hasNumber(topMeter.consumption_kwh) && (
-            <span className="section-tag process">
-              Highest: {topMeter.meter_id} ({formatNumber(topMeter.consumption_kwh, 0)} kWh)
-            </span>
-          )}
-          <span className="section-tag info">
+    <div className="meter-breakdown-card">
+      {/* 1. Header with Title and Dynamic Meter Count */}
+      <div className="meter-breakdown-header">
+        <div className="meter-breakdown-title-group">
+          <h3 className="meter-breakdown-title">Energy Consumption by Meter</h3>
+          <span className="meter-breakdown-count">
             {dataAvailable ? `${byMeter.length} monitored meters` : 'Meter data unavailable'}
           </span>
+          {selectedShift && selectedShift !== 'ALL' && (
+            <span className="section-tag process" style={{ fontSize: '11px', padding: '2px 6px' }}>
+              Shift {selectedShift}
+            </span>
+          )}
         </div>
       </div>
 
-      <div className="meters-overview-grid">
-        {/* Left: Ranked Horizontal Bar Chart */}
-        <div className="chart-card meter-chart-card">
-          <div className="chart-card-header">
-            <div className="chart-title-wrap">
-              <h4 className="chart-card-title">Submeter Consumption Ranking</h4>
-            </div>
-            <div className="chart-legend-custom">
-              <span className="legend-item">
-                <span className="legend-box" style={{ background: 'var(--brand-purple)' }}></span>
-                Interval kWh
-              </span>
-            </div>
-          </div>
-
-          <div
-            className="chart-wrapper meter-chart-wrapper"
-            role="group"
-            aria-label="Submeter energy consumption horizontal bar chart in kilowatt-hours by meter"
-          >
-            {!dataAvailable || chartData.length === 0 || validChartData.length === 0 ? (
-              <div className="chart-empty-state" style={{ minHeight: '230px' }}>
-                {!dataAvailable
-                  ? 'Meter telemetry is unavailable from the server.'
-                  : chartData.length === 0
-                    ? 'No meter records returned for the selected period.'
-                    : 'Meter records were returned without usable energy values.'}
-              </div>
+      {/* 2. Full-Width Ranked Table */}
+      <div className="meter-table-wrap">
+        <table className="meter-ranked-table">
+          <thead>
+            <tr>
+              <th className="col-meter">Meter</th>
+              <th className="col-right" style={{ minWidth: '150px' }}>Energy consumed (kWh)</th>
+              <th className="col-right">Share (%)</th>
+              <th className="col-right meter-col-desktop">Peak hourly consumption (kWh)</th>
+              <th className="col-right meter-col-desktop">Estimated cost (₹)</th>
+              <th className="col-right meter-col-desktop">Average power factor</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!dataAvailable || sortedMeters.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="meter-table-empty">
+                  {!dataAvailable ? 'Meter data unavailable' : 'No meter records returned for the selected filter.'}
+                </td>
+              </tr>
             ) : (
-              <ResponsiveContainer width="100%" height={250}>
-                <BarChart
-                  data={validChartData}
-                  layout="vertical"
-                  margin={{ top: 6, right: 20, left: 0, bottom: 4 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" horizontal={false} />
-                  <XAxis
-                    type="number"
-                    stroke="var(--chart-axis)"
-                    tick={{ fontSize: 11, fill: 'var(--chart-axis)' }}
-                    tickLine={false}
-                    tickFormatter={(val) => `${(val / 1000).toFixed(0)}k`}
-                  />
-                  <YAxis
-                    type="category"
-                    dataKey="meter_id"
-                    stroke="var(--chart-axis)"
-                    tick={{ fontSize: 11, fill: 'var(--chart-axis)', fontWeight: 600 }}
-                    tickLine={false}
-                    width={115}
-                    interval={0}
-                  />
-                  <Tooltip content={<CustomMeterTooltip />} />
-                  <Bar dataKey="consumption_num" radius={[0, 4, 4, 0]}>
-                    {validChartData.map((entry) => (
-                      <Cell
-                        key={entry.meter_id}
-                        fill={METER_COLOR_MAP[entry.meter_id] || 'var(--brand-purple)'}
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              sortedMeters.map((meter, index) => {
+                const isExpanded = !!expandedMeters[meter.meter_id];
+                const isTop = index === 0;
+                const consumptionVal = hasNumber(meter.consumption_kwh) ? Number(meter.consumption_kwh) : 0;
+                const barPct = maxConsumption > 0 ? Math.min(100, Math.max(0, (consumptionVal / maxConsumption) * 100)) : 0;
+
+                return (
+                  <React.Fragment key={meter.meter_id}>
+                    <tr className={isExpanded ? 'is-expanded' : ''}>
+                      <td className="col-meter">
+                        <div className="meter-cell-content">
+                          <span
+                            className="meter-color-indicator"
+                            style={{ background: METER_COLOR_MAP[meter.meter_id] || 'var(--brand-purple)' }}
+                          />
+                          <div>
+                            <span className="meter-id-text">{meter.meter_id}</span>
+                            {meter.meter_id === 'MTR-COMPRESSOR' && (
+                              <div className="meter-sub-note">
+                                Compressor electricity (input)
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            className="meter-disclosure-btn"
+                            aria-expanded={isExpanded}
+                            aria-label={`Toggle telemetry details for ${meter.meter_id}`}
+                            onClick={() => toggleMeter(meter.meter_id)}
+                          >
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 20 20"
+                              fill="currentColor"
+                              style={{
+                                transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                                transition: 'transform 0.15s ease',
+                              }}
+                            >
+                              <path
+                                fillRule="evenodd"
+                                d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                                clipRule="evenodd"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+                      </td>
+
+                      <td className="col-right">
+                        <div className="meter-energy-cell">
+                          <span className="meter-energy-val">
+                            {hasNumber(meter.consumption_kwh) ? formatNumber(meter.consumption_kwh, 2) : '—'}
+                          </span>
+                          <div className="meter-energy-bar-track">
+                            <div
+                              className={`meter-energy-bar-fill ${isTop ? 'is-highest' : ''}`}
+                              style={{ width: `${barPct}%` }}
+                            />
+                          </div>
+                        </div>
+                      </td>
+
+                      <td className="col-right">
+                        {hasNumber(meter.percentage_of_total) ? formatPercent(meter.percentage_of_total, 2) : '—'}
+                      </td>
+
+                      <td className="col-right meter-col-desktop">
+                        {hasNumber(meter.peak_kwh) ? formatNumber(meter.peak_kwh, 2) : '—'}
+                      </td>
+
+                      <td className="col-right meter-col-desktop">
+                        {hasNumber(meter.cost_inr) ? formatCurrency(meter.cost_inr) : '—'}
+                      </td>
+
+                      <td className="col-right meter-col-desktop">
+                        {hasNumber(meter.avg_power_factor) ? Number(meter.avg_power_factor).toFixed(4) : '—'}
+                      </td>
+                    </tr>
+
+                    {/* Accessible Row Disclosure for Narrow Screens */}
+                    <tr className={`meter-disclosure-row ${isExpanded ? 'is-open' : ''}`}>
+                      <td colSpan={3}>
+                        <div className="meter-disclosure-content">
+                          <div className="meter-disclosure-item">
+                            <span className="meter-disclosure-label">Peak hourly consumption</span>
+                            <span className="meter-disclosure-val">
+                              {hasNumber(meter.peak_kwh) ? `${formatNumber(meter.peak_kwh, 2)} kWh` : '—'}
+                            </span>
+                          </div>
+                          <div className="meter-disclosure-item">
+                            <span className="meter-disclosure-label">Estimated cost</span>
+                            <span className="meter-disclosure-val">
+                              {hasNumber(meter.cost_inr) ? formatCurrency(meter.cost_inr) : '—'}
+                            </span>
+                          </div>
+                          <div className="meter-disclosure-item">
+                            <span className="meter-disclosure-label">Average power factor</span>
+                            <span className="meter-disclosure-val">
+                              {hasNumber(meter.avg_power_factor) ? Number(meter.avg_power_factor).toFixed(4) : '—'}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  </React.Fragment>
+                );
+              })
             )}
-          </div>
-        </div>
-
-        {/* Right: Detailed Meter Table */}
-        <div className="chart-card meter-table-card">
-          <div className="chart-card-header">
-            <div className="chart-title-wrap">
-              <h4 className="chart-card-title">Submeter Telemetry Breakdown</h4>
-            </div>
-          </div>
-
-          <div
-            className="table-responsive meter-table-scroll-container"
-            tabIndex={0}
-            role="region"
-            aria-label="Detailed submeter telemetry table"
-          >
-            <table className="energy-submeter-table">
-              <thead>
-                <tr>
-                  <th>Meter</th>
-                  <th>Area</th>
-                  <th className="text-right">Interval Energy</th>
-                  <th className="text-right">Share</th>
-                  <th className="text-right">Peak Load</th>
-                  <th className="text-right">Est. Cost</th>
-                  <th className="text-center">Avg PF</th>
-                </tr>
-              </thead>
-              <tbody>
-                {!dataAvailable || sortedMeters.length === 0 ? (
-                  <tr>
-                    <td colSpan="7" className="text-center text-muted" style={{ padding: '1.5rem' }}>
-                      {!dataAvailable ? 'Meter data unavailable' : 'No meter records returned'}
-                    </td>
-                  </tr>
-                ) : (
-                  sortedMeters.map((meter) => {
-                    const isProcess = meter.area === 'SMT' || meter.area === 'FAL';
-                    const isUtility = ['COMPRESSOR', 'CHILLER', 'HVAC'].includes(meter.area);
-                    const meterType = isProcess ? 'Process' : isUtility ? 'Utility' : 'Other';
-                    return (
-                      <tr key={meter.meter_id}>
-                        <td>
-                          <span className="meter-badge-cell">
-                            <span
-                              className="meter-dot"
-                              style={{ background: METER_COLOR_MAP[meter.meter_id] || 'var(--brand-purple)' }}
-                            ></span>
-                            <div>
-                              <span className="font-semibold">{meter.meter_id}</span>
-                              {meter.meter_id === 'MTR-COMPRESSOR' && (
-                                <div style={{ fontSize: '0.67rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
-                                  Compressor electricity consumption (kWh)
-                                </div>
-                              )}
-                            </div>
-                          </span>
-                        </td>
-                        <td>
-                          <span className={`area-category-badge ${isProcess ? 'process' : isUtility ? 'utility' : ''}`}>
-                            {meter.area || '—'} ({meterType})
-                          </span>
-                        </td>
-                        <td className="text-right font-mono font-semibold">
-                          {hasNumber(meter.consumption_kwh) ? `${formatNumber(meter.consumption_kwh, 2)} kWh` : '—'}
-                        </td>
-                        <td className="text-right font-mono">
-                          {hasNumber(meter.percentage_of_total) ? formatPercent(meter.percentage_of_total) : '—'}
-                        </td>
-                        <td className="text-right font-mono">
-                          {hasNumber(meter.peak_kwh) ? `${formatNumber(meter.peak_kwh, 2)} kWh` : '—'}
-                        </td>
-                        <td className="text-right font-mono">
-                          {hasNumber(meter.cost_inr) ? formatCurrency(meter.cost_inr) : '—'}
-                        </td>
-                        <td className="text-center font-mono">
-                          {hasNumber(meter.avg_power_factor) ? Number(meter.avg_power_factor).toFixed(4) : '—'}
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+          </tbody>
+        </table>
       </div>
     </div>
   );

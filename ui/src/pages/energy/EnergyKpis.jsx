@@ -33,7 +33,11 @@ export default function EnergyKpis({
   summaryAvailable = true,
   pfAvailable = true,
   dailyTrendAvailable = true,
+  selectedShift = 'ALL',
 }) {
+  const isShiftFiltered = Boolean(selectedShift && selectedShift !== 'ALL');
+  const shiftBadge = isShiftFiltered ? { text: `Shift ${selectedShift}`, variant: 'info' } : null;
+
   // Primary metric extraction
   const totalKwh = summaryAvailable && hasNumber(energySummary?.total_consumption_kwh)
     ? Number(energySummary.total_consumption_kwh)
@@ -86,7 +90,6 @@ export default function EnergyKpis({
   const peakKwh = hasNumber(peakReading?.consumption_kwh)
     ? Number(peakReading.consumption_kwh)
     : null;
-  const peakMeter = peakReading?.meter_id || null;
 
   // Compute trend date range period e.g. "Aug 1 to Oct 31"
   const trendPeriod = useMemo(() => {
@@ -162,6 +165,7 @@ export default function EnergyKpis({
       accent: 'purple',
       sparklineData: energyCumulativeSeries,
       minimal: true,
+      badge: shiftBadge,
       icon: (
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
           <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
@@ -176,6 +180,7 @@ export default function EnergyKpis({
       accent: 'purple',
       sparklineData: costCumulativeSeries,
       minimal: true,
+      badge: shiftBadge,
       icon: <span className="kpi-icon-text">₹</span>,
     },
     {
@@ -186,6 +191,7 @@ export default function EnergyKpis({
       accent: 'purple',
       sparklineData: co2eCumulativeSeries,
       minimal: true,
+      badge: shiftBadge,
       icon: (
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
@@ -201,6 +207,7 @@ export default function EnergyKpis({
       accent: 'purple',
       sparklineData: pfDailySeries,
       minimal: true,
+      badge: shiftBadge,
       icon: (
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
@@ -210,7 +217,7 @@ export default function EnergyKpis({
   ];
 
   return (
-    <div className="kpi-overview-container" style={{ marginBottom: '1.25rem' }}>
+    <div className="kpi-overview-container" style={{ gap: '0.75rem', marginBottom: '0.5rem' }}>
       {/* 1. Exactly 4 Primary KPI Cards */}
       <div className="kpi-grid">
         {primaryCards.map((card) => (
@@ -224,12 +231,13 @@ export default function EnergyKpis({
             icon={card.icon}
             sparklineData={card.sparklineData}
             minimal={card.minimal}
+            badge={card.badge}
           />
         ))}
       </div>
 
       {/* 2. Secondary Operational Metrics Strip */}
-      <div className="kpi-secondary-grid" style={{ marginTop: '0.85rem' }}>
+      <div className="kpi-secondary-grid">
         {/* Metric 1: Returned Meter Readings */}
         <div className="kpi-secondary-item">
           <div className="kpi-secondary-icon navy">
@@ -247,7 +255,7 @@ export default function EnergyKpis({
                 {totalReadings !== null ? formatNumber(totalReadings) : '—'}
               </span>
               <span className="kpi-secondary-detail">
-                {distinctHours !== null ? `· ${formatNumber(distinctHours)} active hours` : 'readings'}
+                {distinctHours !== null ? `· ${formatNumber(distinctHours)} active hours${isShiftFiltered ? ` (Shift ${selectedShift})` : ''}` : 'readings'}
               </span>
             </div>
           </div>
@@ -270,7 +278,7 @@ export default function EnergyKpis({
                 {dailyAvgKwh !== null ? `${formatNumber(dailyAvgKwh, 1)}` : '—'}
               </span>
               <span className="kpi-secondary-detail">
-                {dailyRecordCount > 0 ? `kWh/d (${dailyRecordCount}d)` : 'kWh/day'}
+                {dailyRecordCount > 0 ? `kWh/d (${dailyRecordCount}d${isShiftFiltered ? ` • Shift ${selectedShift}` : ''})` : 'kWh/day'}
               </span>
             </div>
           </div>
@@ -313,7 +321,7 @@ export default function EnergyKpis({
             </svg>
           </div>
           <div className="kpi-secondary-info">
-            <span className="kpi-secondary-label">Peak Hourly Consumption</span>
+            <span className="kpi-secondary-label">Peak Hourly Consumption{isShiftFiltered ? ` (Shift ${selectedShift})` : ''}</span>
             <div className="kpi-secondary-val-row">
               <span className="kpi-secondary-val">
                 {peakKwh !== null
@@ -322,17 +330,7 @@ export default function EnergyKpis({
                     ? `${formatNumber(energySummary.avg_hourly_consumption_kwh, 1)}`
                     : '—'}
               </span>
-              <span className="kpi-secondary-detail">
-                {peakKwh !== null && peakMeter
-                  ? `kWh (${peakMeter}${peakReading?.plant_id ? ` · ${peakReading.plant_id}` : ''})`
-                  : 'kWh'}
-              </span>
             </div>
-            {peakReading?.scope_description && (
-              <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'block', marginTop: '0.1rem' }}>
-                {peakReading.scope_description}
-              </span>
-            )}
           </div>
         </div>
       </div>

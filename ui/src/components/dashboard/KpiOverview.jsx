@@ -12,11 +12,14 @@ export default function KpiOverview({
   energyTrend,
   productionTrend,
   resolvedDateRange,
+  selectedPlant = 'ALL',
+  selectedShift = 'ALL',
   energyAvailable = true,
   productionAvailable = true,
   factoryEnergyAvailable = true,
   loading = false,
 }) {
+  const isShiftFiltered = selectedShift && selectedShift !== 'ALL';
   const energyKwh = energyAvailable && hasNumber(energySummary?.total_consumption_kwh)
     ? formatNumber(energySummary.total_consumption_kwh, 2)
     : 'Unavailable';
@@ -132,58 +135,39 @@ export default function KpiOverview({
     return series.length > 1 ? series : null;
   }, [productionTrend, hasMultipleProdDays]);
 
-  // Primary 4 Cards matching reference: media_1794921119081_6e3161cd.png
+  // Primary 4 Cards matching reference
   const primaryCards = [
     {
       id: 'kpi-energy',
       title: 'Total Energy Consumption',
       value: energyKwh,
-      unit: '',
+      unit: 'kWh',
       accent: 'purple',
       sparklineData: energySeries,
-      icon: (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-        </svg>
-      ),
     },
     {
       id: 'kpi-cost',
       title: 'Energy Cost',
       value: energyCost,
-      unit: '',
+      unit: '₹',
       accent: 'purple',
       sparklineData: costSeries,
-      icon: <span className="kpi-icon-text">₹</span>,
     },
     {
       id: 'kpi-co2e',
       title: 'Carbon Emissions',
       value: co2e,
-      unit: '',
+      unit: 'kg CO₂e',
       accent: 'purple',
       sparklineData: co2eSeries,
-      icon: (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
-          <path d="m9 12 2 2 4-4" />
-        </svg>
-      ),
     },
     {
       id: 'kpi-production',
       title: 'Production Output',
       value: actualUnits,
-      unit: '',
+      unit: 'units',
       accent: 'purple',
       sparklineData: prodSeries,
-      icon: (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="18" y1="20" x2="18" y2="10" />
-          <line x1="12" y1="20" x2="12" y2="4" />
-          <line x1="6" y1="20" x2="6" y2="14" />
-        </svg>
-      ),
     },
   ];
 
@@ -194,87 +178,39 @@ export default function KpiOverview({
       title: 'Electricity Intensity',
       value: electricityIntensity,
       unit: 'kWh / good unit',
-      secondary: `Plant Energy / Good Output • Actual SEC: ${actualSec} kWh/unit`,
       accent: 'purple',
-      icon: (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-        </svg>
-      ),
+      secondary: isShiftFiltered ? 'Facility total / unallocated to shift' : null,
+      badge: isShiftFiltered ? { text: 'Facility total', variant: 'info' } : null,
     },
     {
       id: 'kpi-cost-intensity',
       title: 'Estimated Cost Intensity',
       value: costIntensity,
       unit: '/ good unit',
-      secondary: 'Dataset-derived tariff (₹8.25/kWh)',
-      accent: 'blue',
-      icon: <span className="kpi-icon-text">₹</span>,
+      accent: 'purple',
+      secondary: isShiftFiltered ? 'Facility total / unallocated to shift' : null,
+      badge: isShiftFiltered ? { text: 'Facility total', variant: 'info' } : null,
     },
     {
       id: 'kpi-emissions-intensity',
       title: 'Estimated Emissions Intensity',
       value: emissionsIntensity,
       unit: 'kg CO₂e / good unit',
-      secondary: 'Grid factor assumption (0.716 kg/kWh)',
-      accent: 'teal',
-      icon: (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
-          <path d="m9 12 2 2 4-4" />
-        </svg>
-      ),
+      accent: 'purple',
+      secondary: isShiftFiltered ? 'Facility total / unallocated to shift' : null,
+      badge: isShiftFiltered ? { text: 'Facility total', variant: 'info' } : null,
     },
     {
       id: 'kpi-good-output',
       title: 'Good Finished Output',
       value: goodFinishedOutput,
       unit: 'units',
-      secondary: yieldPct ? `Yield: ${yieldPct}${rejectQty ? ` • Scrap: ${rejectQty}` : ''}` : 'FAL finished goods gate',
-      accent: 'green',
-      icon: (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="18" y1="20" x2="18" y2="10" />
-          <line x1="12" y1="20" x2="12" y2="4" />
-          <line x1="6" y1="20" x2="6" y2="14" />
-        </svg>
-      ),
+      accent: 'purple',
     },
   ];
 
   return (
     <div className="kpi-overview-container">
-      {/* Management Headline Banner & Coverage */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '-0.25rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '13px', fontWeight: 600, textTransform: 'none', letterSpacing: 'normal', color: 'var(--text-primary, #0f172a)' }}>
-            Management energy intelligence
-          </span>
-          <span style={{ color: 'var(--text-muted, #94a3b8)', fontSize: '12px' }}>•</span>
-          <span style={{ fontSize: '12px', fontWeight: 400, color: 'var(--text-secondary, #64748b)' }}>
-            Denominator: Good finished units (FAL gate)
-          </span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.25rem',
-              padding: '0.15rem 0.5rem',
-              borderRadius: '9999px',
-              fontSize: '12px',
-              fontWeight: 500,
-              backgroundColor: coverageStatus === 'FULL' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)',
-              color: coverageStatus === 'FULL' ? '#22c55e' : '#eab308',
-              border: `1px solid ${coverageStatus === 'FULL' ? 'rgba(34, 197, 94, 0.3)' : 'rgba(234, 179, 8, 0.3)'}`,
-            }}
-          >
-            ● Coverage: {coverageStatus} ({coveragePct}% • {completeHours}/{expectedHours} plant-hrs)
-          </span>
-        </div>
-      </div>
-
       {/* 1. Headline Intensity Cards */}
       <KpiGrid className="kpi-grid intensity-kpi-grid">
         {managementCards.map((card) => (
@@ -285,20 +221,13 @@ export default function KpiOverview({
             title={card.title}
             value={card.value}
             unit={card.unit}
-            secondary={card.secondary}
             accent={card.accent}
-            icon={card.icon}
+            secondary={card.secondary}
+            badge={card.badge}
             loading={loading}
           />
         ))}
       </KpiGrid>
-
-      {/* Sub-header for Full Scope Totals */}
-      <div style={{ display: 'flex', alignItems: 'center', marginTop: '0.25rem', marginBottom: '-0.25rem' }}>
-        <span style={{ fontSize: '13px', fontWeight: 600, textTransform: 'none', letterSpacing: 'normal', color: 'var(--text-tertiary, #64748b)' }}>
-          Factory full-scope totals (all telemetry observations)
-        </span>
-      </div>
 
       {/* 2. Full Scope Totals Cards */}
       <KpiGrid className="kpi-grid totals-kpi-grid">
@@ -311,7 +240,6 @@ export default function KpiOverview({
             value={card.value}
             unit={card.unit}
             accent={card.accent}
-            icon={card.icon}
             sparklineData={card.sparklineData}
             loading={loading}
           />

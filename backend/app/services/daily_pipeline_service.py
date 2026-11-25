@@ -483,10 +483,17 @@ def get_daily_pipeline_status(
             }
             for u in uploads
         ]
+        energy_count_display = energy_rows_count if energy_rows_count > 0 else linked_energy_count
+        prod_count_display = production_rows_count if production_rows_count > 0 else linked_production_count
+        summary_text = (
+            f"{energy_count_display} Energy entries · {prod_count_display} Production entries"
+            if (energy_count_display > 0 or prod_count_display > 0)
+            else f"{len(uploads)} file(s) recorded in upload history ({sum(u.file_size_bytes for u in uploads)} bytes total)"
+        )
         stages["data_upload"] = {
             "status": "COMPLETED",
             "timestamp": uploads[0].uploaded_at.isoformat() if uploads[0].uploaded_at else None,
-            "summary": f"{len(uploads)} file(s) recorded in upload history ({sum(u.file_size_bytes for u in uploads)} bytes total)",
+            "summary": summary_text,
             "details": {"files": upload_files, "has_linked_uploads": True},
         }
     elif staged_reports:
@@ -499,10 +506,14 @@ def get_daily_pipeline_status(
     elif has_data:
         # Historical seeded baseline telemetry without daily report uploads
         stages["data_upload"] = {
-            "status": "NOT_STARTED",
+            "status": "COMPLETED",
             "timestamp": None,
-            "summary": "No daily report files uploaded for this date. (Baseline historical telemetry is present in database).",
-            "details": {"is_historical_baseline": True, "files": []},
+            "summary": (
+                f"{energy_rows_count} Energy entries · {production_rows_count} Production entries"
+                if (energy_rows_count > 0 or production_rows_count > 0)
+                else "No entries recorded for this plant and reporting date."
+            ),
+            "details": {"is_historical_baseline": True, "files": [], "energy_saved": energy_rows_count, "production_saved": production_rows_count},
         }
     elif saved.get("data_upload") and saved["data_upload"].get("status") in ("COMPLETED", "IN_PROGRESS"):
         stages["data_upload"] = saved["data_upload"]
@@ -977,9 +988,37 @@ def run_downstream_pipeline(
         if file_saved:
             saved.update(file_saved)
 
-        has_prior_recon = saved.get("data_reconciliation", {}).get("status") in ("COMPLETED", "COMPLETED_WITH_WARNINGS")
-        has_prior_analytics = saved.get("daily_analytics", {}).get("status") in ("COMPLETED", "COMPLETED_WITH_WARNINGS")
-        has_prior_intel = saved.get("intelligence_report", {}).get("status") in ("COMPLETED", "COMPLETED_WITH_WARNINGS")
+        # Retrieve latest ingestion timestamp to check for stale downstream results.
+        # A completed stage from a prior run must NOT be reused if its timestamp precedes
+        # the latest database ingestion revision.
+        initial_status = get_daily_pipeline_status(session, reporting_date, plant_id)
+        last_ingest_time_str = initial_status.get("stages", {}).get("database_ingestion", {}).get("timestamp")
+        last_ingest_dt: Optional[datetime] = None
+        if last_ingest_time_str:
+            try:
+                last_ingest_dt = datetime.fromisoformat(last_ingest_time_str)
+            except Exception:
+                pass
+
+        def _is_stage_fresh(stage_key: str) -> bool:
+            record = saved.get(stage_key)
+            if not record or record.get("status") not in ("COMPLETED", "COMPLETED_WITH_WARNINGS"):
+                return False
+            ts_str = record.get("timestamp")
+            if not ts_str:
+                return False
+            if last_ingest_dt:
+                try:
+                    stage_dt = datetime.fromisoformat(ts_str)
+                    if stage_dt < last_ingest_dt:
+                        return False
+                except Exception:
+                    return False
+            return True
+
+        has_prior_recon = _is_stage_fresh("data_reconciliation")
+        has_prior_analytics = has_prior_recon and _is_stage_fresh("daily_analytics")
+        has_prior_intel = has_prior_analytics and _is_stage_fresh("intelligence_report")
 
         # -------------------------------------------------------------------------
         # STAGE 4: Data Reconciliation

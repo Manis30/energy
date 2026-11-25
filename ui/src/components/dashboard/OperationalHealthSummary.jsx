@@ -43,7 +43,9 @@ export default function OperationalHealthSummary({
           </svg>
         </div>
         <div className="health-block-text">
-          <span className="health-block-label">Active Findings</span>
+          <div className="health-label-row">
+            <span className="health-block-label">Active Findings</span>
+          </div>
           <div className="health-block-val-group">
             <span className="health-block-value">
               {loading ? '…' : formatNumber(activeFindingsCount)}
@@ -121,7 +123,9 @@ export default function OperationalHealthSummary({
           </svg>
         </div>
         <div className="health-block-text">
-          <span className="health-block-label">Recommendations</span>
+          <div className="health-label-row">
+            <span className="health-block-label">Recommendations</span>
+          </div>
           <div className="health-block-val-group">
             <span className="health-block-value">
               {loading ? '…' : formatNumber(openRecommendationsCount)}
@@ -154,7 +158,9 @@ export default function OperationalHealthSummary({
           </svg>
         </div>
         <div className="health-block-text">
-          <span className="health-block-label">Quality Yield</span>
+          <div className="health-label-row">
+            <span className="health-block-label">Quality Yield</span>
+          </div>
           <div className="health-block-val-group">
             <span className="health-block-value">
               {loading ? '…' : goodRate != null ? formatPercent(goodRate, 1) : 'Unavailable'}

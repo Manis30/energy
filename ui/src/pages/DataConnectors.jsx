@@ -1,25 +1,61 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { CATALOG_CONNECTORS } from './connectors/connectorCatalog';
 import ConnectorModal from './connectors/ConnectorModal';
 import { connectorsApi } from '../services/connectorsApi';
-import { formatDateTime } from '../utils/formatters';
 import './connectors/data-connectors.css';
 
 /**
- * Enterprise Data Connectors Directory
- * Consumes truthful backend status from /api/connectors.
- *
- * Operational Scope:
- * - PostgreSQL (Authoritative Operational Database)
- * - Manual File Intake (Current Operational Intake Path for CSV & Excel)
- *
- * Simulation Scope:
- * - MongoDB (Simulated Sandbox for Document Schema Mapping)
- * - SharePoint (Simulated Mock for Graph API Report Staging)
- *
- * Enterprise Roadmap Scope (Clearly Labeled as Planned):
- * - REST API Webhook, Siemens Opcenter, SAP ERP/CMMS, SAP HANA, Oracle, Snowflake, MS Teams
+ * Helper to determine status category, badge label, and action details
  */
+function getConnectorStatus(connector) {
+  if (
+    connector.status === 'CONNECTED' ||
+    connector.status === 'connected' ||
+    connector.isOperationalIntake ||
+    (connector.mode === 'live_capable' && connector.connectionState === 'reachable')
+  ) {
+    return {
+      group: 'operational',
+      badgeClass: 'status-operational',
+      label: 'Operational',
+      actionLabel: 'View Connection',
+      actionClass: 'btn-operational',
+    };
+  }
+
+  if (
+    connector.status === 'SIMULATED' ||
+    connector.status === 'simulated' ||
+    connector.isSimulation ||
+    connector.mode === 'simulated'
+  ) {
+    return {
+      group: 'simulated',
+      badgeClass: 'status-simulated',
+      label: 'Simulated',
+      actionLabel: 'Inspect Simulation',
+      actionClass: 'btn-simulated',
+    };
+  }
+
+  // Planned / Roadmap: include planned quarter when available
+  let quarter = '';
+  if (connector.statusLabel) {
+    const match = connector.statusLabel.match(/Q[1-4]\s*\d{4}/i);
+    if (match) {
+      quarter = match[0];
+    }
+  }
+
+  return {
+    group: 'planned',
+    badgeClass: 'status-planned',
+    label: quarter ? `Planned · ${quarter}` : 'Planned',
+    actionLabel: 'Roadmap Spec',
+    actionClass: 'btn-planned',
+  };
+}
+
 export default function DataConnectors() {
   const [selectedConnector, setSelectedConnector] = useState(null);
   const [backendConnectors, setBackendConnectors] = useState([]);
@@ -45,167 +81,141 @@ export default function DataConnectors() {
   }, []);
 
   // Merge backend runtime status with static catalog descriptions
-  const mergedConnectors = CATALOG_CONNECTORS.map((cat) => {
-    const backendMatch = backendConnectors.find(
-      (b) =>
-        b.id === cat.id ||
-        b.id === cat.backendId ||
-        (cat.id === 'neon-postgres' && b.id === 'conn-neon-primary') ||
-        (cat.id === 'mongodb' && b.type === 'mongodb') ||
-        (cat.id === 'sharepoint' && b.type === 'sharepoint')
-    );
+  const mergedConnectors = useMemo(() => {
+    return CATALOG_CONNECTORS.map((cat) => {
+      const backendMatch = backendConnectors.find(
+        (b) =>
+          b.id === cat.id ||
+          b.id === cat.backendId ||
+          (cat.id === 'neon-postgres' && b.id === 'conn-neon-primary') ||
+          (cat.id === 'mongodb' && b.type === 'mongodb') ||
+          (cat.id === 'sharepoint' && b.type === 'sharepoint')
+      );
 
-    if (!backendMatch) return cat;
+      if (!backendMatch) return cat;
 
-    const isSim = Boolean(backendMatch.is_simulation);
-    const isOpIntake = Boolean(backendMatch.is_operational_intake);
-    const isLive = backendMatch.mode === 'live_capable' && backendMatch.connection_state === 'reachable';
+      const isSim = Boolean(backendMatch.is_simulation);
+      const isOpIntake = Boolean(backendMatch.is_operational_intake);
+      const isLive = backendMatch.mode === 'live_capable' && backendMatch.connection_state === 'reachable';
 
-    return {
-      ...cat,
-      name: backendMatch.name || cat.name,
-      backendData: backendMatch,
-      status: backendMatch.status,
-      statusLabel:
-        backendMatch.status_label ||
-        (isLive
-          ? 'Reachable (Live)'
-          : isOpIntake
-          ? 'Operational Intake'
-          : isSim
-          ? 'Simulated Sandbox'
-          : 'Roadmap Spec'),
-      mode: backendMatch.mode,
-      connectionState: backendMatch.connection_state,
-      isSimulation: isSim,
-      isOperationalIntake: isOpIntake,
-      lastCheck: backendMatch.last_connectivity_check_at,
-      lastIngest: backendMatch.last_successful_ingestion_at,
-      providerDetails: backendMatch.provider_details,
-    };
-  });
+      return {
+        ...cat,
+        name: backendMatch.name || cat.name,
+        backendData: backendMatch,
+        status: backendMatch.status,
+        statusLabel:
+          backendMatch.status_label ||
+          (isLive
+            ? 'Reachable (Live)'
+            : isOpIntake
+            ? 'Operational Intake'
+            : isSim
+            ? 'Simulated Sandbox'
+            : cat.statusLabel),
+        mode: backendMatch.mode,
+        connectionState: backendMatch.connection_state,
+        isSimulation: isSim,
+        isOperationalIntake: isOpIntake,
+        lastCheck: backendMatch.last_connectivity_check_at,
+        lastIngest: backendMatch.last_successful_ingestion_at,
+        providerDetails: backendMatch.provider_details,
+      };
+    });
+  }, [backendConnectors]);
 
-  const operationalCount = mergedConnectors.filter(
-    (c) => c.isOperationalIntake || (c.mode === 'live_capable' && c.connectionState === 'reachable')
-  ).length;
-  const simulatedCount = mergedConnectors.filter((c) => c.isSimulation || c.mode === 'simulated').length;
-  const roadmapCount = mergedConnectors.filter((c) => c.isRoadmap || c.mode === 'planned').length;
+  // Derived counts for slim summary row
+  const statusCounts = useMemo(() => {
+    let operational = 0;
+    let simulated = 0;
+    let planned = 0;
+
+    mergedConnectors.forEach((c) => {
+      const { group } = getConnectorStatus(c);
+      if (group === 'operational') operational++;
+      else if (group === 'simulated') simulated++;
+      else planned++;
+    });
+
+    return { operational, simulated, planned };
+  }, [mergedConnectors]);
 
   return (
     <div className="data-connectors-page">
-      {/* Capability Scope & Architecture Banner */}
-      <div className="connectors-scope-banner" role="region" aria-label="Connector Architecture Scope">
-        <div className="scope-banner-icon" aria-hidden="true">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 2v20M2 12h20" />
-            <circle cx="12" cy="12" r="10" />
-          </svg>
+      {/* Slim Summary Row directly below page title */}
+      <div className="connectors-summary-row" role="region" aria-label="Connector status summary">
+        <div className="summary-pill operational">
+          <span className="summary-dot" aria-hidden="true" />
+          <span className="summary-count">{statusCounts.operational}</span>
+          <span className="summary-label">Operational</span>
         </div>
-        <div className="scope-banner-content">
-          <div className="scope-banner-title">
-            <span>Operational &amp; Enterprise Integration Architecture</span>
-            <span className="scope-badge operational">
-              {operationalCount || 2} Operational Intake &amp; Database
-            </span>
-            <span className="scope-badge" style={{ background: 'rgba(234, 179, 8, 0.15)', color: '#eab308' }}>
-              {simulatedCount || 2} Simulation Sandboxes
-            </span>
-            <span className="scope-badge roadmap">{roadmapCount || 6} Planned Roadmap</span>
-          </div>
-          <p className="scope-banner-text">
-            <strong>Operational Data Ingestion:</strong> Factory energy and production telemetry are authoritatively ingested via <strong>Manual File Intake (CSV / Excel)</strong> and stored in <strong>PostgreSQL</strong> with two-stage schema validation and immutable revision pinning. <strong>MongoDB</strong> and <strong>SharePoint</strong> operate explicitly as simulated sandboxes; no live production telemetry flows through them. Enterprise ERP and MES connectors represent the planned roadmap.
-          </p>
+        <div className="summary-pill simulated">
+          <span className="summary-dot" aria-hidden="true" />
+          <span className="summary-count">{statusCounts.simulated}</span>
+          <span className="summary-label">Simulated</span>
+        </div>
+        <div className="summary-pill planned">
+          <span className="summary-dot" aria-hidden="true" />
+          <span className="summary-count">{statusCounts.planned}</span>
+          <span className="summary-label">Planned</span>
         </div>
       </div>
 
-      {/* Modern Grid Layout */}
+      {/* 5-Column Responsive Directory Grid */}
       <section className="connectors-gallery" aria-label="Enterprise Data Connectors Grid">
         <div className="connectors-grid">
           {mergedConnectors.map((connector) => {
-            const isConnected = connector.status === 'CONNECTED' || connector.status === 'connected';
-            const isSimulated = connector.status === 'SIMULATED' || connector.status === 'simulated' || connector.isSimulation;
-            const isRoadmap = connector.isRoadmap || connector.mode === 'planned' || connector.status === 'ROADMAP';
-
-            let cardBadgeClass = 'is-roadmap';
-            let pillClass = 'status-roadmap';
-            if (isConnected) {
-              cardBadgeClass = 'is-operational';
-              pillClass = 'status-connected';
-            } else if (isSimulated) {
-              cardBadgeClass = 'is-simulated';
-              pillClass = 'status-simulated';
-            }
+            const statusInfo = getConnectorStatus(connector);
 
             return (
               <article
                 key={connector.id}
-                className={`connector-card ${cardBadgeClass}`}
+                className={`connector-card ${statusInfo.group}`}
+                tabIndex={0}
+                aria-label={`${connector.name} - ${statusInfo.label}`}
               >
-                {/* Status Indicator Pill */}
-                <div className="connector-status-header">
-                  <span className={`connector-status-pill ${pillClass}`}>
-                    <span className="status-dot" aria-hidden="true" />
-                    {connector.statusLabel}
-                  </span>
-                  <span className="connector-category-tag">{connector.category}</span>
-                </div>
-
-                {/* Card Header: Icon Badge & Name */}
+                {/* 1. Small connector logo/initials beside connector name */}
                 <div className="connector-card-header">
                   <div
-                    className={`connector-icon-badge ${
-                      connector.initials.length > 2 ? 'len-3' : ''
-                    }`}
+                    className="connector-icon-badge"
                     style={{ backgroundColor: connector.iconColor }}
                     aria-hidden="true"
                   >
                     {connector.initials}
                   </div>
-                  <div className="connector-title-group">
-                    <h2 className="connector-name" title={connector.name}>
-                      {connector.name}
-                    </h2>
-                    <span className="connector-capability-label" title={connector.capability}>
-                      {connector.capability}
-                    </span>
-                  </div>
+                  <h2 className="connector-name" title={connector.name}>
+                    {connector.name}
+                  </h2>
                 </div>
 
-                {/* Concise Card Description */}
-                <p className="connector-desc">{connector.desc}</p>
-
-                {/* Ingestion & Connectivity Timestamps */}
-                <div style={{ padding: '0.4rem 0.85rem', fontSize: '0.7rem', color: 'var(--text-muted)', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Last Connectivity Check:</span>
-                    <strong style={{ color: 'var(--text-secondary)' }}>
-                      {connector.lastCheck ? formatDateTime(connector.lastCheck) : 'Unavailable'}
-                    </strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Last Successful Ingestion:</span>
-                    <strong style={{ color: connector.lastIngest ? 'var(--brand-green, #10b981)' : 'var(--text-muted)' }}>
-                      {connector.lastIngest ? formatDateTime(connector.lastIngest) : 'Unavailable'}
-                    </strong>
-                  </div>
+                {/* 2. One status badge: Operational, Simulated, or Planned (with quarter) */}
+                <div className="connector-status-wrap">
+                  <span className={`connector-status-badge ${statusInfo.badgeClass}`}>
+                    <span className="status-dot" aria-hidden="true" />
+                    {statusInfo.label}
+                  </span>
                 </div>
 
-                {/* Card Footer: Action Button */}
+                {/* 3. One short sentence describing what the connector does */}
+                <p className="connector-desc">
+                  {connector.shortDesc || connector.desc}
+                </p>
+
+                {/* 4. One compact action using existing label and handler */}
                 <div className="connector-card-footer">
                   <button
                     type="button"
-                    className={`connector-connect-btn ${isConnected ? 'btn-active' : isSimulated ? 'btn-simulated' : 'btn-roadmap'}`}
+                    className={`connector-action-btn ${statusInfo.actionClass}`}
                     onClick={() => setSelectedConnector(connector)}
-                    aria-label={`${isConnected ? 'Configure' : isSimulated ? 'Inspect Simulation' : 'View Roadmap for'} ${connector.name}`}
+                    aria-label={`${statusInfo.actionLabel} for ${connector.name}`}
                   >
-                    <span>{isConnected ? 'View Connection' : isSimulated ? 'Inspect Simulation' : 'Roadmap Spec'}</span>
+                    <span>{statusInfo.actionLabel}</span>
                     <svg
-                      width="13"
-                      height="13"
+                      width="12"
+                      height="12"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
-                      strokeWidth="2.4"
+                      strokeWidth="2.5"
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       aria-hidden="true"

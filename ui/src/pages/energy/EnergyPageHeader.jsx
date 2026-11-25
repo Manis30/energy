@@ -25,9 +25,16 @@ const MONTHS = [
 const YEARS = [2025, 2026, 2027];
 const WEEKDAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
+const DEFAULT_SHIFTS = [
+  { value: 'ALL', label: 'All shifts', shortLabel: 'All shifts' },
+  { value: 'A', label: 'Shift A (Morning • 06:00 – 14:00)', shortLabel: 'Shift A' },
+  { value: 'B', label: 'Shift B (Evening • 14:00 – 22:00)', shortLabel: 'Shift B' },
+  { value: 'C', label: 'Shift C (Night • 22:00 – 06:00)', shortLabel: 'Shift C' },
+];
+
 /**
  * Compact Modern Filter Toolbar for Energy Analytics
- * Exact single-row order: Plant | Month | Date | Clear Filters
+ * Exact single-row order: Plant | Month | Date | Shift | Clear Filters
  * Height: 64–76px, Control height: 38–42px (40px)
  */
 export default function EnergyPageHeader({
@@ -39,10 +46,13 @@ export default function EnergyPageHeader({
   onSelectedYearChange,
   selectedDate = '',
   onSelectDate,
+  selectedShift = 'ALL',
+  onSelectShift,
+  availableShifts = [],
   onResetFilters,
 }) {
   const panelRef = useRef(null);
-  const [activeDropdown, setActiveDropdown] = useState(null); // 'plant' | 'month' | 'date' | null
+  const [activeDropdown, setActiveDropdown] = useState(null); // 'plant' | 'month' | 'date' | 'shift' | null
 
   // Close popovers on click outside or Escape
   useEffect(() => {
@@ -154,12 +164,20 @@ export default function EnergyPageHeader({
     return null;
   }, [selectedDate, selectedYear, selectedMonth]);
 
+  // Selected shift display label
+  const selectedShiftLabel = useMemo(() => {
+    const shiftList = availableShifts && availableShifts.length > 0 ? availableShifts : DEFAULT_SHIFTS;
+    const opt = shiftList.find((s) => s.value === selectedShift);
+    return opt ? opt.shortLabel || opt.label : 'All shifts';
+  }, [selectedShift, availableShifts]);
+
   // Changed from defaults condition
   const hasActiveFilters = Boolean(
     (selectedPlant !== null && selectedPlant !== '') ||
     selectedDate !== '' ||
     selectedMonth !== 10 ||
-    selectedYear !== 2026
+    selectedYear !== 2026 ||
+    (selectedShift && selectedShift !== 'ALL')
   );
 
   return (
@@ -379,6 +397,60 @@ export default function EnergyPageHeader({
                 );
               })}
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* 4. Shift Control (Immediately after All Days / Date) */}
+      <div className={`energy-filter-item shift-item ${activeDropdown === 'shift' ? 'is-open' : ''}`}>
+        <button
+          type="button"
+          className={`energy-filter-trigger ${selectedShift && selectedShift !== 'ALL' ? 'has-filter' : ''} ${
+            activeDropdown === 'shift' ? 'is-active' : ''
+          }`}
+          onClick={() => toggleDropdown('shift')}
+          aria-expanded={activeDropdown === 'shift'}
+          aria-haspopup="listbox"
+          aria-label="Filter by Shift"
+          title={`Shift: ${selectedShiftLabel}`}
+        >
+          <span className="trigger-icon" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          </span>
+          <span className="trigger-label">{selectedShiftLabel}</span>
+          <span className="trigger-chevron" aria-hidden="true">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </span>
+        </button>
+
+        {activeDropdown === 'shift' && (
+          <div className="energy-dropdown-popover shift-popover" role="listbox">
+            {(availableShifts && availableShifts.length > 0 ? availableShifts : DEFAULT_SHIFTS).map((opt) => (
+              <div
+                key={opt.value}
+                className={`energy-dropdown-option ${
+                  (selectedShift || 'ALL') === opt.value ? 'is-selected' : ''
+                }`}
+                role="option"
+                aria-selected={(selectedShift || 'ALL') === opt.value}
+                onClick={() => {
+                  onSelectShift && onSelectShift(opt.value);
+                  setActiveDropdown(null);
+                }}
+              >
+                <span>{opt.label}</span>
+                {(selectedShift || 'ALL') === opt.value && (
+                  <svg className="option-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>

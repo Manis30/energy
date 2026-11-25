@@ -3,12 +3,12 @@ import { productionApi, energyIntensityApi } from '../services';
 
 import ProductionPageHeader from './production/ProductionPageHeader';
 import ProductionKpis from './production/ProductionKpis';
-import ProductionTrendChart from './production/ProductionTrendChart';
 import ProductionQualitySection from './production/ProductionQualitySection';
-import ProductionEnergyTradeoffSection from './production/ProductionEnergyTradeoffSection';
 import ProductionByLine from './production/ProductionByLine';
+import ProductionTrendChart from './production/ProductionTrendChart';
 import ProductionByProductAndShift from './production/ProductionByProductAndShift';
 import ProductionDowntimeSection from './production/ProductionDowntimeSection';
+import './production/production-filters.css';
 
 /**
  * Deterministic date-range resolution helper for Production Analytics.
@@ -173,15 +173,44 @@ export default function ProductionAnalytics() {
     setSelectedDate('');
   };
 
-  const handleClearIncompatibleFilters = () => {
-    setSelectedLine(null);
-    setSelectedProduct(null);
-    setSelectedShift(null);
-  };
+  // Derive Final Assembly (finished phones) performance totals
+  const falTotals = useMemo(() => {
+    const falLines = (byLine || []).filter(
+      (l) => l.line_type?.toUpperCase().includes('ASSEMBLY') || l.line_id?.startsWith('FAL')
+    );
+    const activeLines = selectedLine
+      ? falLines.filter((l) => l.line_id === selectedLine)
+      : falLines;
+
+    const actualQty = activeLines.reduce((sum, l) => sum + (Number(l.actual_qty) || 0), 0);
+    const goodQty = activeLines.reduce((sum, l) => sum + (Number(l.good_qty) || 0), 0);
+    const rejectQty = activeLines.reduce((sum, l) => sum + (Number(l.reject_qty) || 0), 0);
+    const downtimeMin = activeLines.reduce((sum, l) => sum + (Number(l.downtime_min) || 0), 0);
+
+    const ctx = factoryEnergy?.production_quality_context;
+    const isSmtSelected = selectedLine && !selectedLine.startsWith('FAL');
+
+    const finalActual = !isSmtSelected && actualQty > 0 ? actualQty : (ctx?.actual_qty ?? null);
+    const finalGood = !isSmtSelected && goodQty > 0 ? goodQty : (ctx?.good_qty ?? null);
+    const finalReject = !isSmtSelected && rejectQty > 0 ? rejectQty : (ctx?.reject_qty ?? null);
+    const finalDowntime = !isSmtSelected && downtimeMin > 0 ? downtimeMin : (ctx?.downtime_minutes ?? null);
+    const finalYield = finalActual && finalGood ? (finalGood / finalActual) * 100 : (ctx?.yield_percentage ?? null);
+    const finalRejectRate = finalActual && finalReject ? (finalReject / finalActual) * 100 : (ctx?.reject_rate_percentage ?? null);
+
+    return {
+      actualQty: finalActual,
+      goodQty: finalGood,
+      rejectQty: finalReject,
+      downtimeMin: finalDowntime,
+      yieldPct: finalYield,
+      rejectPct: finalRejectRate,
+      isSmtSelected,
+    };
+  }, [byLine, selectedLine, factoryEnergy]);
 
   return (
     <div className="dashboard-container">
-      {/* 1. Compact Modern Filter Toolbar */}
+      {/* Filters Toolbar */}
       <ProductionPageHeader
         selectedPlant={selectedPlant}
         onSelectPlant={setSelectedPlant}
@@ -234,7 +263,7 @@ export default function ProductionAnalytics() {
               backgroundColor: 'rgba(245, 158, 11, 0.12)',
               border: '1px solid rgba(245, 158, 11, 0.3)',
               borderRadius: 'var(--radius-md)',
-              marginBottom: '1.25rem',
+              marginBottom: '0.75rem',
               color: 'var(--text-primary)',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
@@ -270,42 +299,35 @@ export default function ProductionAnalytics() {
             </div>
           )}
 
-          {/* Section 1: Exactly 4 Primary KPI Cards + Secondary Metrics Strip */}
+          {/* Section 1: Final Assembly performance (Leads with finished production) */}
           <ProductionKpis
+            falData={falTotals}
+            factoryEnergy={factoryEnergy}
             summary={productionSummary}
-            summaryAvailable={!unavailableFeeds.includes('Production summary')}
-            dailyTrend={dailyTrend}
-          />
-
-          {/* Section 2: Main Production Trend - Daily Actual, Good & Rejected Output */}
-          <ProductionTrendChart
-            dailyTrend={dailyTrend}
-            dataAvailable={!unavailableFeeds.includes('Daily production trend')}
-            selectedPlant={selectedPlant}
             selectedLine={selectedLine}
+            summaryAvailable={!unavailableFeeds.includes('Production summary')}
           />
 
-          {/* Section 3: Production Quality & Mathematical Balance (Actual = Good + Rejected) */}
+          {/* Section 2: Production count check (All production stages mathematical balance) */}
           <ProductionQualitySection
             summary={productionSummary}
-          />
-
-          {/* Section 3B: Energy Intensity & Production Quality Trade-offs */}
-          <ProductionEnergyTradeoffSection
-            factoryEnergy={factoryEnergy}
-            loading={loading}
             selectedLine={selectedLine}
-            selectedProduct={selectedProduct}
-            selectedShift={selectedShift}
-            onClearFilters={handleClearIncompatibleFilters}
           />
 
-          {/* Section 4: Production Line Performance & Comparison */}
+          {/* Section 3: Production line performance (Full-width table grouped by FAL and SMT, Table/Chart toggle) */}
           <ProductionByLine
             byLine={byLine}
             dataAvailable={!unavailableFeeds.includes('Production by line')}
             selectedLine={selectedLine}
             onSelectLine={setSelectedLine}
+          />
+
+          {/* Section 4: Main Production Trend - Daily Actual, Good & Rejected Output */}
+          <ProductionTrendChart
+            dailyTrend={dailyTrend}
+            dataAvailable={!unavailableFeeds.includes('Daily production trend')}
+            selectedPlant={selectedPlant}
+            selectedLine={selectedLine}
           />
 
           {/* Section 5: Product SKU & Shift Breakdown */}

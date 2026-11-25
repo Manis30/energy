@@ -37,27 +37,37 @@
 }
 
 .energy-filter-item.plant-item {
-  flex: 2 1 240px;
-  min-width: 170px;
-  max-width: 320px;
+  flex: 1.8 1 200px;
+  min-width: 145px;
+  max-width: 270px;
 }
 
 .energy-filter-item.month-item {
-  flex: 1.2 1 180px;
-  min-width: 150px;
-  max-width: 220px;
+  flex: 1.2 1 160px;
+  min-width: 135px;
+  max-width: 200px;
 }
 
 .energy-filter-item.date-item {
-  flex: 1.2 1 190px;
-  min-width: 155px;
-  max-width: 240px;
+  flex: 1.2 1 160px;
+  min-width: 135px;
+  max-width: 200px;
+}
+
+.energy-filter-item.shift-item {
+  flex: 1.1 1 145px;
+  min-width: 130px;
+  max-width: 190px;
 }
 
 .energy-filter-item.clear-item {
   flex: 0 0 auto;
-  min-width: 115px;
+  min-width: 110px;
   margin-left: auto;
+}
+
+.energy-dropdown-popover.shift-popover {
+  min-width: 235px;
 }
 
 /* When a popover is open, elevate stacking context */
@@ -492,7 +502,7 @@
    Responsive Breakpoints
    ========================================================================== */
 
-@media (max-width: 860px) {
+@media (max-width: 940px) {
   .energy-filter-toolbar {
     flex-wrap: wrap;
     min-height: auto;
@@ -503,7 +513,8 @@
 
   .energy-filter-item.plant-item,
   .energy-filter-item.month-item,
-  .energy-filter-item.date-item {
+  .energy-filter-item.date-item,
+  .energy-filter-item.shift-item {
     flex: 1 1 calc(50% - 0.3rem);
     max-width: none;
   }
@@ -517,7 +528,8 @@
 @media (max-width: 520px) {
   .energy-filter-item.plant-item,
   .energy-filter-item.month-item,
-  .energy-filter-item.date-item {
+  .energy-filter-item.date-item,
+  .energy-filter-item.shift-item {
     flex: 1 1 100%;
     min-width: 0;
   }

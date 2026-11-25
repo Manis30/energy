@@ -18,6 +18,13 @@ import EnergyPerformanceExceptions from './energy/EnergyPerformanceExceptions';
 import EnergyPerformanceComparison from './energy/EnergyPerformanceComparison';
 import TariffWhatIfAnalysis from './energy/TariffWhatIfAnalysis';
 
+const STANDARD_SHIFTS = [
+  { value: 'ALL', label: 'All shifts', shortLabel: 'All shifts' },
+  { value: 'A', label: 'Shift A (Morning • 06:00 – 14:00)', shortLabel: 'Shift A' },
+  { value: 'B', label: 'Shift B (Evening • 14:00 – 22:00)', shortLabel: 'Shift B' },
+  { value: 'C', label: 'Shift C (Night • 22:00 – 06:00)', shortLabel: 'Shift C' },
+];
+
 /**
  * Deterministic date-range resolution helper for Energy Analytics.
  * Supports specific date selection or full-month aggregated views.
@@ -64,7 +71,9 @@ export default function EnergyAnalytics() {
     return 2026;
   });
   const [selectedDate, setSelectedDate] = useState(urlDate || '');
+  const [selectedShift, setSelectedShift] = useState('ALL');
   const [targetLine, setTargetLine] = useState(urlLine || null);
+  const [noShiftReadings, setNoShiftReadings] = useState(false);
 
   // Collapsible toggle for deep-dive engineering sections
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -90,6 +99,19 @@ export default function EnergyAnalytics() {
     return resolveEnergyDateRange(selectedYear, selectedMonth, selectedDate);
   }, [selectedYear, selectedMonth, selectedDate]);
 
+  // Configured shifts for plant & period (defaults to 'ALL', reuses standard A/B/C calendar)
+  const availableShifts = useMemo(() => {
+    return STANDARD_SHIFTS;
+  }, [selectedPlant, selectedMonth, selectedYear, selectedDate]);
+
+  // If a plant or date change makes the selected shift unavailable, reset to "ALL"
+  useEffect(() => {
+    const validShiftValues = availableShifts.map((s) => s.value);
+    if (selectedShift !== 'ALL' && !validShiftValues.includes(selectedShift)) {
+      setSelectedShift('ALL');
+    }
+  }, [availableShifts, selectedShift]);
+
   // Telemetry coverage check (Database holds Aug 1 – Oct 31, 2026)
   const isDataOutOfCoverage = useMemo(() => {
     if (!resolvedDateRange?.startDate || !resolvedDateRange?.endDate) return false;
@@ -110,6 +132,7 @@ export default function EnergyAnalytics() {
       ...(selectedPlant ? { plant_id: selectedPlant } : {}),
       ...(resolvedDateRange?.startDate ? { start_date: resolvedDateRange.startDate } : {}),
       ...(resolvedDateRange?.endDate ? { end_date: resolvedDateRange.endDate } : {}),
+      ...(selectedShift && selectedShift !== 'ALL' ? { shift_id: selectedShift } : {}),
     };
 
     try {
@@ -143,16 +166,33 @@ export default function EnergyAnalytics() {
       };
       setApiAvailability(availability);
 
-      setEnergySummary(summaryRes.status === 'fulfilled' ? summaryRes.value : null);
-      setDailyTrend(trendRes.status === 'fulfilled' ? trendRes.value || [] : []);
-      setProductionDailyTrend(
-        productionTrendRes.status === 'fulfilled' && Array.isArray(productionTrendRes.value)
-          ? productionTrendRes.value
-          : []
-      );
-      setByMeter(meterRes.status === 'fulfilled' ? meterRes.value || [] : []);
-      setByArea(areaRes.status === 'fulfilled' ? areaRes.value || [] : []);
-      setPowerFactorData(pfRes.status === 'fulfilled' ? pfRes.value : null);
+      const summary = summaryRes.status === 'fulfilled' ? summaryRes.value : null;
+      const totalReadings = summary ? Number(summary.total_readings || 0) : 0;
+      const isShiftFilterActive = Boolean(selectedShift && selectedShift !== 'ALL');
+      const isNoReadingsForShift = isShiftFilterActive && totalReadings === 0;
+
+      setNoShiftReadings(isNoReadingsForShift);
+
+      if (isNoReadingsForShift) {
+        // Clear previous results when no readings match the selected shift
+        setEnergySummary(null);
+        setDailyTrend([]);
+        setProductionDailyTrend([]);
+        setByMeter([]);
+        setByArea([]);
+        setPowerFactorData(null);
+      } else {
+        setEnergySummary(summary);
+        setDailyTrend(trendRes.status === 'fulfilled' ? trendRes.value || [] : []);
+        setProductionDailyTrend(
+          productionTrendRes.status === 'fulfilled' && Array.isArray(productionTrendRes.value)
+            ? productionTrendRes.value
+            : []
+        );
+        setByMeter(meterRes.status === 'fulfilled' ? meterRes.value || [] : []);
+        setByArea(areaRes.status === 'fulfilled' ? areaRes.value || [] : []);
+        setPowerFactorData(pfRes.status === 'fulfilled' ? pfRes.value : null);
+      }
 
       if (summaryRes.status === 'rejected') {
         throw new Error(summaryRes.reason?.message || 'Failed to retrieve energy summary.');
@@ -169,7 +209,7 @@ export default function EnergyAnalytics() {
         setRefreshing(false);
       }
     }
-  }, [selectedPlant, resolvedDateRange]);
+  }, [selectedPlant, resolvedDateRange, selectedShift]);
 
   useEffect(() => {
     loadEnergyData(false);
@@ -184,6 +224,8 @@ export default function EnergyAnalytics() {
     setSelectedMonth(10);
     setSelectedYear(2026);
     setSelectedDate('');
+    setSelectedShift('ALL');
+    setNoShiftReadings(false);
   };
 
   // Convert resolved date bounds into standard range format
@@ -193,7 +235,7 @@ export default function EnergyAnalytics() {
 
   return (
     <div className="dashboard-container">
-      {/* 1. Compact Modern Filter Toolbar: Plant | Month | Date | Clear Filters */}
+      {/* 1. Compact Modern Filter Toolbar: Plant | Month | Date | Shift | Clear Filters */}
       <EnergyPageHeader
         selectedPlant={selectedPlant}
         onSelectPlant={setSelectedPlant}
@@ -203,6 +245,9 @@ export default function EnergyAnalytics() {
         onSelectedYearChange={setSelectedYear}
         selectedDate={selectedDate}
         onSelectDate={setSelectedDate}
+        selectedShift={selectedShift}
+        onSelectShift={setSelectedShift}
+        availableShifts={availableShifts}
         onResetFilters={handleResetFilters}
       />
 
@@ -264,6 +309,41 @@ export default function EnergyAnalytics() {
             </div>
           )}
 
+          {/* No Readings for Selected Shift Warning */}
+          {noShiftReadings && (
+            <div className="coverage-notice-banner empty-shift-banner" role="status" style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '1rem',
+              padding: '0.85rem 1.15rem',
+              backgroundColor: 'rgba(239, 68, 68, 0.08)',
+              border: '1px solid rgba(239, 68, 68, 0.25)',
+              borderRadius: 'var(--radius-md)',
+              marginBottom: '1.25rem',
+              color: 'var(--text-primary)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.2">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                </svg>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#dc2626' }}>
+                  No energy readings for this shift
+                </span>
+              </div>
+              <button
+                type="button"
+                className="filter-reset-btn"
+                onClick={() => setSelectedShift('ALL')}
+                style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+              >
+                Reset to All Shifts
+              </button>
+            </div>
+          )}
+
           {/* Feed Offline Notice */}
           {Object.entries(apiAvailability).some(([, status]) => !status.available) && (
             <div className="data-integrity-notice-box" role="status">
@@ -288,6 +368,7 @@ export default function EnergyAnalytics() {
             summaryAvailable={apiAvailability['Energy summary']?.available === true}
             pfAvailable={apiAvailability['Power factor summary']?.available === true}
             dailyTrendAvailable={apiAvailability['Daily trend']?.available === true}
+            selectedShift={selectedShift}
           />
 
           {/* Section 2: Core Visualization A - Daily Energy Consumption Trend */}
@@ -296,12 +377,14 @@ export default function EnergyAnalytics() {
             dataAvailable={apiAvailability['Daily trend']?.available === true}
             dateRange={dateRangeForSections}
             selectedPlant={selectedPlant}
+            selectedShift={selectedShift}
           />
 
           {/* Section 2B: Energy Intensity Trends per Good Finished Unit (kWh, INR, kg CO2e) */}
           <EnergyIntensityTrendsSection
             selectedPlant={selectedPlant}
             dateRange={dateRangeForSections}
+            selectedShift={selectedShift}
           />
 
           {/* Section 2C: Operating Context & Line Stoppage Analysis */}
@@ -310,18 +393,21 @@ export default function EnergyAnalytics() {
             dateRange={dateRangeForSections}
             initialLineId={targetLine}
             initialEpisodeId={urlEpisodeId}
+            selectedShift={selectedShift}
           />
 
           {/* Section 3: Core Visualization B - Energy Consumption by Submeter */}
           <EnergyMeterBreakdown
             byMeter={byMeter}
             dataAvailable={apiAvailability['Energy by meter']?.available === true}
+            selectedShift={selectedShift}
           />
 
           {/* Section 4: Core Visualization C - Energy Consumption by Functional Area */}
           <EnergyAreaDistribution
             byArea={byArea}
             dataAvailable={apiAvailability['Energy by area']?.available === true}
+            selectedShift={selectedShift}
           />
 
           {/* Section 5: Core Visualization D - Power Factor Monitoring & Compliance */}
@@ -330,6 +416,7 @@ export default function EnergyAnalytics() {
             byMeter={byMeter}
             dataAvailable={apiAvailability['Power factor summary']?.available === true}
             meterDataAvailable={apiAvailability['Energy by meter']?.available === true}
+            selectedShift={selectedShift}
           />
 
           {/* Section 6: Collapsible Detailed Engineering Analytics & Technical Records */}
@@ -398,6 +485,7 @@ export default function EnergyAnalytics() {
                   summaryAvailable={apiAvailability['Energy summary']?.available === true}
                   dateRange={dateRangeForSections}
                   selectedPlant={selectedPlant}
+                  selectedShift={selectedShift}
                 />
 
                 {/* 5. Period-over-Period Performance Comparison */}

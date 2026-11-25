@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { formatDateTime } from '../../utils/formatters';
 
 /**
  * Connector-specific field definitions and metadata for enterprise connectors.
@@ -290,6 +291,53 @@ export default function ConnectorModal({ connector, onClose }) {
             <span>
               <strong>Enterprise Roadmap Specification:</strong> This integration is scheduled for future multi-plant deployments. Operational factory data is currently ingested via the Manual File Intake (CSV/Excel) path into PostgreSQL.
             </span>
+          </div>
+        )}
+
+        {/* Overview & Architecture Details */}
+        <div className="connector-modal-section">
+          <h3 className="connector-modal-section-title">Overview &amp; Architecture</h3>
+          <p className="connector-modal-desc">{connector.desc}</p>
+          {connector.capability && (
+            <div className="connector-modal-capability-tag">
+              <strong>Capability Scope:</strong> {connector.capability}
+            </div>
+          )}
+        </div>
+
+        {/* Telemetry Status & Timestamps */}
+        <div className="connector-modal-section">
+          <h3 className="connector-modal-section-title">Telemetry &amp; Ingestion Status</h3>
+          <div className="connector-modal-timestamps-grid">
+            <div className="modal-timestamp-card">
+              <span className="timestamp-title">Last Connectivity Check</span>
+              <span className="timestamp-data">
+                {connector.lastCheck ? formatDateTime(connector.lastCheck) : 'Unavailable'}
+              </span>
+            </div>
+            <div className="modal-timestamp-card">
+              <span className="timestamp-title">Last Successful Ingestion</span>
+              <span className={`timestamp-data ${connector.lastIngest ? 'active' : ''}`}>
+                {connector.lastIngest ? formatDateTime(connector.lastIngest) : 'Unavailable'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Protocol Feeds & Subscribed Events */}
+        {connector.events && connector.events.length > 0 && (
+          <div className="connector-modal-section">
+            <h3 className="connector-modal-section-title">
+              {connector.eventsText || 'Protocols & Event Subscriptions'} ({connector.events.length})
+            </h3>
+            <div className="connector-modal-events-grid">
+              {connector.events.map((evt) => (
+                <div key={evt.id} className="connector-modal-event-item">
+                  <span className="modal-event-name">{evt.name}</span>
+                  <span className="modal-event-desc">{evt.desc}</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

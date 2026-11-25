@@ -26,7 +26,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import and_, desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -135,6 +135,22 @@ def list_recommendations(
     """
     stmt = select(OperationalRecommendation).options(
         selectinload(OperationalRecommendation.actions)
+    )
+
+    # Exclude test fixtures from operational recommendations
+    stmt = stmt.where(
+        and_(
+            ~OperationalRecommendation.recommendation_id.like("REC-CONCUR-%"),
+            ~OperationalRecommendation.recommendation_id.like("REC-DISM-%"),
+            ~OperationalRecommendation.recommendation_id.like("REC-ATOMIC-%"),
+            ~OperationalRecommendation.recommendation_id.like("REC-ACTLIFECYCLE-%"),
+            ~OperationalRecommendation.recommendation_id.like("REC-TEST-%"),
+            ~OperationalRecommendation.finding_id.like("FND-CONCUR-%"),
+            ~OperationalRecommendation.finding_id.like("FND-DISM-%"),
+            ~OperationalRecommendation.finding_id.like("FND-ATOMIC-%"),
+            ~OperationalRecommendation.finding_id.like("FND-ACTLIFECYCLE-%"),
+            ~OperationalRecommendation.finding_id.like("FND-TEST-%"),
+        )
     )
 
     if plant_id:
@@ -604,7 +620,7 @@ def generate_recommendations_from_finding(
         target_category = "POWER_FACTOR_CORRECTION"
         rec_priority = "HIGH" if finding.severity in ("CRITICAL", "HIGH") else "MEDIUM"
         assigned_team = "Facilities"
-        title = f"Inspect Capacitor Bank and Power Factor Correction on {entity_str}"
+        title = f"Check power factor correction on {finding.meter_id or 'MTR-SMT'}"
         observed_cond = (
             f"Plant {finding.plant_id}, meter {finding.meter_id or 'main'}: measured power factor of "
             f"{finding.current_actual_value or 'unavailable'} fell below the engineering monitoring benchmark "
@@ -903,7 +919,7 @@ def generate_recommendations_from_finding(
         finding_id=finding.finding_id,
         occurrence_id=latest_occ.occurrence_id if latest_occ else None,
         pinned_evidence_json=pinned_json,
-        affected_equipment=finding.line_id or finding.meter_id,
+        affected_equipment=finding.line_id,
         measurement_meter_id=finding.meter_id,
         shared_meter_limitation=limitation_note,
         responsible_team=assigned_team,
@@ -976,6 +992,19 @@ def list_corrective_actions(
     """
     stmt = select(CorrectiveAction).options(
         selectinload(CorrectiveAction.audit_logs)
+    )
+
+    # Exclude test fixtures from operational corrective actions
+    stmt = stmt.where(
+        and_(
+            ~CorrectiveAction.action_id.like("ACT-TEST-%"),
+            ~CorrectiveAction.action_id.like("ACT-ACTLIFECYCLE-%"),
+            ~CorrectiveAction.recommendation_id.like("REC-CONCUR-%"),
+            ~CorrectiveAction.recommendation_id.like("REC-DISM-%"),
+            ~CorrectiveAction.recommendation_id.like("REC-ATOMIC-%"),
+            ~CorrectiveAction.recommendation_id.like("REC-ACTLIFECYCLE-%"),
+            ~CorrectiveAction.recommendation_id.like("REC-TEST-%"),
+        )
     )
 
     if recommendation_id:
@@ -1346,8 +1375,8 @@ def draft_trial_plan_from_recommendation(
         ).scalars().first()
 
     plant_id = rec.plant_id or (finding.plant_id if finding else "IN-TN-01")
-    line_id = (finding.line_id if finding else None) or "FAL-L2"
-    meter_id = (finding.meter_id if finding else None) or "MTR-FAL-01"
+    line_id = finding.line_id if finding else None
+    meter_id = (finding.meter_id if finding else None) or "MTR-SMT"
 
     if not target_equipment and finding:
         target_equipment = getattr(finding, "machine_id", None) or getattr(finding, "equipment_id", None)
@@ -1493,7 +1522,7 @@ def draft_trial_plan_from_recommendation(
         intended_change=intended_change,
         implementation_owner="Shift Production Lead",
         plant_id=plant_id,
-        process_or_line=line_id,
+        process_or_line=line_id or "PLANT_WIDE",
         eligible_meters=[meter_id],
         production_denominator="Good finished units",
         production_unit="units",

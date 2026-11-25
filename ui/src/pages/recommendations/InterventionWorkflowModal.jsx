@@ -28,6 +28,15 @@ const REGISTERED_PLANT_LINES = {
   'IN-KA-01': ['SMT-L2', 'FAL-L2'],
 };
 
+const VALID_SCOPE_NAMES = {
+  PLANT_WIDE: 'Plant-Wide Scope',
+  FACTORY: 'Plant-Wide Scope',
+  PLANT: 'Plant-Wide Scope',
+  ALL: 'Plant-Wide Scope',
+  SHARED_UTILITY: 'Shared Utility Scope',
+  UNKNOWN_ALLOCATION: 'Shared Utility Scope',
+};
+
 function getResolvedLineDisplay(plantId, equipment) {
   if (!equipment) return 'Line unassigned';
   const clean = String(equipment).trim();
@@ -35,9 +44,25 @@ function getResolvedLineDisplay(plantId, equipment) {
   if (validLines.includes(clean)) {
     return clean;
   }
-  if (clean.toUpperCase() === 'SMT') return validLines.find((l) => l.startsWith('SMT')) || 'Line unassigned';
-  if (clean.toUpperCase() === 'FAL') return validLines.find((l) => l.startsWith('FAL')) || 'Line unassigned';
+  if (VALID_SCOPE_NAMES[clean.toUpperCase()]) {
+    return VALID_SCOPE_NAMES[clean.toUpperCase()];
+  }
   return 'Line unassigned';
+}
+
+function isValidProductionLine(plantId, line) {
+  if (!line) return false;
+  const validLines = REGISTERED_PLANT_LINES[plantId] || ['SMT-L1', 'FAL-L1', 'SMT-L2', 'FAL-L2'];
+  return validLines.includes(String(line).trim());
+}
+
+function isValidMeasurementBoundary(plantId, processOrLine) {
+  if (!processOrLine) return false;
+  const clean = String(processOrLine).trim().toUpperCase();
+  const validLines = (REGISTERED_PLANT_LINES[plantId] || ['SMT-L1', 'FAL-L1', 'SMT-L2', 'FAL-L2']).map((l) => l.toUpperCase());
+  if (validLines.includes(clean)) return true;
+  const validScopes = ['PLANT_WIDE', 'FACTORY', 'PLANT', 'ALL', 'SHARED_UTILITY', 'UNKNOWN_ALLOCATION'];
+  return validScopes.includes(clean);
 }
 
 /**
@@ -111,6 +136,22 @@ export default function InterventionWorkflowModal({
 
   const [successCriterion, setSuccessCriterion] = useState('Cost intensity reduction >= 3.0% with good output >= 500 units');
   const [isRetrospective, setIsRetrospective] = useState(false);
+
+  // Measurement Boundary Scope State
+  const [boundaryChoice, setBoundaryChoice] = useState(() => {
+    const plant = action?.plant_id || 'IN-TN-01';
+    const eq = action?.affected_equipment;
+    if (eq && isValidProductionLine(plant, eq)) return 'LINE_SPECIFIC';
+    return 'SHARED_UTILITY';
+  });
+  const [selectedLine, setSelectedLine] = useState(() => {
+    const plant = action?.plant_id || 'IN-TN-01';
+    const eq = action?.affected_equipment;
+    if (eq && isValidProductionLine(plant, eq)) return eq;
+    return REGISTERED_PLANT_LINES[plant]?.[0] || 'SMT-L1';
+  });
+  const [isAmendingPlan, setIsAmendingPlan] = useState(false);
+  const [amendmentReason, setAmendmentReason] = useState('Amend measurement boundary and align evaluation window');
 
   // Sign-Off Form state
   const [signOffDecision, setSignOffDecision] = useState('APPROVED_VERIFIED');
@@ -294,6 +335,18 @@ export default function InterventionWorkflowModal({
           if (p) {
             setIntendedChange(p.intended_change || action.description || '');
             setPlanOwner(p.implementation_owner || action.owner || '');
+            if (p.process_or_line) {
+              if (isValidProductionLine(action.plant_id, p.process_or_line)) {
+                setBoundaryChoice('LINE_SPECIFIC');
+                setSelectedLine(p.process_or_line);
+              } else if (['PLANT_WIDE', 'FACTORY', 'PLANT', 'ALL'].includes(p.process_or_line.toUpperCase())) {
+                setBoundaryChoice('PLANT_WIDE');
+              } else if (['SHARED_UTILITY', 'UNKNOWN_ALLOCATION'].includes(p.process_or_line.toUpperCase())) {
+                setBoundaryChoice('SHARED_UTILITY');
+              } else {
+                setBoundaryChoice('');
+              }
+            }
             if (p.comparison_method) setComparisonMethod(p.comparison_method);
             if (p.min_coverage_pct) setMinCoveragePct(p.min_coverage_pct);
             if (p.guardrail_output_min !== undefined && p.guardrail_output_min !== null) setGuardrailOutputMin(p.guardrail_output_min);
@@ -323,8 +376,14 @@ export default function InterventionWorkflowModal({
 
         if (action.implemented_at) {
           try {
-            const asm = await recommendationsApi.getAssessment(action.action_id);
-            setAssessment(asm);
+            // Only query assessment if plan boundary is valid to avoid known invalid line 400s
+            const p = await recommendationsApi.getMeasurementPlan(action.action_id).catch(() => null);
+            if (p && isValidMeasurementBoundary(action.plant_id, p.process_or_line)) {
+              const asm = await recommendationsApi.getAssessment(action.action_id);
+              setAssessment(asm);
+            } else {
+              setAssessment(null);
+            }
           } catch {
             setAssessment(null);
           }
@@ -353,12 +412,22 @@ export default function InterventionWorkflowModal({
 
   if (!isOpen || !action) return null;
 
+  // Boundary validity and date conflict checks
+  const isBoundaryValid = Boolean(plan && isValidMeasurementBoundary(action.plant_id, plan.process_or_line));
+  const isDateConflict = Boolean(
+    plan?.post_end && (
+      action.implemented_at
+        ? new Date(action.implemented_at) > new Date(plan.post_end)
+        : (implementedAt && new Date(implementedAt) > new Date(plan.post_end))
+    )
+  );
+
   // Step indices
   const currentStepIndex = WORKFLOW_STEPS.findIndex((s) => s.key === activeStep);
 
   const handleStepClick = (stepKey) => {
     setError(null);
-    if (stepKey === 'assessment' && action.implemented_at && !assessment) {
+    if (stepKey === 'assessment' && action.implemented_at && !assessment && isBoundaryValid) {
       handleEvaluateAssessment();
     } else {
       setActiveStep(stepKey);
@@ -372,6 +441,10 @@ export default function InterventionWorkflowModal({
   };
 
   const handleNextStep = () => {
+    if (activeStep === 'implement' && !action.implemented_at) {
+      setError('Physical implementation must be recorded and saved before proceeding to Assessment.');
+      return;
+    }
     if (currentStepIndex < WORKFLOW_STEPS.length - 1) {
       handleStepClick(WORKFLOW_STEPS[currentStepIndex + 1].key);
     }
@@ -450,14 +523,44 @@ export default function InterventionWorkflowModal({
       if (downtimeEventId.trim()) payload.downtime_event_id = downtimeEventId.trim();
 
       const updated = await recommendationsApi.recordImplementation(action.action_id, payload);
-      if (onActionUpdated) onActionUpdated(updated);
-      setActiveStep('assessment');
-      handleEvaluateAssessment();
+      if (updated && updated.implemented_at) {
+        if (onActionUpdated) onActionUpdated(updated);
+        setActiveStep('assessment');
+        if (isBoundaryValid) {
+          handleEvaluateAssessment();
+        }
+      } else {
+        setError('Failed to confirm physical implementation from server response.');
+      }
     } catch (err) {
       setError(err.message || 'Failed to record implementation.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const getResolvedBoundaryPayload = (plant) => {
+    if (boundaryChoice === 'LINE_SPECIFIC') {
+      const validLines = REGISTERED_PLANT_LINES[plant] || ['SMT-L1', 'FAL-L1'];
+      const line = validLines.includes(selectedLine) ? selectedLine : validLines[0];
+      return {
+        process_or_line: line,
+        production_denominator: `${line} good finished units`,
+      };
+    }
+    if (boundaryChoice === 'PLANT_WIDE') {
+      return {
+        process_or_line: 'PLANT_WIDE',
+        production_denominator: 'Plant finished goods',
+      };
+    }
+    if (boundaryChoice === 'SHARED_UTILITY') {
+      return {
+        process_or_line: 'SHARED_UTILITY',
+        production_denominator: 'Plant finished goods',
+      };
+    }
+    throw new Error('Please select a valid measurement boundary scope (Production Line, Plant-Wide, or Shared Utility).');
   };
 
   const handleCreatePlanSubmit = async (e) => {
@@ -482,18 +585,17 @@ export default function InterventionWorkflowModal({
       }
 
       const plant = action.plant_id || 'IN-TN-01';
-      const resolvedLine = getResolvedLineDisplay(plant, action.affected_equipment);
-      const linePayload = resolvedLine !== 'Line unassigned' ? resolvedLine : (action.affected_equipment || 'Line unassigned');
-      const meterId = action.measurement_meter_id || action.affected_equipment || 'MTR-COMPRESSOR';
+      const { process_or_line, production_denominator } = getResolvedBoundaryPayload(plant);
+      const meterId = action.measurement_meter_id || 'MTR-SMT';
       const meters = [meterId];
 
       const newPlan = await recommendationsApi.createMeasurementPlan(action.action_id, {
         intended_change: intendedChange,
         implementation_owner: planOwner,
         plant_id: plant,
-        process_or_line: linePayload,
+        process_or_line,
         eligible_meters: meters,
-        production_denominator: resolvedLine !== 'Line unassigned' ? `${resolvedLine} good finished units` : 'Plant finished goods',
+        production_denominator,
         production_unit: 'good units',
         baseline_start: baselineStart.length === 16 ? `${baselineStart}:00` : baselineStart,
         baseline_end: baselineEnd.length === 16 ? `${baselineEnd}:00` : baselineEnd,
@@ -530,6 +632,67 @@ export default function InterventionWorkflowModal({
     }
   };
 
+  const handleAmendPlanSubmit = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!amendmentReason.trim() || amendmentReason.trim().length < 5) {
+      setError('An amendment justification (at least 5 characters) is required.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const plant = action.plant_id || 'IN-TN-01';
+      const { process_or_line, production_denominator } = getResolvedBoundaryPayload(plant);
+      const meterId = action.measurement_meter_id || 'MTR-SMT';
+      const meters = [meterId];
+
+      const amended = await recommendationsApi.amendMeasurementPlan(action.action_id, {
+        amendment_reason: amendmentReason.trim(),
+        author: reviewerName || 'Facilities Engineering Lead',
+        plan_data: {
+          intended_change: intendedChange || plan?.intended_change || action.description || 'Intervention Optimization',
+          implementation_owner: planOwner || plan?.implementation_owner || action.owner || 'Facilities Engineering',
+          plant_id: plant,
+          process_or_line,
+          eligible_meters: meters,
+          production_denominator,
+          production_unit: 'good units',
+          baseline_start: baselineStart.length === 16 ? `${baselineStart}:00` : baselineStart,
+          baseline_end: baselineEnd.length === 16 ? `${baselineEnd}:00` : baselineEnd,
+          post_start: postStart.length === 16 ? `${postStart}:00` : postStart,
+          post_end: postEnd.length === 16 ? `${postEnd}:00` : postEnd,
+          comparison_method: comparisonMethod,
+          min_coverage_pct: Number(minCoveragePct),
+          guardrail_output_min: Number(guardrailOutputMin),
+          guardrail_output_unit: guardrailOutputUnit,
+          guardrail_output_direction: guardrailOutputDirection,
+          guardrail_output_reason: guardrailOutputReason,
+          guardrail_reject_max: Number(guardrailRejectMax),
+          guardrail_reject_unit: guardrailRejectUnit,
+          guardrail_reject_direction: guardrailRejectDirection,
+          guardrail_reject_reason: guardrailRejectReason,
+          guardrail_downtime_max_min: Number(guardrailDowntimeMax),
+          guardrail_downtime_unit: guardrailDowntimeUnit,
+          guardrail_downtime_direction: guardrailDowntimeDirection,
+          guardrail_downtime_reason: guardrailDowntimeReason,
+          guardrail_restart_max_min: Number(guardrailRestartMax),
+          guardrail_restart_unit: guardrailRestartUnit,
+          guardrail_restart_direction: guardrailRestartDirection,
+          guardrail_restart_reason: guardrailRestartReason,
+          success_criterion: successCriterion,
+          is_retrospective: isRetrospective,
+        },
+      });
+      setPlan(amended);
+      setIsAmendingPlan(false);
+      setError(null);
+    } catch (err) {
+      setError(err.message || 'Failed to amend measurement plan.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleApprovePlan = async () => {
     if (!plan) return;
     setLoading(true);
@@ -549,6 +712,14 @@ export default function InterventionWorkflowModal({
   };
 
   const handleEvaluateAssessment = async () => {
+    if (!action.implemented_at) {
+      setError('Cannot evaluate outcome assessment: physical implementation has not been recorded in Step 4.');
+      return;
+    }
+    if (plan && !isValidMeasurementBoundary(action.plant_id, plan.process_or_line)) {
+      setError(`Cannot evaluate outcome assessment: Plan boundary '${plan.process_or_line}' is invalid. Please amend the plan boundary in Step 3.`);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -677,7 +848,10 @@ export default function InterventionWorkflowModal({
         <button
           type="button"
           className="workflow-btn workflow-btn-primary"
-          onClick={handleEvaluateAssessment}
+          onClick={() => {
+            setActiveStep('assessment');
+            if (isBoundaryValid) handleEvaluateAssessment();
+          }}
           disabled={loading}
         >
           {loading ? 'Loading assessment…' : 'Proceed to Assessment →'}
@@ -686,6 +860,31 @@ export default function InterventionWorkflowModal({
     }
 
     if (activeStep === 'assessment') {
+      if (!action.implemented_at) {
+        return (
+          <button
+            type="button"
+            className="workflow-btn workflow-btn-secondary"
+            onClick={() => setActiveStep('implement')}
+          >
+            ← Record implementation in Step 4
+          </button>
+        );
+      }
+      if (!isBoundaryValid) {
+        return (
+          <button
+            type="button"
+            className="workflow-btn workflow-btn-secondary"
+            onClick={() => {
+              setActiveStep('plan');
+              setIsAmendingPlan(true);
+            }}
+          >
+            ← Amend plan boundary in Step 3
+          </button>
+        );
+      }
       if (!assessment) {
         return (
           <button
@@ -757,7 +956,7 @@ export default function InterventionWorkflowModal({
                 <span>Action ID: <span className="workflow-meta-pill">{action.action_id}</span></span>
                 <span>• Plant: <span className="workflow-meta-pill">{action.plant_id || 'N/A'}</span></span>
                 <span>• Line: <span className="workflow-meta-pill">{getResolvedLineDisplay(action.plant_id, action.affected_equipment)}</span></span>
-                <span>• Meter: <span className="workflow-meta-pill">{action.measurement_meter_id || action.affected_equipment || 'MTR-COMPRESSOR'}</span></span>
+                <span>• Meter: <span className="workflow-meta-pill">{action.measurement_meter_id || 'MTR-SMT'}</span></span>
               </div>
             </div>
 
@@ -852,7 +1051,7 @@ export default function InterventionWorkflowModal({
                 </div>
                 <div className="workflow-card">
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Measurement Meter</span>
-                  <div style={{ fontWeight: 650, fontSize: '0.9rem' }}>{action.measurement_meter_id || action.affected_equipment || 'MTR-COMPRESSOR'}</div>
+                  <div style={{ fontWeight: 650, fontSize: '0.9rem' }}>{action.measurement_meter_id || 'MTR-SMT'}</div>
                 </div>
                 <div className="workflow-card">
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Responsible Team</span>
@@ -1071,8 +1270,35 @@ export default function InterventionWorkflowModal({
                 </div>
               </div>
 
-              {plan ? (
+              {plan && !isAmendingPlan ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                  {/* Invalid Boundary Alert if process_or_line is invalid (e.g. MTR-SMT) */}
+                  {!isBoundaryValid && (
+                    <div className="workflow-alert-error" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+                          <circle cx="12" cy="12" r="10" />
+                          <line x1="12" y1="8" x2="12" y2="12" />
+                          <line x1="12" y1="16" x2="12.01" y2="16" />
+                        </svg>
+                        <strong>Invalid Measurement Boundary in Plan Revision {plan.version}</strong>
+                      </div>
+                      <p style={{ margin: 0, fontSize: '0.84rem', lineHeight: 1.45 }}>
+                        Plan Revision {plan.version} specifies <code>'{plan.process_or_line}'</code> as the process boundary. <code>'{plan.process_or_line}'</code> is a meter identifier, not a registered production line or supported plant-wide scope. Deterministic comparison cannot evaluate line output records for a meter.
+                      </p>
+                      <div>
+                        <button
+                          type="button"
+                          className="workflow-btn workflow-btn-primary"
+                          style={{ fontSize: '0.82rem', padding: '0.4rem 0.8rem' }}
+                          onClick={() => setIsAmendingPlan(true)}
+                        >
+                          Amend Measurement Plan (Create Revision {plan.version + 1}) →
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <div>
                       <h4 style={{ margin: 0, fontSize: '0.95rem' }}>
@@ -1083,6 +1309,16 @@ export default function InterventionWorkflowModal({
                         {plan.has_dual_boundary && ' • Dual Boundary (Stoppage + Restart)'}
                       </span>
                     </div>
+                    {plan.is_frozen && (
+                      <button
+                        type="button"
+                        className="workflow-btn workflow-btn-secondary"
+                        style={{ fontSize: '0.76rem', padding: '0.25rem 0.6rem' }}
+                        onClick={() => setIsAmendingPlan(true)}
+                      >
+                        Amend Plan (Revision {plan.version + 1})
+                      </button>
+                    )}
                   </div>
 
                   {plan.has_dual_boundary && (
@@ -1095,7 +1331,13 @@ export default function InterventionWorkflowModal({
                     </div>
                   )}
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
+                    <div className="workflow-card">
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Measurement Boundary</span>
+                      <div style={{ fontWeight: 600, fontSize: '0.85rem', color: isBoundaryValid ? 'inherit' : '#ef4444' }}>
+                        {plan.process_or_line} {!isBoundaryValid && '(Invalid Meter ID)'}
+                      </div>
+                    </div>
                     <div className="workflow-card">
                       <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Baseline Window [start, end)</span>
                       <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{formatDateTime(plan.baseline_start)} to {formatDateTime(plan.baseline_end)}</div>
@@ -1212,11 +1454,91 @@ export default function InterventionWorkflowModal({
                     </div>
                   )}
 
+                  {/* Measurement Boundary Scope Selector */}
+                  <div className="workflow-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.4rem' }}>
+                      <label style={{ fontSize: '0.82rem', fontWeight: 650, color: 'var(--text-primary)' }}>
+                        Measurement Boundary Scope <span style={{ color: '#ef4444' }}>*</span>
+                      </label>
+                      <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                        Select production comparison boundary
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.6rem', marginBottom: '0.75rem' }}>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        className={`workflow-choice-card ${boundaryChoice === 'LINE_SPECIFIC' ? 'approve selected' : ''}`}
+                        onClick={() => setBoundaryChoice('LINE_SPECIFIC')}
+                        style={{ padding: '0.6rem 0.75rem', cursor: 'pointer' }}
+                      >
+                        <div style={{ fontWeight: 650, fontSize: '0.82rem', marginBottom: '0.2rem' }}>
+                          Specific Production Line
+                        </div>
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                          Compare energy against good finished units reported on a specific registered line.
+                        </div>
+                      </div>
+
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        className={`workflow-choice-card ${boundaryChoice === 'PLANT_WIDE' ? 'approve selected' : ''}`}
+                        onClick={() => setBoundaryChoice('PLANT_WIDE')}
+                        style={{ padding: '0.6rem 0.75rem', cursor: 'pointer' }}
+                      >
+                        <div style={{ fontWeight: 650, fontSize: '0.82rem', marginBottom: '0.2rem' }}>
+                          Plant-Wide Scope (PLANT_WIDE)
+                        </div>
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                          Compare energy against total plant finished production volume across all lines.
+                        </div>
+                      </div>
+
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        className={`workflow-choice-card ${boundaryChoice === 'SHARED_UTILITY' ? 'approve selected' : ''}`}
+                        onClick={() => setBoundaryChoice('SHARED_UTILITY')}
+                        style={{ padding: '0.6rem 0.75rem', cursor: 'pointer' }}
+                      >
+                        <div style={{ fontWeight: 650, fontSize: '0.82rem', marginBottom: '0.2rem' }}>
+                          Shared Utility Scope (SHARED_UTILITY)
+                        </div>
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                          Utility-meter scope; evaluates facility electrical consumption against aggregate plant output records.
+                        </div>
+                      </div>
+                    </div>
+
+                    {boundaryChoice === 'LINE_SPECIFIC' && (
+                      <div style={{ marginTop: '0.5rem' }}>
+                        <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.25rem' }}>
+                          Registered Production Line for {action.plant_id || 'IN-TN-01'}:
+                        </label>
+                        <select
+                          value={selectedLine}
+                          onChange={(e) => setSelectedLine(e.target.value)}
+                          style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', fontSize: '0.82rem' }}
+                        >
+                          {(REGISTERED_PLANT_LINES[action.plant_id] || ['SMT-L1', 'FAL-L1']).map((line) => (
+                            <option key={line} value={line}>{line} (Registered Plant Line)</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                      Target Measurement Meter: <strong>{action.measurement_meter_id || 'MTR-SMT'}</strong> (isolated from production line identifier).
+                    </div>
+                  </div>
+
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.5rem', padding: '0.6rem 0.8rem', background: 'var(--bg-surface-elevated)', borderRadius: '6px', fontSize: '0.78rem' }}>
                     <div>Plant: <strong>{action.plant_id || 'N/A'}</strong></div>
-                    <div>Line: <strong>{getResolvedLineDisplay(action.plant_id, action.affected_equipment)}</strong></div>
-                    <div>Meter: <strong>{action.measurement_meter_id || action.affected_equipment || 'MTR-COMPRESSOR'}</strong></div>
-                    <div>Scope: <strong>{getResolvedLineDisplay(action.plant_id, action.affected_equipment) === 'Line unassigned' ? 'Utility-meter scope' : 'Production-line process scope'}</strong></div>
+                    <div>Line: <strong>{boundaryChoice === 'LINE_SPECIFIC' ? selectedLine : (boundaryChoice === 'PLANT_WIDE' ? 'Plant-Wide Scope' : 'Shared Utility Scope')}</strong></div>
+                    <div>Meter: <strong>{action.measurement_meter_id || 'MTR-SMT'}</strong></div>
+                    <div>Scope: <strong>{boundaryChoice === 'LINE_SPECIFIC' ? 'Production-line process scope' : (boundaryChoice === 'PLANT_WIDE' ? 'Plant-wide finished goods' : 'Utility-meter scope')}</strong></div>
                     <div>Owner: <strong>{action.owner || 'Facilities Engineering'}</strong></div>
                   </div>
 
@@ -1360,6 +1682,39 @@ export default function InterventionWorkflowModal({
                       Mark explicitly as <strong>Retrospective analysis</strong> (if post window occurred prior to plan definition)
                     </label>
                   </div>
+
+                  {isAmendingPlan && (
+                    <div className="workflow-card" style={{ marginTop: '0.5rem' }}>
+                      <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.3rem' }}>
+                        Amendment Justification Reason <span style={{ color: '#ef4444' }}>*</span>
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={amendmentReason}
+                        onChange={(e) => setAmendmentReason(e.target.value)}
+                        placeholder="State why the measurement boundary, dates, or guardrails are being amended..."
+                        style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', fontSize: '0.82rem' }}
+                        required
+                      />
+                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem' }}>
+                        <button
+                          type="button"
+                          className="workflow-btn workflow-btn-primary"
+                          onClick={handleAmendPlanSubmit}
+                          disabled={loading}
+                        >
+                          {loading ? 'Saving Amendment…' : `Save Amended Plan (Revision ${(plan?.version || 1) + 1})`}
+                        </button>
+                        <button
+                          type="button"
+                          className="workflow-btn workflow-btn-secondary"
+                          onClick={() => setIsAmendingPlan(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1378,6 +1733,36 @@ export default function InterventionWorkflowModal({
                       <div style={{ gridColumn: '1 / -1' }}><strong>Notes:</strong> {action.implementation_notes || 'None'}</div>
                     </div>
                   </div>
+
+                  {/* Date Conflict Notice for Recorded Action */}
+                  {isDateConflict && (
+                    <div className="workflow-compact-notice warning" style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                          <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                          <line x1="12" y1="9" x2="12" y2="13" />
+                          <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                        <strong>Date Sequence Conflict:</strong>
+                      </div>
+                      <div style={{ fontSize: '0.8rem', lineHeight: 1.45 }}>
+                        The recorded implementation ({formatDateTime(action.implemented_at)}) occurred after the frozen post-intervention window ({formatDateTime(plan?.post_start)} to {formatDateTime(plan?.post_end)}). In prospective M&V, post-intervention telemetry must be observed after physical implementation. Use Step 3 to amend the measurement window or mark as Retrospective analysis.
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          className="workflow-btn workflow-btn-secondary"
+                          style={{ fontSize: '0.74rem', padding: '0.25rem 0.6rem' }}
+                          onClick={() => {
+                            setActiveStep('plan');
+                            setIsAmendingPlan(true);
+                          }}
+                        >
+                          Amend measurement plan in Step 3 →
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {assessment?.work_order_link && (
                     <div className="workflow-card">
@@ -1425,6 +1810,46 @@ export default function InterventionWorkflowModal({
                         style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
                         required
                       />
+
+                      {/* Date Conflict Warning for unrecorded entry */}
+                      {isDateConflict && (
+                        <div className="workflow-compact-notice warning" style={{ marginTop: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                              <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                              <line x1="12" y1="9" x2="12" y2="13" />
+                              <line x1="12" y1="17" x2="12.01" y2="17" />
+                            </svg>
+                            <strong>Date Sequence Conflict:</strong>
+                          </div>
+                          <div style={{ fontSize: '0.78rem', lineHeight: 1.45 }}>
+                            Implementation timestamp ({formatDateTime(implementedAt)}) is after frozen post window ({formatDateTime(plan?.post_start)} to {formatDateTime(plan?.post_end)}).
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.2rem' }}>
+                            {plan?.post_start && (
+                              <button
+                                type="button"
+                                className="workflow-btn workflow-btn-secondary"
+                                style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}
+                                onClick={() => setImplementedAt(plan.post_start.slice(0, 16))}
+                              >
+                                Set to trial execution date ({formatDateTime(plan.post_start)})
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="workflow-btn workflow-btn-secondary"
+                              style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}
+                              onClick={() => {
+                                setActiveStep('plan');
+                                setIsAmendingPlan(true);
+                              }}
+                            >
+                              Amend measurement plan in Step 3 →
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.3rem' }}>Implemented By (Genuine Operator / Team)</label>
@@ -1490,14 +1915,75 @@ export default function InterventionWorkflowModal({
           {activeStep === 'assessment' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
               {!action.implemented_at ? (
-                <div style={{ padding: '2rem 1.5rem', textAlign: 'center', background: 'var(--bg-surface-elevated)', borderRadius: '8px' }}>
-                  <h4 style={{ margin: '0 0 0.5rem', color: '#ef4444' }}>Outcome Assessment Unavailable</h4>
-                  <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                    Physical implementation has not yet been recorded. An implementation timestamp is required before the post-intervention period can be evaluated.
+                <div className="workflow-card" style={{ padding: '2rem 1.5rem', textAlign: 'center', background: 'var(--bg-surface-elevated)', borderRadius: '8px' }}>
+                  <h4 style={{ margin: '0 0 0.5rem', color: '#6b7280' }}>Physical Implementation Pending</h4>
+                  <p style={{ margin: '0 0 1rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                    Physical implementation has not yet been recorded. An implementation timestamp and genuine operator identity are required in Step 4 before evaluating deterministic outcome.
                   </p>
+                  <button
+                    type="button"
+                    className="workflow-btn workflow-btn-primary"
+                    onClick={() => setActiveStep('implement')}
+                  >
+                    ← Record physical implementation in Step 4 to continue
+                  </button>
+                </div>
+              ) : !isBoundaryValid ? (
+                <div className="workflow-alert-error" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
+                    <strong>Invalid Measurement Boundary in Frozen Plan</strong>
+                  </div>
+                  <p style={{ margin: 0, fontSize: '0.84rem' }}>
+                    Frozen Plan Revision {plan?.version} specifies <code>'{plan?.process_or_line}'</code>, which is a meter ID. Deterministic comparison requires a registered production line (e.g. SMT-L1, FAL-L1) or supported plant scope (PLANT_WIDE, SHARED_UTILITY).
+                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      className="workflow-btn workflow-btn-secondary"
+                      onClick={() => {
+                        setActiveStep('plan');
+                        setIsAmendingPlan(true);
+                      }}
+                    >
+                      Amend Measurement Plan in Step 3 →
+                    </button>
+                  </div>
                 </div>
               ) : !assessment ? (
                 <div style={{ textAlign: 'center', padding: '2rem' }}>
+                  {isDateConflict && !plan?.is_retrospective && (
+                    <div className="workflow-compact-notice warning" style={{ textAlign: 'left', marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                          <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                          <line x1="12" y1="9" x2="12" y2="13" />
+                          <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                        <strong>Date Sequence Notice:</strong>
+                      </div>
+                      <div style={{ fontSize: '0.8rem', lineHeight: 1.45 }}>
+                        Implementation occurred on {formatDateTime(action.implemented_at)}, after the post-intervention window ({formatDateTime(plan?.post_end)}). To evaluate this observation window as historical data, mark as Retrospective analysis or amend the post window in Step 3.
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          className="workflow-btn workflow-btn-secondary"
+                          style={{ fontSize: '0.74rem', padding: '0.25rem 0.6rem' }}
+                          onClick={() => {
+                            setActiveStep('plan');
+                            setIsAmendingPlan(true);
+                          }}
+                        >
+                          Amend Plan Window / Retrospective Analysis in Step 3 →
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   <p style={{ marginBottom: '1rem', color: 'var(--text-secondary)', fontSize: '0.88rem' }}>
                     Implementation recorded for {formatDateTime(action.implemented_at)}. Run the deterministic before/after verification model.
                   </p>
@@ -1554,7 +2040,7 @@ export default function InterventionWorkflowModal({
                         Three Authoritative Assessment Answers
                       </span>
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        Assessment ID: <strong>{assessment.assessment_id}</strong> (Rev #{assessment.assessment_revision || 1}) · Boundary: Meter {action.measurement_meter_id || action.affected_equipment || 'MTR-COMPRESSOR'} · Line {getResolvedLineDisplay(action.plant_id, action.affected_equipment)}
+                        Assessment ID: <strong>{assessment.assessment_id}</strong> (Rev #{assessment.assessment_revision || 1}) · Boundary: Meter {action.measurement_meter_id || 'MTR-SMT'} · Line {getResolvedLineDisplay(action.plant_id, action.affected_equipment)}
                       </span>
                     </div>
 

@@ -187,6 +187,7 @@ def read_production_daily_trend(
     plant_id: Optional[str] = Query(None, description="Plant ID filter"),
     start_date: Optional[date] = Query(None, description="Start date filter"),
     end_date: Optional[date] = Query(None, description="End date filter"),
+    shift_id: Optional[str] = Query(None, description="Shift ID filter, e.g. 'Shift A'"),
     db: Session = Depends(get_db_session),
 ) -> List[DailyProductionItem]:
     validate_date_range(start_date, end_date)
@@ -196,6 +197,7 @@ def read_production_daily_trend(
             plant_id=plant_id,
             start_date=start_date,
             end_date=end_date,
+            shift_id=shift_id,
         )
         return [DailyProductionItem(**item) for item in data]
     except Exception as e:

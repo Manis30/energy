@@ -4,11 +4,11 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import DEFAULT_POWER_FACTOR_THRESHOLD
-from app.models.source_data import DatasetFactorAssumption, FactEnergyMeterHourly
+from app.models.source_data import DatasetFactorAssumption, DimShiftCalendar, FactEnergyMeterHourly
 
 
 def _decimal_or_none(value) -> Optional[Decimal]:
@@ -19,15 +19,67 @@ def _round_or_none(value: Optional[Decimal], places: int) -> Optional[Decimal]:
     return round(value, places) if value is not None else None
 
 
-def _apply_energy_filters(query, plant_id: Optional[str] = None, start_date: Optional[date] = None, end_date: Optional[date] = None):
-    """Apply common optional filters for plant and date range to an energy query."""
+def _apply_energy_filters(
+    query,
+    plant_id: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    shift_id: Optional[str] = None,
+):
+    """Apply common optional filters for plant, date range, and shift mapping to an energy query."""
     conditions = []
     if plant_id:
         conditions.append(FactEnergyMeterHourly.plant_id == plant_id)
-    if start_date:
-        conditions.append(FactEnergyMeterHourly.date >= start_date)
-    if end_date:
-        conditions.append(FactEnergyMeterHourly.date <= end_date)
+
+    clean_shift = shift_id.replace("Shift ", "").strip().upper() if shift_id else None
+
+    if clean_shift in ("A", "B", "C"):
+        cal_cond = and_(
+            DimShiftCalendar.shift_id == clean_shift,
+            FactEnergyMeterHourly.timestamp >= DimShiftCalendar.shift_start,
+            FactEnergyMeterHourly.timestamp < DimShiftCalendar.shift_end,
+        )
+        if start_date:
+            cal_cond = and_(cal_cond, DimShiftCalendar.calendar_date >= start_date)
+        if end_date:
+            cal_cond = and_(cal_cond, DimShiftCalendar.calendar_date <= end_date)
+
+        cal_exists = select(1).select_from(DimShiftCalendar).where(cal_cond).exists()
+
+        std_date_cond = []
+        if start_date:
+            std_date_cond.append(FactEnergyMeterHourly.date >= start_date)
+        if end_date:
+            std_date_cond.append(FactEnergyMeterHourly.date <= end_date)
+
+        if clean_shift == "A":
+            std_hour = and_(
+                func.extract("hour", FactEnergyMeterHourly.timestamp) >= 6,
+                func.extract("hour", FactEnergyMeterHourly.timestamp) <= 13,
+            )
+        elif clean_shift == "B":
+            std_hour = and_(
+                func.extract("hour", FactEnergyMeterHourly.timestamp) >= 14,
+                func.extract("hour", FactEnergyMeterHourly.timestamp) <= 21,
+            )
+        else:
+            std_hour = or_(
+                func.extract("hour", FactEnergyMeterHourly.timestamp) >= 22,
+                func.extract("hour", FactEnergyMeterHourly.timestamp) <= 5,
+            )
+
+        conditions.append(
+            or_(
+                cal_exists,
+                and_(*std_date_cond, std_hour) if std_date_cond else std_hour,
+            )
+        )
+    else:
+        if start_date:
+            conditions.append(FactEnergyMeterHourly.date >= start_date)
+        if end_date:
+            conditions.append(FactEnergyMeterHourly.date <= end_date)
+
     if conditions:
         query = query.where(and_(*conditions))
     return query
@@ -38,6 +90,7 @@ def get_energy_summary(
     plant_id: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    shift_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Calculate overall energy consumption, cost, emissions, and peak metrics."""
     weighted_pf_expr = func.sum(FactEnergyMeterHourly.power_factor * FactEnergyMeterHourly.consumption_kwh) / func.nullif(
@@ -53,7 +106,7 @@ def get_energy_summary(
         func.avg(FactEnergyMeterHourly.power_factor),
         func.count(FactEnergyMeterHourly.power_factor),
     )
-    base_q = _apply_energy_filters(base_q, plant_id, start_date, end_date)
+    base_q = _apply_energy_filters(base_q, plant_id, start_date, end_date, shift_id)
     row = session.execute(base_q).fetchone()
 
     total_kwh = _decimal_or_none(row[0]) if row else None
@@ -81,7 +134,7 @@ def get_energy_summary(
     ).where(
         FactEnergyMeterHourly.consumption_kwh.is_not(None)
     ).order_by(FactEnergyMeterHourly.consumption_kwh.desc()).limit(1)
-    peak_q = _apply_energy_filters(peak_q, plant_id, start_date, end_date)
+    peak_q = _apply_energy_filters(peak_q, plant_id, start_date, end_date, shift_id)
     peak_row = session.execute(peak_q).fetchone()
 
     peak_reading = None
@@ -175,10 +228,11 @@ def get_energy_by_meter(
     plant_id: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    shift_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Calculate energy consumption breakdown ranked by meter."""
     # First get total for percentage calculation
-    total_summary = get_energy_summary(session, plant_id, start_date, end_date)
+    total_summary = get_energy_summary(session, plant_id, start_date, end_date, shift_id=shift_id)
     overall_total_kwh = total_summary["total_consumption_kwh"]
 
     weighted_pf_expr = func.sum(FactEnergyMeterHourly.power_factor * FactEnergyMeterHourly.consumption_kwh) / func.nullif(
@@ -201,7 +255,7 @@ def get_energy_by_meter(
         FactEnergyMeterHourly.area,
     ).order_by(func.sum(FactEnergyMeterHourly.consumption_kwh).desc())
 
-    q = _apply_energy_filters(q, plant_id, start_date, end_date)
+    q = _apply_energy_filters(q, plant_id, start_date, end_date, shift_id)
     rows = session.execute(q).fetchall()
 
     results = []
@@ -236,9 +290,10 @@ def get_energy_by_area(
     plant_id: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    shift_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Calculate energy consumption breakdown grouped by factory operational area."""
-    total_summary = get_energy_summary(session, plant_id, start_date, end_date)
+    total_summary = get_energy_summary(session, plant_id, start_date, end_date, shift_id=shift_id)
     overall_total_kwh = total_summary["total_consumption_kwh"]
 
     weighted_pf_expr = func.sum(FactEnergyMeterHourly.power_factor * FactEnergyMeterHourly.consumption_kwh) / func.nullif(
@@ -255,7 +310,7 @@ def get_energy_by_area(
         func.count(FactEnergyMeterHourly.power_factor).label("power_factor_reading_count"),
     ).group_by(FactEnergyMeterHourly.area).order_by(func.sum(FactEnergyMeterHourly.consumption_kwh).desc())
 
-    q = _apply_energy_filters(q, plant_id, start_date, end_date)
+    q = _apply_energy_filters(q, plant_id, start_date, end_date, shift_id)
     rows = session.execute(q).fetchall()
 
     results = []
@@ -287,11 +342,68 @@ def get_energy_daily_trend(
     plant_id: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    shift_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Calculate daily time series of energy consumption, cost, and peak hourly energy consumption."""
     weighted_pf_expr = func.sum(FactEnergyMeterHourly.power_factor * FactEnergyMeterHourly.consumption_kwh) / func.nullif(
         func.sum(FactEnergyMeterHourly.consumption_kwh), Decimal("0")
     )
+
+    clean_shift = shift_id.replace("Shift ", "").strip().upper() if shift_id else None
+    if clean_shift in ("A", "B", "C"):
+        # Match using dim_shift_calendar intervals (including overnight shifts)
+        plant_filters = [FactEnergyMeterHourly.plant_id == plant_id] if plant_id else []
+        cal_date_filters = []
+        if start_date:
+            cal_date_filters.append(DimShiftCalendar.calendar_date >= start_date)
+        if end_date:
+            cal_date_filters.append(DimShiftCalendar.calendar_date <= end_date)
+
+        q = (
+            select(
+                DimShiftCalendar.calendar_date.label("date"),
+                func.sum(FactEnergyMeterHourly.consumption_kwh).label("daily_kwh"),
+                func.sum(FactEnergyMeterHourly.cost_inr).label("daily_cost"),
+                func.sum(FactEnergyMeterHourly.co2e_kg).label("daily_co2e"),
+                func.coalesce(weighted_pf_expr, func.avg(FactEnergyMeterHourly.power_factor)).label("daily_avg_pf"),
+                func.max(FactEnergyMeterHourly.consumption_kwh).label("daily_peak_kwh"),
+                func.count(FactEnergyMeterHourly.meter_reading_id).label("readings"),
+                func.avg(FactEnergyMeterHourly.power_factor).label("daily_arithmetic_pf"),
+                func.count(FactEnergyMeterHourly.power_factor).label("power_factor_readings"),
+            )
+            .select_from(DimShiftCalendar)
+            .join(
+                FactEnergyMeterHourly,
+                and_(
+                    FactEnergyMeterHourly.timestamp >= DimShiftCalendar.shift_start,
+                    FactEnergyMeterHourly.timestamp < DimShiftCalendar.shift_end,
+                    *plant_filters,
+                ),
+            )
+            .where(
+                and_(
+                    DimShiftCalendar.shift_id == clean_shift,
+                    *cal_date_filters,
+                )
+            )
+            .group_by(DimShiftCalendar.calendar_date)
+            .order_by(DimShiftCalendar.calendar_date.asc())
+        )
+        rows = session.execute(q).fetchall()
+        return [
+            {
+                "date": r[0].isoformat(),
+                "consumption_kwh": _decimal_or_none(r[1]),
+                "cost_inr": _decimal_or_none(r[2]),
+                "co2e_kg": _decimal_or_none(r[3]),
+                "avg_power_factor": _round_or_none(_decimal_or_none(r[4]), 4),
+                "arithmetic_avg_power_factor": _round_or_none(_decimal_or_none(r[7]), 4),
+                "power_factor_data_available": int(r[8]) > 0,
+                "peak_hourly_kwh": _decimal_or_none(r[5]),
+                "reading_count": int(r[6]),
+            }
+            for r in rows
+        ]
 
     q = select(
         FactEnergyMeterHourly.date,
@@ -330,6 +442,7 @@ def get_power_factor_summary(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     low_pf_threshold: Decimal = DEFAULT_POWER_FACTOR_THRESHOLD,
+    shift_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Calculate power factor distribution and flag low power factor monitoring events."""
     weighted_pf_expr = func.sum(FactEnergyMeterHourly.power_factor * FactEnergyMeterHourly.consumption_kwh) / func.nullif(
@@ -343,7 +456,7 @@ def get_power_factor_summary(
         func.avg(FactEnergyMeterHourly.power_factor),
         func.count(FactEnergyMeterHourly.power_factor),
     )
-    q_all = _apply_energy_filters(q_all, plant_id, start_date, end_date)
+    q_all = _apply_energy_filters(q_all, plant_id, start_date, end_date, shift_id)
     row_all = session.execute(q_all).fetchone()
 
     total_count = int(row_all[3]) if row_all else 0
@@ -359,7 +472,7 @@ def get_power_factor_summary(
         func.count(FactEnergyMeterHourly.meter_reading_id).label("low_count"),
         func.min(FactEnergyMeterHourly.power_factor).label("min_low_pf"),
     ).where(FactEnergyMeterHourly.power_factor < low_pf_threshold).group_by(FactEnergyMeterHourly.meter_id)
-    q_low = _apply_energy_filters(q_low, plant_id, start_date, end_date)
+    q_low = _apply_energy_filters(q_low, plant_id, start_date, end_date, shift_id)
     low_rows = session.execute(q_low).fetchall()
 
     total_low = sum(int(r[1]) for r in low_rows)

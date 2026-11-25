@@ -201,5 +201,48 @@ export const dailyReportsApi = {
 
     return apiRequest('/daily-reports/verify-ingestion', { params });
   },
+
+  /**
+   * Load saved energy and production records and master data for plant/date.
+   * @param {string} reportingDate - YYYY-MM-DD
+   * @param {string} plantId - e.g. 'IN-TN-01'
+   * @returns {Promise<any>}
+   */
+  async getDailyRecords(reportingDate, plantId = 'IN-TN-01') {
+    return apiRequest('/daily-reports/records', {
+      params: { reporting_date: reportingDate, plant_id: plantId },
+    });
+  },
+
+  /**
+   * Validate manual or pasted energy and production data rows.
+   * @param {object} payload - { reporting_date, plant_id, entry_type, energy_rows, production_rows, mode }
+   * @returns {Promise<any>}
+   */
+  async validateDataEntries(payload) {
+    return apiRequest('/daily-reports/validate-entries', {
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    });
+  },
+
+  /**
+   * Validate and save energy and production data rows to PostgreSQL fact tables.
+   * @param {object} payload - { reporting_date, plant_id, entry_type, energy_rows, production_rows, mode }
+   * @returns {Promise<any>}
+   */
+  async saveDataEntries(payload) {
+    return apiRequest('/daily-reports/save-entries', {
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    });
+  },
 };
+
 

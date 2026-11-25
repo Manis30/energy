@@ -14,6 +14,7 @@ export default function TariffWhatIfAnalysis({
   summaryAvailable = false,
   dateRange,
   selectedPlant,
+  selectedShift = 'ALL',
 }) {
   const [tariffInput, setTariffInput] = useState('');
   const rawTariff = tariffInput.trim();
@@ -93,6 +94,11 @@ export default function TariffWhatIfAnalysis({
           This is a hypothetical scenario only. The entered rate does not change the stored tariff or historical calculations.
           It excludes time-of-use rates, demand charges, taxes, penalties, and fixed charges.
         </p>
+        {selectedShift && selectedShift !== 'ALL' && (
+          <p className="tariff-what-if-disclaimer" style={{ color: '#b45309', fontWeight: 600 }}>
+            Notice: Contractual tariff what-if modeling applies to facility-wide utility billing (available only for all shifts combined).
+          </p>
+        )}
 
         <div className="tariff-what-if-layout">
           <div className="tariff-what-if-input-panel">

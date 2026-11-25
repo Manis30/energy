@@ -344,8 +344,10 @@ def get_production_daily_trend(
     plant_id: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    shift_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Calculate daily time series of production output, targets, and reject rates."""
+    clean_shift = shift_id.replace("Shift ", "").strip().upper() if shift_id else None
     q = select(
         FactHourlyProduction.event_date,
         func.sum(FactHourlyProduction.target_qty).label("target"),
@@ -356,7 +358,7 @@ def get_production_daily_trend(
         func.sum(FactHourlyProduction.downtime_min).label("downtime"),
     ).group_by(FactHourlyProduction.event_date).order_by(FactHourlyProduction.event_date.asc())
 
-    q = _apply_production_filters(q, plant_id=plant_id, start_date=start_date, end_date=end_date)
+    q = _apply_production_filters(q, plant_id=plant_id, shift_id=clean_shift, start_date=start_date, end_date=end_date)
     rows = session.execute(q).fetchall()
 
     results = []

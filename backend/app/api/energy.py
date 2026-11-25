@@ -37,6 +37,7 @@ def read_energy_summary(
     plant_id: Optional[str] = Query(None, description="Plant ID filter, e.g. 'IN-TN-01' or 'IN-KA-01'"),
     start_date: Optional[date] = Query(None, description="Start date filter (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="End date filter (YYYY-MM-DD)"),
+    shift_id: Optional[str] = Query(None, description="Shift ID filter, e.g. 'A', 'B', or 'C'"),
     db: Session = Depends(get_db_session),
 ) -> EnergySummaryResponse:
     validate_date_range(start_date, end_date)
@@ -46,6 +47,7 @@ def read_energy_summary(
             plant_id=plant_id,
             start_date=start_date,
             end_date=end_date,
+            shift_id=shift_id,
         )
         return EnergySummaryResponse(**data)
     except Exception as e:
@@ -65,6 +67,7 @@ def read_energy_by_meter(
     plant_id: Optional[str] = Query(None, description="Plant ID filter"),
     start_date: Optional[date] = Query(None, description="Start date filter"),
     end_date: Optional[date] = Query(None, description="End date filter"),
+    shift_id: Optional[str] = Query(None, description="Shift ID filter, e.g. 'A', 'B', or 'C'"),
     db: Session = Depends(get_db_session),
 ) -> List[MeterEnergyItem]:
     validate_date_range(start_date, end_date)
@@ -74,6 +77,7 @@ def read_energy_by_meter(
             plant_id=plant_id,
             start_date=start_date,
             end_date=end_date,
+            shift_id=shift_id,
         )
         return [MeterEnergyItem(**item) for item in data]
     except Exception as e:
@@ -93,6 +97,7 @@ def read_energy_by_area(
     plant_id: Optional[str] = Query(None, description="Plant ID filter"),
     start_date: Optional[date] = Query(None, description="Start date filter"),
     end_date: Optional[date] = Query(None, description="End date filter"),
+    shift_id: Optional[str] = Query(None, description="Shift ID filter, e.g. 'A', 'B', or 'C'"),
     db: Session = Depends(get_db_session),
 ) -> List[AreaEnergyItem]:
     validate_date_range(start_date, end_date)
@@ -102,6 +107,7 @@ def read_energy_by_area(
             plant_id=plant_id,
             start_date=start_date,
             end_date=end_date,
+            shift_id=shift_id,
         )
         return [AreaEnergyItem(**item) for item in data]
     except Exception as e:
@@ -121,6 +127,7 @@ def read_energy_daily_trend(
     plant_id: Optional[str] = Query(None, description="Plant ID filter"),
     start_date: Optional[date] = Query(None, description="Start date filter (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="End date filter (YYYY-MM-DD)"),
+    shift_id: Optional[str] = Query(None, description="Shift ID filter, e.g. 'A', 'B', or 'C'"),
     db: Session = Depends(get_db_session),
 ) -> List[DailyEnergyItem]:
     validate_date_range(start_date, end_date)
@@ -130,6 +137,7 @@ def read_energy_daily_trend(
             plant_id=plant_id,
             start_date=start_date,
             end_date=end_date,
+            shift_id=shift_id,
         )
         return [DailyEnergyItem(**item) for item in data]
     except Exception as e:
@@ -150,6 +158,7 @@ def read_power_factor_summary(
     start_date: Optional[date] = Query(None, description="Start date filter"),
     end_date: Optional[date] = Query(None, description="End date filter"),
     threshold: Decimal = Query(DEFAULT_POWER_FACTOR_THRESHOLD, ge=Decimal("0.1"), le=Decimal("1.0"), description="Application power factor monitoring threshold (default 0.90)"),
+    shift_id: Optional[str] = Query(None, description="Shift ID filter, e.g. 'A', 'B', or 'C'"),
     db: Session = Depends(get_db_session),
 ) -> PowerFactorSummaryResponse:
     validate_date_range(start_date, end_date)
@@ -160,6 +169,7 @@ def read_power_factor_summary(
             start_date=start_date,
             end_date=end_date,
             low_pf_threshold=threshold,
+            shift_id=shift_id,
         )
         return PowerFactorSummaryResponse(**data)
     except Exception as e:

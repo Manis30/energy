@@ -49,13 +49,59 @@ class TestPostgresIntegrity(unittest.TestCase):
 
     def setUp(self):
         self.session = self.session_factory()
+        self._test_finding_ids = []
 
     def tearDown(self):
-        self.session.rollback()
-        self.session.close()
+        try:
+            self.session.rollback()
+            if self._test_finding_ids:
+                from sqlalchemy import text
+                for f_id in self._test_finding_ids:
+                    # Clean up dependent records in child-to-parent order
+                    self.session.execute(text("""
+                        DELETE FROM action_audit_log WHERE action_id IN (
+                            SELECT action_id FROM corrective_actions WHERE recommendation_id IN (
+                                SELECT recommendation_id FROM operational_recommendations WHERE finding_id = :fid
+                            )
+                        );
+                    """), {"fid": f_id})
+                    self.session.execute(text("""
+                        DELETE FROM corrective_actions WHERE recommendation_id IN (
+                            SELECT recommendation_id FROM operational_recommendations WHERE finding_id = :fid
+                        );
+                    """), {"fid": f_id})
+                    self.session.execute(text("""
+                        DELETE FROM recommendation_audit_log WHERE recommendation_id IN (
+                            SELECT recommendation_id FROM operational_recommendations WHERE finding_id = :fid
+                        );
+                    """), {"fid": f_id})
+                    self.session.execute(text("""
+                        DELETE FROM operational_recommendations WHERE finding_id = :fid;
+                    """), {"fid": f_id})
+                    self.session.execute(text("""
+                        DELETE FROM finding_occurrence_sources WHERE occurrence_id IN (
+                            SELECT occurrence_id FROM finding_occurrences WHERE finding_id = :fid
+                        );
+                    """), {"fid": f_id})
+                    self.session.execute(text("""
+                        DELETE FROM finding_occurrences WHERE finding_id = :fid;
+                    """), {"fid": f_id})
+                    self.session.execute(text("""
+                        DELETE FROM finding_audit_log WHERE finding_id = :fid;
+                    """), {"fid": f_id})
+                    self.session.execute(text("""
+                        DELETE FROM operational_findings WHERE finding_id = :fid;
+                    """), {"fid": f_id})
+                self.session.commit()
+        except Exception:
+            self.session.rollback()
+        finally:
+            self.session.close()
 
     def _create_test_finding(self, finding_id: str, plant_id: str = "IN-TN-01") -> OperationalFinding:
         """Helper to create an isolated operational finding."""
+        if hasattr(self, '_test_finding_ids'):
+            self._test_finding_ids.append(finding_id)
         now = datetime.now()
         finding = OperationalFinding(
             finding_id=finding_id,

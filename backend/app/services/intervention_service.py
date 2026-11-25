@@ -479,6 +479,10 @@ def create_measurement_plan(
 
     plant_id = req.plant_id.strip()
 
+    # Validate measurement boundary scope against plant master data
+    from app.services.intervention_comparison_service import resolve_line_and_process
+    resolve_line_and_process(session, plant_id, req.process_or_line.strip())
+
     # Parse and normalize inputs in the configured plant timezone
     naive_b_start, _ = parse_and_normalize_plant_datetime(req.baseline_start, plant_id, "baseline_start")
     naive_b_end, _ = parse_and_normalize_plant_datetime(req.baseline_end, plant_id, "baseline_end")
@@ -608,7 +612,12 @@ def approve_measurement_plan(
     Derives operational identity from authenticated session; if unavailable,
     marks approval as demo/unauthenticated.
     """
-    stmt = select(InterventionPlan).where(InterventionPlan.plan_id == plan_id)
+    stmt = (
+        select(InterventionPlan)
+        .where(InterventionPlan.plan_id == plan_id)
+        .order_by(desc(InterventionPlan.version))
+        .limit(1)
+    )
     plan = session.execute(stmt).scalar_one_or_none()
     if not plan:
         raise ValueError(f"Measurement plan '{plan_id}' not found.")
@@ -727,6 +736,10 @@ def amend_measurement_plan(
 
     d = req.plan_data
     plant_id = d.plant_id.strip()
+
+    # Validate measurement boundary scope against plant master data
+    from app.services.intervention_comparison_service import resolve_line_and_process
+    resolve_line_and_process(session, plant_id, d.process_or_line.strip())
 
     # Parse and normalize inputs in the configured plant timezone
     naive_b_start, _ = parse_and_normalize_plant_datetime(d.baseline_start, plant_id, "baseline_start")
@@ -862,6 +875,12 @@ def evaluate_and_record_assessment(
     plan = get_measurement_plan_for_action(session, action_id)
     if not plan:
         raise ValueError(f"No measurement plan found for action '{action_id}'.")
+
+    if not action.implemented_at:
+        raise ValueError(
+            f"Cannot evaluate outcome assessment for action '{action_id}'. "
+            f"Actual physical implementation has not been recorded in Step 4."
+        )
 
     # Execute deterministic comparison
     comp = execute_deterministic_comparison(session, plan, action)
@@ -1044,7 +1063,12 @@ def sign_off_assessment(
         raise ValueError("Sign-off decision must be 'APPROVED_VERIFIED', 'REJECTED', or 'REQUEST_REANALYSIS'.")
 
     action = get_corrective_action(session, asm.action_id)
-    plan = session.execute(select(InterventionPlan).where(InterventionPlan.plan_id == asm.plan_id)).scalar_one_or_none()
+    plan = session.execute(
+        select(InterventionPlan)
+        .where(InterventionPlan.plan_id == asm.plan_id)
+        .order_by(desc(InterventionPlan.version))
+        .limit(1)
+    ).scalar_one_or_none()
     now = datetime.utcnow()
 
     # Identity and operational role validation

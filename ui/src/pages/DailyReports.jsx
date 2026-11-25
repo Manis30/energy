@@ -18,10 +18,20 @@ export default function DailyReports() {
   const [plantId, setPlantId] = useState(DEFAULT_PLANT_ID);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
 
+  // Data Entry State: Energy and Production editable rows & master data
+  const [energyRows, setEnergyRows] = useState([]);
+  const [productionRows, setProductionRows] = useState([]);
+  const [masterData, setMasterData] = useState(null);
+  const [savedCounts, setSavedCounts] = useState(null);
+  const [loadingSaved, setLoadingSaved] = useState(true);
+  const [validationResult, setValidationResult] = useState(null);
+  const [savingEntries, setSavingEntries] = useState(false);
+
   // Pipeline execution state from backend
   const [pipelineState, setPipelineState] = useState(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [statusError, setStatusError] = useState(null);
+
 
   // Expanded stage flags
   const [expandedStages, setExpandedStages] = useState({
@@ -50,6 +60,20 @@ export default function DailyReports() {
   // Overlap prevention ref to protect against rapid repeated clicks
   const isCommittingRef = useRef(false);
 
+  // Synchronized active scope refs to prevent race conditions & out-of-order responses
+  const reportingDateRef = useRef(reportingDate);
+  const plantIdRef = useRef(plantId);
+  const statusRequestIdRef = useRef(0);
+  const recordsRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    reportingDateRef.current = reportingDate;
+  }, [reportingDate]);
+
+  useEffect(() => {
+    plantIdRef.current = plantId;
+  }, [plantId]);
+
   // Date mismatch and persistence result states
   const [dateMismatch, setDateMismatch] = useState(null);
   const [lastIngestResult, setLastIngestResult] = useState(null);
@@ -60,6 +84,7 @@ export default function DailyReports() {
 
   // Sync date changes with URL and reset uncommitted file buffers
   const handleDateChange = (newDate) => {
+    reportingDateRef.current = newDate;
     setReportingDate(newDate);
     setSelectedStage('data_upload');
     setEnergyFile(null);
@@ -69,6 +94,8 @@ export default function DailyReports() {
     setDateMismatch(null);
     setLastIngestResult(null);
     setFailedReportType(null);
+    setSavedCounts(null);
+    setLoadingSaved(true);
     setSearchParams({ date: newDate });
   };
 
@@ -77,13 +104,98 @@ export default function DailyReports() {
     handleDateChange(newDate);
   };
 
+  // Switch both Plant and Date (used when Add Readings modal saves for a different plant/date)
+  const handleSwitchPlantAndDate = useCallback((newPlant, newDate) => {
+    let changed = false;
+    if (newDate && newDate !== reportingDateRef.current) {
+      reportingDateRef.current = newDate;
+      setReportingDate(newDate);
+      setSearchParams({ date: newDate });
+      changed = true;
+    }
+    if (newPlant && newPlant !== plantIdRef.current) {
+      plantIdRef.current = newPlant;
+      setPlantId(newPlant);
+      changed = true;
+    }
+    if (changed) {
+      setStatusError(null);
+      setActionSuccessMsg(null);
+      setDateMismatch(null);
+      setSelectedStage('data_upload');
+      setSavedCounts(null);
+      setLoadingSaved(true);
+    }
+  }, [setSearchParams]);
+
+  // Helper to merge authoritative pipeline state safely:
+  // - Enforces matching plant and reporting date
+  // - Prevents older/superseded run IDs from overwriting active current runs
+  // - Prevents partial responses from wiping unreturned stage data
+  // - Treats explicit status from latest authoritative response as valid (including NOT_STARTED)
+  const applyAuthoritativePipelineState = useCallback((incoming, expectedDate, expectedPlant) => {
+    if (!incoming) return;
+
+    const activeDate = reportingDateRef.current;
+    const activePlant = plantIdRef.current;
+
+    // Reject updates for non-matching date or plant
+    if (expectedDate && expectedDate !== activeDate) return;
+    if (expectedPlant && expectedPlant !== activePlant) return;
+    if (incoming.reporting_date && incoming.reporting_date !== activeDate) return;
+    if (incoming.plant_id && incoming.plant_id !== activePlant) return;
+
+    setPipelineState((prev) => {
+      if (!prev) return incoming;
+
+      // Check run ID consistency if available:
+      // Don't let a superseded or non-current run overwrite an active current run
+      const prevRun = prev.pipeline_run;
+      const incomingRun = incoming.pipeline_run;
+      if (
+        prevRun?.run_id &&
+        incomingRun?.run_id &&
+        prevRun.run_id !== incomingRun.run_id &&
+        incomingRun.is_current === false &&
+        prevRun.is_current !== false
+      ) {
+        return prev;
+      }
+
+      // Preserve complete stage map when incoming response has partial stages,
+      // while honoring explicit authoritative stage statuses (including resets to NOT_STARTED)
+      const prevStages = prev.stages || {};
+      const incomingStages = incoming.stages || {};
+      const mergedStages = {
+        ...prevStages,
+        ...incomingStages,
+      };
+
+      return {
+        ...prev,
+        ...incoming,
+        stages: mergedStages,
+        database_state: incoming.database_state || prev.database_state,
+      };
+    });
+  }, []);
+
   // Fetch Authoritative Pipeline State from Backend
-  const fetchStatus = useCallback(async (targetDate = reportingDate) => {
+  const fetchStatus = useCallback(async (targetDate = reportingDateRef.current, targetPlant = plantIdRef.current) => {
+    const reqId = ++statusRequestIdRef.current;
     setLoadingStatus(true);
     setStatusError(null);
     try {
-      const res = await dailyReportsApi.getPipelineStatus(targetDate, plantId);
-      setPipelineState(res);
+      const res = await dailyReportsApi.getPipelineStatus(targetDate, targetPlant);
+      if (
+        reqId !== statusRequestIdRef.current ||
+        targetDate !== reportingDateRef.current ||
+        targetPlant !== plantIdRef.current
+      ) {
+        return;
+      }
+
+      applyAuthoritativePipelineState(res, targetDate, targetPlant);
 
       // Auto-expand active or completed downstream stages if data exists
       if (res?.database_state?.has_data) {
@@ -97,16 +209,160 @@ export default function DailyReports() {
         }));
       }
     } catch (err) {
-      console.error('Failed to retrieve pipeline status:', err);
-      setStatusError(err.message || 'Unable to load pipeline execution state.');
+      if (reqId === statusRequestIdRef.current) {
+        console.error('Failed to retrieve pipeline status:', err);
+        setStatusError(err.message || 'Unable to load pipeline execution state.');
+      }
     } finally {
-      setLoadingStatus(false);
+      if (reqId === statusRequestIdRef.current) {
+        setLoadingStatus(false);
+      }
     }
-  }, [reportingDate, plantId]);
+  }, [applyAuthoritativePipelineState]);
+
+  // Fetch saved records and master data for plant & date
+  const loadSavedRecords = useCallback(async (targetDate = reportingDateRef.current, targetPlant = plantIdRef.current) => {
+    const reqId = ++recordsRequestIdRef.current;
+    setLoadingSaved(true);
+    try {
+      const data = await dailyReportsApi.getDailyRecords(targetDate, targetPlant);
+      if (
+        reqId === recordsRequestIdRef.current &&
+        targetDate === reportingDateRef.current &&
+        targetPlant === plantIdRef.current
+      ) {
+        setSavedCounts({
+          energy: data.energy_records_count || 0,
+          production: data.production_records_count || 0,
+        });
+        setMasterData(data.master_data || null);
+        setEnergyRows(data.energy_records || []);
+        setProductionRows(data.production_records || []);
+        setValidationResult(null);
+      }
+    } catch (err) {
+      if (reqId === recordsRequestIdRef.current) {
+        console.warn('Failed to load saved records:', err);
+      }
+    } finally {
+      if (reqId === recordsRequestIdRef.current) {
+        setLoadingSaved(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    fetchStatus(reportingDate);
-  }, [reportingDate, fetchStatus]);
+    fetchStatus(reportingDate, plantId);
+    loadSavedRecords(reportingDate, plantId);
+  }, [reportingDate, plantId, fetchStatus, loadSavedRecords]);
+
+  // Data Entry: Validate in-place rows against schema, constraints, balances
+  const handleValidateEntries = async () => {
+    setValidating(true);
+    setStatusError(null);
+    setActionSuccessMsg(null);
+    try {
+      const res = await dailyReportsApi.validateDataEntries({
+        reporting_date: reportingDate,
+        plant_id: plantId,
+        energy_rows: energyRows,
+        production_rows: productionRows,
+        mode: ingestMode,
+      });
+      setValidationResult(res);
+      if (res.valid) {
+        setActionSuccessMsg(`Validation passed: ${res.total_valid} entries verified against database schema and constraints.`);
+        try {
+          await dailyReportsApi.updatePipelineStatus(
+            reportingDate,
+            'validation',
+            'COMPLETED',
+            `Data validation passed (${res.total_valid} rows validated against PostgreSQL schema, foreign keys, and balance constraints).`,
+            { total_valid_rows: res.total_valid, total_rejected_rows: 0, energy_valid: res.energy_summary?.valid_rows, production_valid: res.production_summary?.valid_rows }
+          );
+        } catch (uErr) {
+          console.warn('Pipeline status update failed:', uErr);
+        }
+        await fetchStatus(reportingDate, plantId);
+      } else {
+        setStatusError(`Validation identified ${res.total_errors} issue(s). Please review row highlights.`);
+        try {
+          await dailyReportsApi.updatePipelineStatus(
+            reportingDate,
+            'validation',
+            'COMPLETED_WITH_WARNINGS',
+            `Validation identified ${res.total_errors} issue(s) in entered records.`,
+            { total_valid_rows: res.total_valid, total_rejected_rows: res.total_errors, errors: res.errors }
+          );
+        } catch (uErr) {
+          console.warn('Pipeline status update failed:', uErr);
+        }
+        await fetchStatus(reportingDate, plantId);
+      }
+    } catch (err) {
+      console.error('Validation failed:', err);
+      setStatusError(err.message || 'Validation request failed.');
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  // Data Entry: Save rows idempotently to Neon PostgreSQL fact tables
+  const handleSaveEntries = async (entryType = 'MANUAL', customPayload = null) => {
+    setSavingEntries(true);
+    setStatusError(null);
+    setActionSuccessMsg(null);
+    const targetDate = customPayload?.reporting_date || reportingDate;
+    const targetPlant = customPayload?.plant_id || plantId;
+    try {
+      const eRows = customPayload ? (customPayload.energy_rows || []) : energyRows;
+      const pRows = customPayload ? (customPayload.production_rows || []) : productionRows;
+      const res = await dailyReportsApi.saveDataEntries({
+        reporting_date: targetDate,
+        plant_id: targetPlant,
+        energy_rows: eRows,
+        production_rows: pRows,
+        entry_type: typeof entryType === 'string' ? entryType : 'MANUAL',
+        mode: ingestMode,
+      });
+      if (res && res.success) {
+        setActionSuccessMsg(res.message);
+        setValidationResult(null);
+        if (targetDate !== reportingDate || targetPlant !== plantId) {
+          handleSwitchPlantAndDate(targetPlant, targetDate);
+        }
+        let reloadFailed = false;
+        try {
+          await loadSavedRecords(targetDate, targetPlant);
+          await fetchStatus(targetDate, targetPlant);
+        } catch (rErr) {
+          console.warn('Reloading after commit failed:', rErr);
+          reloadFailed = true;
+        }
+        if (reloadFailed) {
+          setActionSuccessMsg(`${res.message || 'Entry saved.'} Note: refreshing the record list failed, please refresh.`);
+        }
+        setExpandedStages((prev) => ({
+          ...prev,
+          data_upload: false,
+          validation: true,
+          database_ingestion: true,
+        }));
+        return { ...res, reloadFailed };
+      } else {
+        const errMsg = res?.message || 'Failed to save entries to database.';
+        setStatusError(errMsg);
+        return { success: false, message: errMsg, errors: res?.errors };
+      }
+    } catch (err) {
+      console.error('Save failed:', err);
+      const errMsg = err.message || 'Save request failed.';
+      setStatusError(errMsg);
+      return { success: false, message: errMsg };
+    } finally {
+      setSavingEntries(false);
+    }
+  };
 
   const toggleStage = (stageKey) => {
     setExpandedStages((prev) => ({
@@ -244,7 +500,7 @@ export default function DailyReports() {
         summaryMsg,
         detailsObj
       );
-      setPipelineState(updatedStatus);
+      applyAuthoritativePipelineState(updatedStatus, reportingDate, plantId);
 
       // Require explicit confirmation for OVERWRITE_CORRECTION
       if (ingestMode === 'OVERWRITE_CORRECTION') {
@@ -334,7 +590,7 @@ export default function DailyReports() {
 
       // Refresh persisted pipeline status from backend
       const refreshedState = await dailyReportsApi.getPipelineStatus(reportingDate, plantId);
-      setPipelineState(refreshedState);
+      applyAuthoritativePipelineState(refreshedState, reportingDate, plantId);
 
       // Check if duplicate only
       const energyDup = ingestResults.energy && ingestResults.energy.imported_rows === 0 && (ingestResults.energy.duplicate_rows > 0 || ingestResults.energy.total_rows > 0);
@@ -462,7 +718,7 @@ export default function DailyReports() {
       setLastIngestResult(ingestResults);
 
       const verifiedState = await dailyReportsApi.getPipelineStatus(reportingDate, plantId);
-      setPipelineState(verifiedState);
+      applyAuthoritativePipelineState(verifiedState, reportingDate, plantId);
 
       const energyDup = ingestResults.energy && ingestResults.energy.imported_rows === 0 && (ingestResults.energy.duplicate_rows > 0 || ingestResults.energy.total_rows > 0);
       const prodDup = ingestResults.production && ingestResults.production.imported_rows === 0 && (ingestResults.production.duplicate_rows > 0 || ingestResults.production.total_rows > 0);
@@ -486,7 +742,7 @@ export default function DailyReports() {
     } catch (err) {
       console.error('Ingestion error:', err);
       setStatusError(err.message || 'Failed to ingest records into database.');
-      fetchStatus(reportingDate);
+      fetchStatus(reportingDate, plantId);
     } finally {
       isCommittingRef.current = false;
       setIngesting(false);
@@ -505,26 +761,35 @@ export default function DailyReports() {
 
   // Stages 4-8: Execute Downstream Pipeline (Recon, Analytics, Report, Anomalies, Handoff)
   const handleRunDownstream = async () => {
+    const activeDate = reportingDateRef.current;
+    const activePlant = plantIdRef.current;
+    const reqId = ++statusRequestIdRef.current;
     setRunningDownstream(true);
     setStatusError(null);
     try {
-      const updated = await dailyReportsApi.runDownstreamPipeline(reportingDate, plantId);
-      setPipelineState(updated);
-      setExpandedStages({
-        data_upload: false,
-        validation: false,
-        database_ingestion: false,
-        data_reconciliation: true,
-        daily_analytics: true,
-        intelligence_report: true,
-        anomaly_detection: true,
-        investigation_handoff: true,
-      });
-      setActionSuccessMsg('Daily Operations downstream processing completed successfully.');
+      const updated = await dailyReportsApi.runDownstreamPipeline(activeDate, activePlant);
+      if (
+        reqId === statusRequestIdRef.current &&
+        activeDate === reportingDateRef.current &&
+        activePlant === plantIdRef.current
+      ) {
+        applyAuthoritativePipelineState(updated, activeDate, activePlant);
+        setExpandedStages({
+          data_upload: false,
+          validation: false,
+          database_ingestion: false,
+          data_reconciliation: true,
+          daily_analytics: true,
+          intelligence_report: true,
+          anomaly_detection: true,
+          investigation_handoff: true,
+        });
+        setActionSuccessMsg('Daily Operations downstream processing completed successfully.');
+      }
     } catch (err) {
       console.error('Downstream pipeline execution failed:', err);
       setStatusError(err.message || 'Downstream processing failed.');
-      fetchStatus(reportingDate);
+      fetchStatus(activeDate, activePlant);
     } finally {
       setRunningDownstream(false);
     }
@@ -535,22 +800,24 @@ export default function DailyReports() {
     if (syncingFindings) return;
     setSyncingFindings(true);
     setStatusError(null);
+    const activeDate = reportingDateRef.current;
+    const activePlant = plantIdRef.current;
     try {
       const payload = {
-        plant_id: plantId,
-        start_time: `${reportingDate}T00:00:00`,
-        end_time: `${reportingDate}T23:59:59`,
+        plant_id: activePlant,
+        start_time: `${activeDate}T00:00:00`,
+        end_time: `${activeDate}T23:59:59`,
         caller_attribution: 'Daily Operations Pipeline',
       };
       const syncResult = await findingsApi.syncFindings(payload);
 
-      // Refresh handoff counts in pipeline stage state
+      // Keep completed Stage 8 result visible while a separate sync is running
       const currentHandoff = pipelineState?.stages?.investigation_handoff;
       const currentDetails = currentHandoff?.details || {};
-      const newItemsPrep = syncResult.total_anomalies_evaluated ?? currentDetails.items_prepared_count ?? 0;
-      const newFindingsSync = (syncResult.occurrences_recorded ?? 0) + (syncResult.duplicates_ignored ?? 0);
-      const newFindings = syncResult.new_findings_created ?? 0;
-      const reusedFindings = (syncResult.existing_findings_updated ?? 0) + (syncResult.duplicates_ignored ?? 0);
+      const newItemsPrep = syncResult?.total_anomalies_evaluated ?? currentDetails.items_prepared_count ?? 0;
+      const newFindingsSync = (syncResult?.occurrences_recorded ?? 0) + (syncResult?.duplicates_ignored ?? 0);
+      const newFindings = syncResult?.new_findings_created ?? 0;
+      const reusedFindings = (syncResult?.existing_findings_updated ?? 0) + (syncResult?.duplicates_ignored ?? 0);
 
       const updatedHandoffDetails = {
         ...currentDetails,
@@ -563,9 +830,27 @@ export default function DailyReports() {
 
       const updatedSummary = `Prepared ${newItemsPrep} anomaly investigation items (${newFindings} newly created findings, ${reusedFindings} existing/reused findings synchronized in database).`;
 
+      // Preserve completed Stage 8 in local pipelineState so it stays visibly COMPLETED during sync
+      setPipelineState((prev) => {
+        if (!prev) return prev;
+        const prevStages = prev.stages || {};
+        return {
+          ...prev,
+          stages: {
+            ...prevStages,
+            investigation_handoff: {
+              ...(prevStages.investigation_handoff || {}),
+              status: prevStages.investigation_handoff?.status || 'COMPLETED',
+              summary: updatedSummary,
+              details: updatedHandoffDetails,
+            },
+          },
+        };
+      });
+
       try {
         await dailyReportsApi.updatePipelineStatus(
-          reportingDate,
+          activeDate,
           'investigation_handoff',
           'COMPLETED',
           updatedSummary,
@@ -576,13 +861,14 @@ export default function DailyReports() {
       }
 
       setActionSuccessMsg(
-        `Anomalies synchronized with Findings Centre (${newFindings} new findings created, ${syncResult.existing_findings_updated || 0} updated, ${syncResult.occurrences_recorded || 0} occurrences recorded).`
+        `Anomalies synchronized with Findings Centre (${newFindings} new findings created, ${syncResult?.existing_findings_updated || 0} updated, ${syncResult?.occurrences_recorded || 0} occurrences recorded).`
       );
-      await fetchStatus(reportingDate);
+      await fetchStatus(activeDate, activePlant);
     } catch (err) {
       console.error('Failed to sync findings:', err);
       setStatusError(err.message || 'Failed to synchronize findings.');
     } finally {
+      // Clear syncingFindings when the sync request settles, including on error
       setSyncingFindings(false);
     }
   };
@@ -598,7 +884,8 @@ export default function DailyReports() {
         transition={{ duration: 0.22, ease: 'easeOut' }}
       >
         <div className="daily-ops-controls-row" role="toolbar" aria-label="Daily Operations Controls">
-          {/* 1. Reporting Date */}
+          <div className="daily-ops-controls-left">
+            {/* 1. Reporting Date */}
           <div className="daily-ops-control-item daily-ops-date-item">
             <div className="daily-ops-input-wrap">
               <input
@@ -621,7 +908,15 @@ export default function DailyReports() {
                 id="daily-ops-plant"
                 className="daily-ops-date-input daily-ops-select-input"
                 value={plantId}
-                onChange={(e) => setPlantId(e.target.value)}
+                onChange={(e) => {
+                  const newPlant = e.target.value;
+                  plantIdRef.current = newPlant;
+                  setPlantId(newPlant);
+                  setStatusError(null);
+                  setActionSuccessMsg(null);
+                  setSavedCounts(null);
+                  setLoadingSaved(true);
+                }}
                 aria-label="Select Target Plant"
               >
                 <option value="IN-TN-01">IN-TN-01 (Tamil Nadu Electronics Assembly)</option>
@@ -634,15 +929,16 @@ export default function DailyReports() {
               </span>
             </div>
           </div>
+        </div>
 
-          {/* Action Buttons Group on the Right */}
+        {/* Action Buttons Group on the Right */}
           <div className="daily-ops-actions-group">
             {/* 3. Refresh Status Action Button */}
             <div className="daily-ops-action-item">
               <button
                 type="button"
                 className="daily-ops-btn daily-ops-btn-secondary"
-                onClick={() => fetchStatus(reportingDate)}
+                onClick={() => fetchStatus(reportingDate, plantId)}
                 disabled={loadingStatus}
                 title="Refresh telemetry and pipeline execution status"
                 aria-label="Refresh Status"
@@ -658,7 +954,7 @@ export default function DailyReports() {
                 >
                   <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19" />
                 </svg>
-                <span>{loadingStatus ? 'Refreshing…' : 'Refresh Status'}</span>
+                <span>{loadingStatus ? 'Refreshing…' : 'Refresh'}</span>
               </button>
             </div>
 
@@ -674,7 +970,7 @@ export default function DailyReports() {
                     ? 'Database records required before running downstream stages'
                     : 'Execute Reconciliation, Analytics, Report, Anomalies, and Investigation Handoff'
                 }
-                aria-label="Run Downstream Pipeline"
+                aria-label="Run pipeline"
               >
                 {runningDownstream ? (
                   <>
@@ -686,14 +982,14 @@ export default function DailyReports() {
                       <line x1="2" y1="12" x2="6" y2="12" />
                       <line x1="18" y1="12" x2="22" y2="12" />
                     </svg>
-                    <span>Processing Pipeline…</span>
+                    <span>Running…</span>
                   </>
                 ) : (
                   <>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
                       <polygon points="5 3 19 12 5 21 5 3" />
                     </svg>
-                    <span>Run Downstream Pipeline</span>
+                    <span>Run pipeline</span>
                   </>
                 )}
               </button>
@@ -732,11 +1028,26 @@ export default function DailyReports() {
         toggleStage={toggleStage}
         reportingDate={reportingDate}
         plantId={plantId}
+        onSwitchPlantAndDate={handleSwitchPlantAndDate}
+        // Data Entry props
+        energyRows={energyRows}
+        setEnergyRows={setEnergyRows}
+        productionRows={productionRows}
+        setProductionRows={setProductionRows}
+        masterData={masterData}
+        savedCounts={savedCounts}
+        loadingSaved={loadingSaved}
+        validationResult={validationResult}
+        validating={validating}
+        savingEntries={savingEntries}
+        onValidateEntries={handleValidateEntries}
+        onSaveEntries={handleSaveEntries}
+        onReloadRecords={() => loadSavedRecords(reportingDate, plantId)}
+        // Legacy file & ingestion props
         energyFiles={energyFile}
         productionFiles={productionFile}
         handleEnergyFileSelect={setEnergyFile}
         handleProductionFileSelect={setProductionFile}
-        validating={validating}
         handleValidateFiles={handleValidateAndSave}
         handleValidateAndSave={handleValidateAndSave}
         ingesting={ingesting}

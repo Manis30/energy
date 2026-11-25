@@ -21,6 +21,9 @@ from app.schemas.daily_reports import (
     UploadHistoryItem,
     ValidateReportResponse,
     VerifyIngestionResponse,
+    DataEntryPayload,
+    DataEntryValidationResponse,
+    DataEntrySaveResponse,
 )
 from app.services.daily_report_service import (
     clear_staged_report,
@@ -519,6 +522,96 @@ def get_daily_opportunities_endpoint(
     except Exception as e:
         logger.exception("Failed to retrieve opportunities: %s", str(e))
         return []
+
+
+@router.get(
+    "/records",
+    summary="Retrieve saved energy and production records for a specific plant and date",
+    description="Loads confirmed records from fact tables for the selected plant and reporting date, along with plant master metadata.",
+)
+def get_daily_records_endpoint(
+    reporting_date: date = Query(..., description="Confirmed reporting date (YYYY-MM-DD)"),
+    plant_id: str = Query("IN-TN-01", description="Plant identifier"),
+    db: Session = Depends(get_db_session),
+):
+    from app.services.daily_data_entry_service import get_saved_records_for_date_and_plant
+    try:
+        return get_saved_records_for_date_and_plant(
+            session=db,
+            reporting_date=reporting_date,
+            plant_id=plant_id,
+        )
+    except Exception as e:
+        logger.exception("Failed to retrieve saved records: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve saved records: {str(e)}",
+        )
+
+
+@router.post(
+    "/validate-entries",
+    response_model=DataEntryValidationResponse,
+    summary="Validate entered or pasted energy and production rows",
+    description="Pre-checks rows against fact table schemas, foreign keys, mathematical balances, and plant/date alignment.",
+)
+def validate_entries_endpoint(
+    payload: DataEntryPayload,
+    db: Session = Depends(get_db_session),
+) -> DataEntryValidationResponse:
+    from app.services.daily_data_entry_service import validate_manual_entries
+    try:
+        result = validate_manual_entries(
+            session=db,
+            reporting_date=payload.reporting_date,
+            plant_id=payload.plant_id,
+            energy_rows=payload.energy_rows,
+            production_rows=payload.production_rows,
+            mode=payload.mode,
+        )
+        return DataEntryValidationResponse(**result)
+    except Exception as e:
+        logger.exception("Validation of data entries failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Validation failed: {str(e)}",
+        )
+
+
+@router.post(
+    "/save-entries",
+    response_model=DataEntrySaveResponse,
+    summary="Save entered or pasted energy and production rows to PostgreSQL",
+    description="Re-validates on the server and commits records with idempotent identity rules and source revision lineage.",
+)
+def save_entries_endpoint(
+    payload: DataEntryPayload,
+    db: Session = Depends(get_db_session),
+) -> DataEntrySaveResponse:
+    from app.services.daily_data_entry_service import save_manual_entries
+    try:
+        result = save_manual_entries(
+            session=db,
+            reporting_date=payload.reporting_date,
+            plant_id=payload.plant_id,
+            energy_rows=payload.energy_rows,
+            production_rows=payload.production_rows,
+            entry_type=payload.entry_type,
+            mode=payload.mode,
+        )
+        return DataEntrySaveResponse(**result)
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(ve),
+        )
+    except Exception as e:
+        logger.exception("Failed to save data entries: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Save failed: {str(e)}",
+        )
+
 
 
 

@@ -99,7 +99,8 @@ def retrieve_occurrence_evidence(
             elif t_name == "fact_hourly_production" or "PRODUCTION" in role:
                 prod_source_rec = s
 
-    # 3. Retrieve matched meter reading
+    # 3. Retrieve matched meter reading & power factor
+    is_pf = "POWER_FACTOR" in anomaly_type or "PF" in anomaly_type
     matched_reading: Optional[FactEnergyMeterHourly] = None
     if energy_source_rec and energy_source_rec.source_record_id:
         matched_reading = session.execute(
@@ -118,19 +119,41 @@ def retrieve_occurrence_evidence(
             )
         ).scalars().first()
 
+    baseline_val = float(target_occ.baseline_value) if (target_occ and target_occ.baseline_value is not None) else (
+        float(finding.current_baseline_value) if finding.current_baseline_value is not None else None
+    )
+
     if matched_reading:
         meter_reading_id = matched_reading.meter_reading_id
-        obs_kwh = float(matched_reading.consumption_kwh) if matched_reading.consumption_kwh is not None else 0.0
-        obs_power_factor = float(matched_reading.power_factor) if matched_reading.power_factor is not None else None
+        if is_pf:
+            obs_power_factor = float(matched_reading.power_factor) if matched_reading.power_factor is not None else (
+                float(target_occ.actual_value) if (target_occ and target_occ.actual_value is not None) else (
+                    float(finding.current_actual_value) if finding.current_actual_value is not None else None
+                )
+            )
+            obs_kwh = float(matched_reading.consumption_kwh) if matched_reading.consumption_kwh is not None else None
+            unit = ""
+        else:
+            obs_kwh = float(matched_reading.consumption_kwh) if matched_reading.consumption_kwh is not None else 0.0
+            obs_power_factor = float(matched_reading.power_factor) if matched_reading.power_factor is not None else None
+            unit = "kWh"
         reading_quality = matched_reading.reading_quality or "VALID"
         source_revision = matched_reading.upload_id or revision_id
         missing_energy_reading = False
     else:
         meter_reading_id = None
-        obs_kwh = float(target_occ.actual_value) if (target_occ and target_occ.actual_value is not None) else (
-            float(finding.current_actual_value) if finding.current_actual_value is not None else 0.0
-        )
-        obs_power_factor = None
+        if is_pf:
+            obs_power_factor = float(target_occ.actual_value) if (target_occ and target_occ.actual_value is not None) else (
+                float(finding.current_actual_value) if finding.current_actual_value is not None else 0.85
+            )
+            obs_kwh = None
+            unit = ""
+        else:
+            obs_kwh = float(target_occ.actual_value) if (target_occ and target_occ.actual_value is not None) else (
+                float(finding.current_actual_value) if finding.current_actual_value is not None else 0.0
+            )
+            obs_power_factor = None
+            unit = "kWh"
         reading_quality = None
         source_revision = revision_id
         missing_energy_reading = True
@@ -260,10 +283,14 @@ def retrieve_occurrence_evidence(
         citations.append({"type": "FINDING", "id": clean_id, "label": f"Finding #{clean_id}"})
     if meter_reading_id:
         retrieval_trace.append("retrieve_energy_reading")
+        if is_pf:
+            reading_label = f"Meter Reading {meter_reading_id} (PF {obs_power_factor:.2f})"
+        else:
+            reading_label = f"Meter Reading {meter_reading_id} ({obs_kwh:.3f} kWh)" if obs_kwh is not None else f"Meter Reading {meter_reading_id}"
         citations.append({
             "type": "METER_READING",
             "id": meter_reading_id,
-            "label": f"Meter Reading {meter_reading_id} ({obs_kwh:.3f} kWh)",
+            "label": reading_label,
         })
     if production_event_id:
         retrieval_trace.append("retrieve_production_record")
@@ -284,8 +311,11 @@ def retrieve_occurrence_evidence(
             "label": f"Source Revision {source_revision}",
         })
 
+    finding_title = getattr(finding, "title", None) or f"{finding.anomaly_type.replace('_', ' ').title()} on {meter_id or 'Meter'}"
+
     return {
         "finding_id": clean_id,
+        "title": finding_title,
         "occurrence_id": occ_id,
         "plant_id": plant_id,
         "line_id": line_id,
@@ -296,8 +326,11 @@ def retrieve_occurrence_evidence(
         "occurrence_date": occ_ts.date().isoformat() if occ_ts else None,
         "local_time_window": local_time_window,
         "local_time_window_full": local_time_window_full,
-        "observed_value": obs_kwh,
+        "observed_value": obs_power_factor if is_pf else obs_kwh,
+        "baseline_value": baseline_val,
         "power_factor": obs_power_factor,
+        "unit": unit,
+        "is_power_factor": is_pf,
         "meter_reading_id": meter_reading_id,
         "reading_quality": reading_quality,
         "source_revision": source_revision,
@@ -349,12 +382,25 @@ def validate_citations_in_text(
     supported_kwh_values: List[float] = []
     supported_plant = (evidence.get("plant_id") if evidence else None) or "IN-TN-01"
     supported_window = evidence.get("local_time_window") if evidence else None
-    obs_kwh_val = float(evidence["observed_value"]) if (evidence and evidence.get("observed_value") is not None) else None
+    is_pf = (evidence.get("is_power_factor", False) if evidence else False) or "POWER_FACTOR" in ((evidence.get("anomaly_type") or "") if evidence else "").upper()
+    obs_kwh_val = float(evidence["observed_value"]) if (evidence and evidence.get("observed_value") is not None and not is_pf) else None
 
     if obs_kwh_val is not None:
         supported_kwh_values.append(obs_kwh_val)
+    if evidence and evidence.get("baseline_value") is not None and not is_pf:
+        try:
+            supported_kwh_values.append(float(evidence["baseline_value"]))
+        except (ValueError, TypeError):
+            pass
     if evidence and evidence.get("historical_mean_kwh") is not None:
-        supported_kwh_values.append(float(evidence["historical_mean_kwh"]))
+        try:
+            supported_kwh_values.append(float(evidence["historical_mean_kwh"]))
+        except (ValueError, TypeError):
+            pass
+
+    if is_pf:
+        # Power factor is dimensionless; remove any hallucinated "kWh" appended to power factor values
+        text = re.sub(r"(\b\d+(?:\.\d+)?)\s*kWh", r"\1", text, flags=re.IGNORECASE)
 
     # Also parse values embedded in citation labels (e.g. "(74.391 kWh)")
     for c in valid_citations:
@@ -502,6 +548,210 @@ def parse_four_sections(text: str) -> Dict[str, str]:
     return sections
 
 
+def synthesize_three_bullet_sections(evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Synthesize the scannable engineering investigation brief:
+    1. Headline (meaning of the finding)
+    2. Comparison row (structured calculation)
+    3. What the evidence shows (explanation of detector flagging + historical recurrence)
+    4. What remains uncertain (most important evidence gap and consequence)
+    5. What to check next (up to 2 specific checks: record, time window, determination)
+    """
+    fnd_id = evidence.get("finding_id") or "UNKNOWN"
+    plant_id = evidence.get("plant_id") or "IN-TN-01"
+    meter_id = evidence.get("meter_id") or "unmetered"
+    line_id = evidence.get("line_id")
+    anomaly_type = (evidence.get("anomaly_type") or "").upper()
+    is_pf = evidence.get("is_power_factor", False) or "POWER_FACTOR" in anomaly_type or "PF" in anomaly_type
+
+    obs_val = evidence.get("observed_value")
+    base_val = evidence.get("baseline_value")
+    obs_pf = evidence.get("power_factor")
+
+    meter_reading_id = evidence.get("meter_reading_id")
+    production_event_id = evidence.get("production_event_id")
+    good_units = evidence.get("good_units")
+    downtime_min = evidence.get("downtime_min")
+    occ_id = evidence.get("occurrence_id")
+    total_occs = evidence.get("total_occurrences_count") or 1
+    continuous_cnt = evidence.get("continuous_stoppages_count", 0)
+    matched_prod_cnt = evidence.get("matched_hourly_production_readings_count", 0)
+    hist_mean = evidence.get("historical_mean_kwh")
+
+    missing_evidence = evidence.get("missing_evidence", {})
+    missing_energy = missing_evidence.get("missing_energy_reading", False)
+    missing_prod = missing_evidence.get("missing_production_record", False)
+    missing_eq = missing_evidence.get("missing_equipment_data", False)
+    missing_occs = missing_evidence.get("missing_occurrence_records", False)
+
+    reading_cite = f" [reading:{meter_reading_id}]" if meter_reading_id else ""
+    prod_cite = f" [production:{production_event_id}]" if production_event_id else ""
+    occ_cite = f" [occurrence:{occ_id}]" if occ_id else f" [finding:{fnd_id}]"
+
+    # Friendly asset name derivation
+    raw_asset = str(meter_id or line_id or "equipment").upper()
+    if "HVAC" in raw_asset:
+        asset_name = "HVAC"
+    elif "COMPRESSOR" in raw_asset:
+        asset_name = "Compressor"
+    elif "CHILLER" in raw_asset:
+        asset_name = "Chiller"
+    elif "FAL" in raw_asset:
+        asset_name = "Final Assembly"
+    elif "SMT" in raw_asset:
+        asset_name = "SMT Line"
+    elif meter_id and str(meter_id).startswith("MTR-"):
+        asset_name = str(meter_id).replace("MTR-", "")
+    else:
+        asset_name = line_id or meter_id or "Equipment"
+
+    # Time window text
+    local_win = evidence.get("local_time_window")
+    win_text = f"for the {local_win} interval" if local_win and local_win != "Unknown" else "for the flagged interval"
+
+    # 1. HEADLINE & COMPARISON ROW
+    if is_pf:
+        pf_num = float(obs_pf if obs_pf is not None else (obs_val if obs_val is not None else 0.85))
+        target_num = float(base_val if base_val is not None else 0.90)
+        diff = pf_num - target_num
+        deficit = abs(diff)
+        if diff < -0.001:
+            headline = f"{asset_name} power factor was {deficit:.2f} below target."
+        elif diff > 0.001:
+            headline = f"{asset_name} power factor was {diff:.2f} above target."
+        else:
+            headline = f"{asset_name} power factor was at target."
+
+        comparison = {
+            "recorded": round(pf_num, 2),
+            "baseline": round(target_num, 2),
+            "baseline_label": "Target",
+            "difference": round(diff, 2),
+            "diff_str": f"{diff:+.2f}",
+            "unit": "",
+            "is_power_factor": True,
+            "formatted": f"Recorded {pf_num:.2f} · Target {target_num:.2f} · Difference {diff:+.2f}",
+        }
+    else:
+        obs_num = float(obs_val or 0.0)
+        base_num = float(base_val) if base_val is not None else None
+        diff = (obs_num - base_num) if base_num is not None else 0.0
+        diff_sign = "+" if diff >= 0 else ""
+        unit_str = "kWh"
+
+        if base_num is not None and base_num > 0:
+            pct = ((obs_num - base_num) / base_num) * 100
+            pct_abs = abs(pct)
+            if pct > 0.05:
+                headline = f"{asset_name} electricity use was {pct_abs:.1f}% above baseline."
+            elif pct < -0.05:
+                headline = f"{asset_name} electricity use was {pct_abs:.1f}% below baseline."
+            else:
+                headline = f"{asset_name} electricity use was at baseline."
+        elif base_num is not None:
+            headline = f"{asset_name} electricity use was {diff_sign}{diff:.2f} {unit_str} above baseline."
+        else:
+            headline = f"{asset_name} electricity use reached {obs_num:.2f} {unit_str}."
+
+        comparison = {
+            "recorded": round(obs_num, 2),
+            "baseline": round(base_num, 2) if base_num is not None else None,
+            "baseline_label": "Baseline",
+            "difference": round(diff, 2),
+            "diff_str": f"{diff_sign}{diff:.2f} {unit_str}".strip(),
+            "unit": unit_str,
+            "is_power_factor": False,
+            "formatted": f"Recorded {obs_num:.2f} {unit_str} · Baseline {base_num:.2f if base_num is not None else 0.0} {unit_str} · Difference {diff_sign}{diff:.2f} {unit_str}",
+        }
+
+    # 2. EVIDENCE SUMMARY (What the evidence shows)
+    if is_pf:
+        meter_label = f"meter {meter_id}" if (meter_id and str(meter_id).lower() != "unmetered") else "equipment"
+        flag_reason = f"Flagged by power factor surveillance because observed power factor of {pf_num:.2f} on {meter_label} fell below the {target_num:.2f} operating target{reading_cite}{occ_cite}."
+    elif "STANDBY" in anomaly_type or (good_units == 0 and downtime_min and downtime_min >= 30):
+        flag_reason = f"Flagged by standby surveillance because electricity draw persisted at {obs_num:.2f} kWh on meter {meter_id} during a zero-production stoppage interval{prod_cite}{reading_cite}{occ_cite}."
+    elif "DROP" in anomaly_type:
+        flag_reason = f"Flagged by baseline drop surveillance because electricity draw dropped to {obs_num:.2f} kWh on meter {meter_id}, below expected baseline of {base_num:.2f if base_num is not None else 0.0} kWh{reading_cite}{occ_cite}."
+    else:
+        diff_clause = f"exceeded the {base_num:.2f} kWh operating baseline by {diff:.2f} kWh" if base_num is not None else "showed significant statistical elevation"
+        flag_reason = f"Flagged by statistical spike detection because electricity draw of {obs_num:.2f} kWh on meter {meter_id} {diff_clause}{reading_cite}{occ_cite}."
+
+    if continuous_cnt > 0:
+        mean_str = f" (historical mean: {hist_mean:.2f} kWh/h)" if hist_mean else ""
+        hist_clause = f"Screened against {continuous_cnt} continuous stoppage episodes across {matched_prod_cnt} matched production records{mean_str}."
+    elif total_occs > 1:
+        hist_clause = f"Evaluated against operating baseline; {total_occs} total occurrences recorded across plant meters indicate an ongoing operational recurrence pattern."
+    else:
+        hist_clause = "Evaluated against 14-day plant operating baseline as an isolated interval occurrence."
+
+    evidence_summary = f"{flag_reason} {hist_clause}"
+    what_we_found = [flag_reason, hist_clause]
+
+    # 3. WHAT REMAINS UNCERTAIN (The most important evidence gap and its consequence)
+    if missing_energy:
+        uncertainty_note = "The saved finding contains the comparison, but the missing original reading limits independent verification."
+    elif missing_prod:
+        uncertainty_note = "Production records for this interval are unlinked; whether excess draw occurred during active production or idle downtime remains unknown."
+    elif missing_occs:
+        uncertainty_note = "Sub-hourly occurrence telemetry is unlinked, limiting independent verification of intra-hour peaks."
+    elif missing_eq and not is_pf:
+        uncertainty_note = f"Meter '{meter_id}' is a line-level aggregate submeter; individual machine draw cannot be isolated without dedicated submetering."
+    elif not line_id:
+        uncertainty_note = f"Meter '{meter_id}' has no assigned production line in plant topology, limiting line-level allocation."
+    else:
+        uncertainty_note = "Individual machine-level operating state was not logged, so whether excess draw represents essential baseload or avoidable waste remains unverified."
+    whats_missing = [uncertainty_note]
+
+    # 4. WHAT TO CHECK NEXT (Up to 2 specific checks: record, time window, determination)
+    next_checks: List[str] = []
+    if is_pf:
+        next_checks.append(
+            f"Check the meter log {win_text} to confirm the power factor deficit and rule out temporary voltage dips."
+        )
+        next_checks.append(
+            "Check capacitor bank switching logs and induction motor loading for that same interval to determine whether degraded capacitor steps or idling motors caused the deficit."
+        )
+    elif "HVAC" in raw_asset:
+        next_checks.append(
+            f"Compare the meter log {win_text} to confirm whether the recorded draw was genuine and rule out data transmission spikes."
+        )
+        next_checks.append(
+            "Check the HVAC operating schedule for that same interval to determine whether cooling was running outside scheduled shift hours or in unoccupied zones."
+        )
+    elif "COMPRESSOR" in raw_asset:
+        next_checks.append(
+            f"Compare the meter log {win_text} to confirm whether the recorded draw was genuine and rule out data transmission spikes."
+        )
+        next_checks.append(
+            "Check compressor modulation logs and header pressure for that same interval to determine whether excessive draw was caused by distribution leaks or unloaded cycling."
+        )
+    elif "STANDBY" in anomaly_type or (good_units == 0 and downtime_min and downtime_min >= 30):
+        next_checks.append(
+            f"Compare the meter log {win_text} to confirm whether the recorded draw was genuine and rule out data transmission spikes."
+        )
+        next_checks.append(
+            f"Check equipment operating logs on {asset_name} for that same interval to determine which auxiliary heaters, pumps, or conveyors remained energized during stoppage."
+        )
+    else:
+        next_checks.append(
+            f"Compare the meter log {win_text} to confirm whether the recorded draw was genuine and rule out data transmission spikes."
+        )
+        next_checks.append(
+            f"Check the {asset_name} operating schedule for that same interval to verify if equipment was scheduled to operate and determine whether the draw represents avoidable waste."
+        )
+
+    return {
+        "headline": headline,
+        "comparison": comparison,
+        "evidence_summary": evidence_summary,
+        "uncertainty_note": uncertainty_note,
+        "next_checks": next_checks[:2],
+        "what_we_found": what_we_found[:2],
+        "whats_missing": whats_missing[:1],
+        "what_to_check_next": next_checks[:2],
+    }
+
+
 def _synthesize_rule_based_investigation(evidence: Dict[str, Any]) -> Dict[str, str]:
     """
     Deterministic rule-based engineering synthesis fallback.
@@ -510,8 +760,10 @@ def _synthesize_rule_based_investigation(evidence: Dict[str, Any]) -> Dict[str, 
     meter_id = evidence.get("meter_id") or "unmetered"
     line_id = evidence.get("line_id")
     plant_id = evidence.get("plant_id")
+    is_pf = evidence.get("is_power_factor", False) or "POWER_FACTOR" in (evidence.get("anomaly_type") or "").upper() or "PF" in (evidence.get("anomaly_type") or "").upper()
     obs_kwh = float(evidence.get("observed_value") or 0.0)
     obs_power_factor = evidence.get("power_factor")
+    baseline_val = evidence.get("baseline_value")
     meter_reading_id = evidence.get("meter_reading_id")
     production_event_id = evidence.get("production_event_id")
     good_units = evidence.get("good_units")
@@ -555,11 +807,24 @@ def _synthesize_rule_based_investigation(evidence: Dict[str, Any]) -> Dict[str, 
             f"and anomaly classification '{anomaly_type}'. No granular occurrence records or matched sub-hourly telemetry intervals "
             f"are currently attached to this record in the database [finding:{fnd_id}]."
         )
-    elif "POWER_FACTOR" in anomaly_type:
-        what_we_observed = (
-            f"Observed power factor of {obs_kwh:.3f} lag on meter {meter_id} at plant {plant_id} "
-            f"during the {window} interval{reading_cite}, falling below target threshold 0.90 lag{occ_cite}.{prod_details}"
-        )
+    elif is_pf:
+        pf_display = obs_power_factor if obs_power_factor is not None else (obs_val if obs_val is not None else None)
+        target_display = baseline_val
+        if pf_display is not None and target_display is not None:
+            what_we_observed = (
+                f"Observed power factor of {pf_display:.2f} on meter {meter_id} at plant {plant_id} "
+                f"during the {window} interval{reading_cite}, falling below target threshold {target_display:.2f}{occ_cite}.{prod_details}"
+            )
+        elif pf_display is not None:
+            what_we_observed = (
+                f"Observed power factor of {pf_display:.2f} on meter {meter_id} at plant {plant_id} "
+                f"during the {window} interval{reading_cite}.{prod_details}{occ_cite}"
+            )
+        else:
+            what_we_observed = (
+                f"Power factor deficit recorded on meter {meter_id} at plant {plant_id} "
+                f"during the {window} interval{reading_cite}.{prod_details}{occ_cite}"
+            )
     elif good_units == 0 and downtime_min and downtime_min >= 30:
         what_we_observed = (
             f"Observed standby electricity draw of {obs_kwh:.3f} kWh{pf_str} on {meter_id} at {plant_id} "
@@ -595,10 +860,20 @@ def _synthesize_rule_based_investigation(evidence: Dict[str, Any]) -> Dict[str, 
         )
 
     # Section 3: What we still need to know
+    missing_energy = evidence.get("missing_evidence", {}).get("missing_energy_reading", False)
     if missing_occs:
         what_we_still_need_to_know = (
             f"Specific process meter IDs, feeder circuit associations, line assignments, and matched production events "
             f"remain unlinked for this finding. Granular telemetry context is required before initiating an intervention trial."
+        )
+    elif missing_energy:
+        what_we_still_need_to_know = (
+            "The saved finding contains the comparison, but the missing original reading limits independent verification."
+        )
+    elif is_pf:
+        what_we_still_need_to_know = (
+            f"Whether low power factor ({obs_power_factor:.2f if obs_power_factor is not None else 0.85}) on meter '{meter_id}' is driven by unloaded induction motors "
+            f"or degraded power factor correction capacitors, and which production line this meter serves."
         )
     elif "COMPRESSOR" in str(meter_id).upper():
         what_we_still_need_to_know = (
@@ -618,23 +893,38 @@ def _synthesize_rule_based_investigation(evidence: Dict[str, Any]) -> Dict[str, 
         )
 
     # Section 4: What to check next
+    win_str = f"for the {window} interval" if window and window != "Unknown" else "for the flagged interval"
+    raw_m = str(meter_id or line_id or "").upper()
     if missing_occs:
         what_to_check_next = (
             f"1. Verify plant telemetry data connectors and meter ingestion feeds for plant {plant_id}. "
             f"2. Run anomaly surveillance synchronization to generate occurrence intervals and link energy readings. "
             f"3. Confirm machine and meter topology mappings in plant configuration."
         )
-    elif "COMPRESSOR" in str(meter_id).upper():
+    elif is_pf:
         what_to_check_next = (
-            "1. Check running status and pressure requirements on adjacent production lines. "
-            "2. Perform ultrasonic leak detection on pneumatic distribution header. "
-            "3. Install dedicated flow submetering prior to staging compressor modulation trials."
+            f"1. Check the meter log {win_str} to confirm the power factor deficit and rule out temporary voltage dips. "
+            f"2. Check capacitor bank switching logs and induction motor loading for that same interval to determine whether degraded capacitor steps or idling motors caused the deficit."
+        )
+    elif "HVAC" in raw_m:
+        what_to_check_next = (
+            f"1. Compare the meter log {win_str} to confirm whether the recorded draw was genuine and rule out data transmission spikes. "
+            f"2. Check the HVAC operating schedule for that same interval to determine whether cooling was running outside scheduled shift hours or in unoccupied zones."
+        )
+    elif "COMPRESSOR" in raw_m:
+        what_to_check_next = (
+            f"1. Compare the meter log {win_str} to confirm whether the recorded draw was genuine and rule out data transmission spikes. "
+            f"2. Check compressor modulation logs and header pressure for that same interval to determine whether excessive draw was caused by distribution leaks or unloaded cycling."
+        )
+    elif good_units == 0 and downtime_min and downtime_min >= 30:
+        what_to_check_next = (
+            f"1. Compare the meter log {win_str} to confirm whether the recorded draw was genuine and rule out data transmission spikes. "
+            f"2. Check equipment operating logs on {line_id or meter_id or 'this equipment'} for that same interval to determine which auxiliary heaters, pumps, or conveyors remained energized during stoppage."
         )
     else:
         what_to_check_next = (
-            f"1. Check {line_id or meter_id} equipment logs to identify auxiliary stations (heaters, pumps, conveyors) left energized. "
-            f"2. Attach temporary IoT submeters to isolate candidate standby loads during the next scheduled stoppage. "
-            f"3. Verify required restart preparation time before implementing a standby shutdown trial."
+            f"1. Compare the meter log {win_str} to confirm whether the recorded draw was genuine and rule out data transmission spikes. "
+            f"2. Check equipment operating logs on {line_id or meter_id or 'this equipment'} for that same interval to verify if equipment was scheduled to operate and determine whether the draw represents avoidable waste."
         )
 
     return {
@@ -684,6 +974,32 @@ def investigate_finding_with_ai(
     }
     parsed_sections: Dict[str, str] = {}
 
+    bullet_sections = synthesize_three_bullet_sections(evidence)
+    for k in ["what_we_found", "whats_missing", "what_to_check_next", "next_checks"]:
+        if k in bullet_sections and isinstance(bullet_sections[k], list):
+            bullet_sections[k] = [b for b in [validate_citations_in_text(item, citations, evidence) for item in bullet_sections[k]] if b and b.strip()]
+    if "evidence_summary" in bullet_sections and isinstance(bullet_sections["evidence_summary"], str):
+        bullet_sections["evidence_summary"] = validate_citations_in_text(bullet_sections["evidence_summary"], citations, evidence)
+    if "uncertainty_note" in bullet_sections and isinstance(bullet_sections["uncertainty_note"], str):
+        bullet_sections["uncertainty_note"] = validate_citations_in_text(bullet_sections["uncertainty_note"], citations, evidence)
+
+    is_pf = evidence.get("is_power_factor", False) or "POWER_FACTOR" in (evidence.get("anomaly_type") or "").upper() or "PF" in (evidence.get("anomaly_type") or "").upper()
+    if is_pf:
+        pf_val = evidence.get('power_factor') if evidence.get('power_factor') is not None else evidence.get('observed_value')
+        pf_str = f"{float(pf_val):.2f}" if pf_val is not None else "Deficit"
+        base_val = evidence.get('baseline_value')
+        base_str = f" (Target Benchmark: {float(base_val):.2f})" if base_val is not None else ""
+        observed_desc = (
+            f"- Observed Anomaly Metric: Power Factor = {pf_str}{base_str}\n"
+            "- Metric Unit: None (Power factor is dimensionless; do NOT append kWh or call it kWh)\n"
+            "- Energy Consumption Reading: Unlinked / unrecorded in database\n"
+        )
+    else:
+        observed_desc = (
+            f"- Observed Anomaly Metric: Electricity Draw = {float(evidence['observed_value'] or 0.0):.3f} kWh (Baseline: {evidence.get('baseline_value') or 'N/A'})\n"
+            "- Metric Unit: kWh\n"
+        )
+
     try:
         domo_client = get_domo_client()
         raw_model = getattr(domo_client, "default_model", None) or getattr(domo_client, "model", None)
@@ -709,8 +1025,7 @@ def investigate_finding_with_ai(
             f"- Line: {evidence['line_id'] or 'Unassigned'}\n"
             f"- Meter: {evidence['meter_id'] or 'Unassigned'}\n"
             f"- Local Time Window: {evidence['local_time_window_full']}\n"
-            f"- Observed Telemetry: {float(evidence['observed_value'] or 0.0):.3f} kWh\n"
-            f"- Power Factor: {evidence.get('power_factor') if evidence.get('power_factor') is not None else 'MISSING / UNRECORDED'}\n"
+            f"{observed_desc}"
             f"- Meter Reading ID: {evidence['meter_reading_id'] or 'MISSING'}\n"
             f"- Production Event ID: {evidence['production_event_id'] or 'MISSING'}\n"
             f"- Good Finished Units: {evidence['good_units'] if evidence['good_units'] is not None else 'MISSING'}\n"
@@ -721,7 +1036,7 @@ def investigate_finding_with_ai(
             f"- Continuous Stoppage Episodes: {evidence.get('continuous_stoppages_count', 0)} across {evidence.get('matched_hourly_production_readings_count', 0)} matched hourly production readings (supported by {evidence.get('matched_energy_readings_count', 0)} matched meter readings, Historical Mean: {evidence['historical_mean_kwh'] or 'N/A'})\n"
             f"- Confirmed Record Citations: {json.dumps(citations)}\n\n"
             "STRICT RULES: Do NOT invent or fabricate citation IDs. ONLY cite IDs listed in Confirmed Record Citations. "
-            "When a power factor is provided (e.g. 0.82), explicitly identify 0.82 as power factor in Section 1. "
+            "When a power factor is provided, explicitly identify it as power factor with NO unit. "
             "Never cite FAL-L2 unless Line is FAL-L2."
         )
 
@@ -753,7 +1068,7 @@ def investigate_finding_with_ai(
             # Verify that all 4 sections were populated
             if all(parsed.values()):
                 parsed_sections = {
-                    k: validate_citations_in_text(v, citations, evidence)
+                    k: validate_citations_in_text(re.sub(r"---\s*##?", "", v).strip(), citations, evidence)
                     for k, v in parsed.items()
                 }
                 ai_success = True
@@ -783,6 +1098,7 @@ def investigate_finding_with_ai(
 
     return {
         "finding_id": evidence["finding_id"],
+        "title": evidence.get("title"),
         "occurrence_id": evidence["occurrence_id"],
         "plant_id": evidence["plant_id"],
         "line_id": evidence["line_id"],
@@ -790,12 +1106,26 @@ def investigate_finding_with_ai(
         "anomaly_type": evidence["anomaly_type"],
         "timestamp": evidence["timestamp"],
         "observed_value": evidence["observed_value"],
+        "baseline_value": evidence.get("baseline_value"),
         "power_factor": evidence.get("power_factor"),
-        "unit": "kWh" if "POWER_FACTOR" not in evidence["anomaly_type"] else "",
+        "unit": evidence.get("unit", ("" if is_pf else "kWh")),
+        "metric_name": "Power factor" if is_pf else "Electricity consumption",
+        "is_power_factor": is_pf,
+        "missing_energy_reading": evidence.get("missing_evidence", {}).get("missing_energy_reading", False) or evidence.get("missing_energy_reading", False) or not evidence.get("meter_reading_id"),
+        "timezone": evidence.get("timezone") or (getattr(finding, "timezone", None) if 'finding' in locals() and hasattr(finding, "timezone") else None),
+        "headline": bullet_sections.get("headline"),
+        "comparison": bullet_sections.get("comparison"),
+        "evidence_summary": bullet_sections.get("evidence_summary"),
+        "uncertainty_note": bullet_sections.get("uncertainty_note"),
+        "next_checks": bullet_sections.get("next_checks") or bullet_sections.get("what_to_check_next"),
+        "what_we_found": bullet_sections["what_we_found"],
+        "whats_missing": bullet_sections["whats_missing"],
+        "what_to_check_next": bullet_sections["what_to_check_next"],
+        "what_to_check_next_bullets": bullet_sections["what_to_check_next"],
         "what_we_observed": parsed_sections["what_we_observed"],
         "how_it_compares": parsed_sections["how_it_compares"],
         "what_we_still_need_to_know": parsed_sections["what_we_still_need_to_know"],
-        "what_to_check_next": parsed_sections["what_to_check_next"],
+        "what_to_check_next_narrative": parsed_sections["what_to_check_next"],
         "citations": citations,
         "total_occurrences_count": evidence["total_occurrences_count"],
         "continuous_stoppages_count": evidence.get("continuous_stoppages_count", 0),

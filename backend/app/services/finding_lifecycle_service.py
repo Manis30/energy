@@ -19,7 +19,7 @@ import json
 import logging
 import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -1052,6 +1052,17 @@ def list_findings(
     - Severity and plant isolation.
     """
     stmt = select(OperationalFinding)
+
+    # Exclude test fixtures from operational findings queue
+    stmt = stmt.where(
+        and_(
+            ~OperationalFinding.finding_id.like("FND-CONCUR-%"),
+            ~OperationalFinding.finding_id.like("FND-DISM-%"),
+            ~OperationalFinding.finding_id.like("FND-ATOMIC-%"),
+            ~OperationalFinding.finding_id.like("FND-ACTLIFECYCLE-%"),
+            ~OperationalFinding.finding_id.like("FND-TEST-%"),
+        )
+    )
 
     if plant_id:
         stmt = stmt.where(OperationalFinding.plant_id == plant_id.strip())

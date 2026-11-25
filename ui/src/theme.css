@@ -11,8 +11,8 @@
   --font-size-brand: 1.25rem;
   /* 20px */
   --font-weight-brand: 700;
-  --font-size-page-title: 1.05rem;      /* ~16.8px (compact and proportional for 48px header) */
-  --font-weight-page-title: 600;
+  --font-size-page-title: 16px;
+  --font-weight-page-title: 500;
   --font-size-section: 1.15rem;
   /* ~18.4px (hierarchy target: 17–20px) */
   --font-weight-section: 600;
@@ -105,7 +105,7 @@
   --status-info: #4d8eeb;
 
   /* Component Dimensions & Density Tokens */
-  --sidebar-width: 248px;
+  --sidebar-width: 208px;
   --header-height: 48px;
   --radius-sm: 5px;
   --radius-md: 8px;

@@ -1,31 +1,43 @@
 import React from 'react';
 
+function formatOptionDate(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return '';
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+  const [y, m, d] = parts;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthName = months[parseInt(m, 10) - 1] || m;
+  return `${d} ${monthName} ${y}`;
+}
+
 /**
  * Modern Executive Dashboard Header
- * Streamlined layout with title, live status, and Month & Date filter controls.
+ * Streamlined single-row layout with Month, Date, Plant, Shift filters and Refresh.
  */
 export default function DashboardHeader({
   selectedMonth = '2026-10',
   onSelectMonth,
   selectedDate = 'ALL',
   onSelectDate,
+  selectedPlant = 'ALL',
+  onSelectPlant,
+  selectedShift = 'ALL',
+  onSelectShift,
   availableMonths = [],
   availableDates = [],
+  availablePlants = [],
+  availableShifts = [],
   onRefresh,
   refreshing = false,
   isDataOutOfCoverage = false,
   backendConnected = true,
 }) {
-  const activeMonthObj = availableMonths.find((m) => m.value === selectedMonth);
-  const monthLabel = activeMonthObj ? activeMonthObj.label : selectedMonth;
-
   return (
     <header className="premium-dashboard-header" role="banner">
       <div className="premium-header-main">
-
-
-        {/* Exactly Two Filter Selectors + Single Refresh Button */}
-        <div className="premium-filter-toolbar" role="toolbar" aria-label="Dashboard Date Filters">
+        {/* Exactly Four Filter Selectors + Single Refresh Button in a Single Row */}
+        {/* Order: Month → Date → Plant → Shift → Refresh */}
+        <div className="premium-filter-toolbar" role="toolbar" aria-label="Dashboard Date, Plant and Shift Filters">
           {/* 1. Month Selector */}
           <div className="filter-pill-control month-selector-pill">
             <span className="control-icon" aria-hidden="true">
@@ -36,16 +48,13 @@ export default function DashboardHeader({
                 <line x1="3" y1="10" x2="21" y2="10" />
               </svg>
             </span>
-            <label htmlFor="dashboard-month-select" className="filter-control-label">
-              Month
-            </label>
             <div className="select-container">
               <select
                 id="dashboard-month-select"
                 className="premium-select"
                 value={selectedMonth}
                 onChange={(e) => onSelectMonth && onSelectMonth(e.target.value)}
-                aria-label="Select Aggregated Month"
+                aria-label="Select month"
               >
                 {availableMonths.map((m) => (
                   <option key={m.value} value={m.value}>
@@ -69,23 +78,18 @@ export default function DashboardHeader({
                 <polyline points="12 6 12 12 16 14" />
               </svg>
             </span>
-            <label htmlFor="dashboard-date-select" className="filter-control-label">
-              Date
-            </label>
             <div className="select-container">
               <select
                 id="dashboard-date-select"
                 className="premium-select"
                 value={selectedDate}
                 onChange={(e) => onSelectDate && onSelectDate(e.target.value)}
-                aria-label="Select Date for Daily View or All Days for Monthly View"
+                aria-label="Select date"
               >
-                <option value="ALL">
-                  All Days ({monthLabel} — Monthly View)
-                </option>
+                <option value="ALL">All days</option>
                 {availableDates.map((d) => (
                   <option key={d.value} value={d.value}>
-                    {d.label}
+                    {d.shortLabel || (d.value && d.value !== 'ALL' && /^\d{4}-\d{2}-\d{2}$/.test(d.value) ? formatOptionDate(d.value) : d.label)}
                   </option>
                 ))}
               </select>
@@ -97,7 +101,69 @@ export default function DashboardHeader({
             </div>
           </div>
 
-          {/* 3. Single Refresh Button */}
+          {/* 3. Plant Selector */}
+          <div className="filter-pill-control plant-selector-pill">
+            <span className="control-icon" aria-hidden="true">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 21h18M5 21V7l8-4v18M13 21V3l6 3v15" />
+                <path d="M9 10v.01M9 14v.01M9 18v.01M17 10v.01M17 14v.01M17 18v.01" />
+              </svg>
+            </span>
+            <div className="select-container">
+              <select
+                id="dashboard-plant-select"
+                className="premium-select"
+                value={selectedPlant}
+                onChange={(e) => onSelectPlant && onSelectPlant(e.target.value)}
+                aria-label="Select plant"
+              >
+                <option value="ALL">All plants</option>
+                {availablePlants.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.shortLabel || p.label}
+                  </option>
+                ))}
+              </select>
+              <span className="select-chevron" aria-hidden="true">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </span>
+            </div>
+          </div>
+
+          {/* 4. Shift Selector */}
+          <div className="filter-pill-control shift-selector-pill">
+            <span className="control-icon" aria-hidden="true">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+            </span>
+            <div className="select-container">
+              <select
+                id="dashboard-shift-select"
+                className="premium-select"
+                value={selectedShift}
+                onChange={(e) => onSelectShift && onSelectShift(e.target.value)}
+                aria-label="Select shift"
+              >
+                <option value="ALL">All shifts</option>
+                {availableShifts.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.shortLabel || s.label}
+                  </option>
+                ))}
+              </select>
+              <span className="select-chevron" aria-hidden="true">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </span>
+            </div>
+          </div>
+
+          {/* 5. Refresh Button */}
           <button
             type="button"
             className={`premium-btn-action refresh-btn ${refreshing ? 'loading' : ''}`}

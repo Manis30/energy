@@ -1,263 +1,135 @@
 import React from 'react';
 import { formatNumber, formatPercent } from '../../utils/formatters';
-import KpiCard, { KpiGrid } from '../../components/common/KpiCard';
 
 const hasNumber = (value) =>
   value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 
-export default function ProductionKpis({ summary, summaryAvailable = true, dailyTrend = [] }) {
-  const actualQty = summary?.actual_qty ?? null;
-  const goodQty = summary?.good_qty ?? null;
-  const rejectQty = summary?.reject_qty ?? null;
-  const goodRate = summary?.good_rate ?? null;
-  const rejectRate = summary?.reject_rate ?? null;
-  const reworkQty = summary?.rework_qty ?? null;
-  const reworkRate = summary?.rework_rate ?? null;
-  const downtimeMin = summary?.downtime_min ?? null;
-  const targetQty = summary?.target_qty ?? null;
-  const achievementRate = summary?.achievement_rate ?? null;
-  const eventCount = summary?.event_count ?? null;
-  const balanceValid = summary?.quantity_balance_valid;
+/**
+ * Section 1: Final Assembly performance
+ * Leads with finished goods production across Final Assembly (FAL) lines.
+ * Displays 5 compact metrics in one desktop row:
+ * 1. Good finished units
+ * 2. Good-output yield
+ * 3. Rejected units
+ * 4. Line downtime (summed line-hours / line-min)
+ * 5. Electricity per good finished unit (scope: factory electricity ÷ good FAL units)
+ * Displays data coverage badge once beside the section header.
+ */
+export default function ProductionKpis({
+  falData = null,
+  factoryEnergy = null,
+  summary = null,
+  selectedLine = null,
+  summaryAvailable = true,
+}) {
+  const qualityContext = factoryEnergy?.production_quality_context || {};
+  const coverage = factoryEnergy?.coverage_summary || {};
 
-  const downtimeHours = downtimeMin !== null && Number.isFinite(Number(downtimeMin))
+  // Resolve Final Assembly metrics
+  // Prefer explicitly computed falData from byLine; fallback to factoryEnergy context
+  const goodQty = falData?.goodQty ?? qualityContext.good_qty ?? (selectedLine?.startsWith('FAL') ? summary?.good_qty : null);
+  const actualQty = falData?.actualQty ?? qualityContext.actual_qty ?? (selectedLine?.startsWith('FAL') ? summary?.actual_qty : null);
+  const rejectQty = falData?.rejectQty ?? qualityContext.reject_qty ?? (selectedLine?.startsWith('FAL') ? summary?.reject_qty : null);
+  const yieldPct = falData?.yieldPct ?? qualityContext.yield_percentage ?? (selectedLine?.startsWith('FAL') ? summary?.good_rate : null);
+  const rejectPct = falData?.rejectPct ?? qualityContext.reject_rate_percentage ?? (selectedLine?.startsWith('FAL') ? summary?.reject_rate : null);
+  const downtimeMin = falData?.downtimeMin ?? qualityContext.downtime_minutes ?? (selectedLine?.startsWith('FAL') ? summary?.downtime_min : null);
+
+  const downtimeHours = hasNumber(downtimeMin)
     ? (Number(downtimeMin) / 60).toFixed(1)
     : null;
 
-  // Real historical trend series if available
-  const hasMultipleTrendDays = Array.isArray(dailyTrend) && dailyTrend.length > 1;
-
-  const actualSeries = React.useMemo(() => {
-    if (!hasMultipleTrendDays) return null;
-    let running = 0;
-    const series = [];
-    dailyTrend.forEach((item) => {
-      if (hasNumber(item?.actual_qty)) {
-        running += Number(item.actual_qty);
-        series.push(running);
-      }
-    });
-    return series.length > 1 ? series : null;
-  }, [dailyTrend, hasMultipleTrendDays]);
-
-  const goodSeries = React.useMemo(() => {
-    if (!hasMultipleTrendDays) return null;
-    let running = 0;
-    const series = [];
-    dailyTrend.forEach((item) => {
-      if (hasNumber(item?.good_qty)) {
-        running += Number(item.good_qty);
-        series.push(running);
-      }
-    });
-    return series.length > 1 ? series : null;
-  }, [dailyTrend, hasMultipleTrendDays]);
-
-  const rejectSeries = React.useMemo(() => {
-    if (!hasMultipleTrendDays) return null;
-    let running = 0;
-    const series = [];
-    dailyTrend.forEach((item) => {
-      if (hasNumber(item?.reject_qty)) {
-        running += Number(item.reject_qty);
-        series.push(running);
-      }
-    });
-    return series.length > 1 ? series : null;
-  }, [dailyTrend, hasMultipleTrendDays]);
-
-  const downtimeSeries = React.useMemo(() => {
-    if (!hasMultipleTrendDays) return null;
-    let running = 0;
-    const series = [];
-    dailyTrend.forEach((item) => {
-      if (hasNumber(item?.downtime_min)) {
-        running += Number(item.downtime_min);
-        series.push(running);
-      }
-    });
-    return series.length > 1 ? series : null;
-  }, [dailyTrend, hasMultipleTrendDays]);
-
-  // Primary 4 Cards per Desktop Row matching executive reference
-  const primaryCards = [
-    {
-      id: 'kpi-actual',
-      title: 'Actual Production',
-      value: actualQty !== null ? formatNumber(actualQty) : 'Unavailable',
-      unit: '',
-      accent: 'purple',
-      sparklineData: actualSeries,
-      minimal: true,
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-          <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-          <line x1="12" y1="22.08" x2="12" y2="12" />
-        </svg>
-      ),
-    },
-    {
-      id: 'kpi-good',
-      title: 'Good Production',
-      value: goodQty !== null ? formatNumber(goodQty) : 'Unavailable',
-      unit: '',
-      accent: 'purple',
-      sparklineData: goodSeries,
-      minimal: true,
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-          <polyline points="22 4 12 14.01 9 11.01" />
-        </svg>
-      ),
-    },
-    {
-      id: 'kpi-reject',
-      title: 'Rejected Production',
-      value: rejectQty !== null ? formatNumber(rejectQty) : 'Unavailable',
-      unit: '',
-      accent: 'purple',
-      sparklineData: rejectSeries,
-      minimal: true,
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10" />
-          <line x1="15" y1="9" x2="9" y2="15" />
-          <line x1="9" y1="9" x2="15" y2="15" />
-        </svg>
-      ),
-    },
-    {
-      id: 'kpi-downtime',
-      title: 'Production Downtime',
-      value: downtimeHours !== null ? `${formatNumber(downtimeHours, 1)}` : 'Unavailable',
-      unit: downtimeHours !== null ? 'hrs' : '',
-      accent: 'purple',
-      sparklineData: downtimeSeries,
-      minimal: true,
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10" />
-          <polyline points="12 6 12 12 16 14" />
-        </svg>
-      ),
-    },
-  ];
+  const elecIntensity = factoryEnergy?.electricity_intensity_kwh_per_good_unit ?? null;
+  const coverageStatus = coverage.coverage_status ?? null;
+  const coveragePct = coverage.coverage_percentage ?? null;
 
   return (
-    <div className="kpi-overview-container" style={{ marginBottom: '1.5rem' }}>
-      {/* 1. Exactly 4 Primary KPI Cards on Desktop */}
-      <KpiGrid className="kpi-grid">
-        {primaryCards.map((card) => (
-          <KpiCard
-            key={card.id}
-            id={card.id}
-            title={card.title}
-            value={card.value}
-            unit={card.unit}
-            accent={card.accent}
-            icon={card.icon}
-            sparklineData={card.sparklineData}
-            minimal={card.minimal}
-          />
-        ))}
-      </KpiGrid>
+    <div className="dashboard-section fal-performance-panel">
+      {/* 1. Header with Title & Single Coverage Badge */}
+      <div className="section-header fal-header">
+        <div>
+          <h3 className="section-title">Final Assembly performance</h3>
+          <p className="section-desc">
+            Finished goods throughput, quality yield, and factory energy intensity across Final Assembly lines.
+          </p>
+        </div>
+        {coverageStatus && (
+          <div className="coverage-badge-container">
+            <span
+              className={`compact-coverage-badge ${
+                coverageStatus === 'FULL' ? 'full' : 'partial'
+              }`}
+            >
+              <span className="coverage-dot"></span>
+              {coverageStatus === 'FULL' ? 'Full coverage' : 'Partial coverage'} · {hasNumber(coveragePct) ? `${coveragePct}%` : '100%'}
+            </span>
+          </div>
+        )}
+      </div>
 
-      {/* 2. Secondary Operational Metrics Strip */}
-      <div className="kpi-secondary-grid">
-        {/* Secondary 1: Rework Quantity (Separate metric) */}
-        <div className="kpi-secondary-item">
-          <div className="kpi-secondary-icon blue">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-              <path d="M21 3v5h-5" />
-              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-              <path d="M8 16H3v5" />
-            </svg>
+      {/* 2. Five Compact Metrics in One Desktop Row */}
+      <div className="fal-summary-strip">
+        {/* Metric 1: Good Finished Units */}
+        <div className="fal-segment">
+          <span className="fal-label">Good finished units</span>
+          <div className="fal-value-row">
+            <span className="fal-val">
+              {hasNumber(goodQty) ? formatNumber(goodQty) : '—'}
+            </span>
+            <span className="fal-unit">units</span>
           </div>
-          <div className="kpi-secondary-info">
-            <span className="kpi-secondary-label">Rework Quantity</span>
-            <div className="kpi-secondary-val-row">
-              <span className="kpi-secondary-val">
-                {reworkQty !== null ? formatNumber(reworkQty) : '—'}
-              </span>
-              <span className="kpi-secondary-detail">
-                {reworkRate !== null ? `units (${formatPercent(reworkRate)}) · Separate` : 'units'}
-              </span>
-            </div>
-          </div>
+          <span className="fal-subtext">Final Assembly output gate</span>
         </div>
 
-        {/* Secondary 2: Target Achievement */}
-        <div className="kpi-secondary-item">
-          <div className="kpi-secondary-icon purple">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 14 14" />
-            </svg>
+        {/* Metric 2: Good-Output Yield */}
+        <div className="fal-segment">
+          <span className="fal-label">Good-output yield</span>
+          <div className="fal-value-row">
+            <span className="fal-val">
+              {hasNumber(yieldPct) ? formatPercent(yieldPct) : '—'}
+            </span>
+            <span className="fal-unit">% of actual</span>
           </div>
-          <div className="kpi-secondary-info">
-            <span className="kpi-secondary-label">Target Achievement</span>
-            <div className="kpi-secondary-val-row">
-              <span className="kpi-secondary-val">
-                {achievementRate !== null ? formatPercent(achievementRate) : '—'}
-              </span>
-              <span className="kpi-secondary-detail">
-                {targetQty !== null ? `of ${formatNumber(targetQty)} planned` : 'achievement'}
-              </span>
-            </div>
-          </div>
+          <span className="fal-subtext">Good ÷ actual FAL units</span>
         </div>
 
-        {/* Secondary 3: Quantity Balance Verification */}
-        <div className="kpi-secondary-item">
-          <div className={`kpi-secondary-icon ${balanceValid === true ? 'green' : balanceValid === false ? 'orange' : 'navy'}`}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              {balanceValid === true ? (
-                <polyline points="20 6 9 17 4 12" />
-              ) : (
-                <>
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="12" y1="8" x2="12" y2="12" />
-                  <line x1="12" y1="16" x2="12.01" y2="16" />
-                </>
-              )}
-            </svg>
+        {/* Metric 3: Rejected Units (consistent with FAL scrap count and rate) */}
+        <div className="fal-segment">
+          <span className="fal-label">Rejected units</span>
+          <div className="fal-value-row">
+            <span className="fal-val">
+              {hasNumber(rejectQty) ? formatNumber(rejectQty) : '—'}
+            </span>
+            <span className="fal-unit">units</span>
           </div>
-          <div className="kpi-secondary-info">
-            <span className="kpi-secondary-label">Quantity Balance</span>
-            <div className="kpi-secondary-val-row">
-              <span className="kpi-secondary-val">
-                {balanceValid === true ? 'Verified' : balanceValid === false ? 'Mismatch' : '—'}
-              </span>
-              <span className="kpi-secondary-detail">
-                Actual = Good + Reject
-              </span>
-            </div>
-          </div>
+          <span className="fal-subtext">
+            {hasNumber(rejectPct) ? `${formatPercent(rejectPct)} reject rate` : 'Final Assembly scrap'}
+          </span>
         </div>
 
-        {/* Secondary 4: Hourly Logged Events */}
-        <div className="kpi-secondary-item">
-          <div className="kpi-secondary-icon navy">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z" />
-              <path d="M6 6h10" />
-              <path d="M6 10h10" />
-              <path d="M6 14h6" />
-            </svg>
+        {/* Metric 4: Line Downtime */}
+        <div className="fal-segment">
+          <span className="fal-label">Line downtime</span>
+          <div className="fal-value-row">
+            <span className="fal-val">
+              {hasNumber(downtimeHours) ? formatNumber(downtimeHours, 1) : '—'}
+            </span>
+            <span className="fal-unit">line-hrs</span>
           </div>
-          <div className="kpi-secondary-info">
-            <span className="kpi-secondary-label">Operating Logs</span>
-            <div className="kpi-secondary-val-row">
-              <span className="kpi-secondary-val">
-                {eventCount !== null ? formatNumber(eventCount) : '—'}
-              </span>
-              <span className="kpi-secondary-detail">
-                hourly production records
-              </span>
-            </div>
+          <span className="fal-subtext">
+            {hasNumber(downtimeMin) ? `Summed: ${formatNumber(downtimeMin)} line-min` : 'Summed across FAL lines'}
+          </span>
+        </div>
+
+        {/* Metric 5: Electricity Intensity */}
+        <div className="fal-segment">
+          <span className="fal-label">Electricity per good finished unit</span>
+          <div className="fal-value-row">
+            <span className="fal-val">
+              {hasNumber(elecIntensity) ? formatNumber(elecIntensity, 4) : '—'}
+            </span>
+            <span className="fal-unit">kWh/good unit</span>
           </div>
+          <span className="fal-subtext">Factory electricity ÷ good FAL units</span>
         </div>
       </div>
     </div>

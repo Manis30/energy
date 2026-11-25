@@ -212,3 +212,45 @@ class DailyReportCoverageResponse(BaseModel):
     production_coverage: List[DailyStreamCoverage] = Field(default_factory=list)
     limitations: List[str] = Field(default_factory=list)
 
+
+class DataEntryPayload(BaseModel):
+    """Payload for manual or pasted energy and production data entry."""
+    reporting_date: date
+    plant_id: str = "IN-TN-01"
+    entry_type: str = "MANUAL"  # "MANUAL" or "PASTE"
+    energy_rows: List[Dict[str, Any]] = Field(default_factory=list)
+    production_rows: List[Dict[str, Any]] = Field(default_factory=list)
+    mode: str = "INCREMENTAL"  # "INCREMENTAL" or "OVERWRITE_CORRECTION"
+
+
+class DataEntryErrorItem(BaseModel):
+    """Field-specific error for tabular display."""
+    tab: str  # "Energy" or "Production"
+    row: int
+    field: str
+    message: str
+
+
+class DataEntryValidationResponse(BaseModel):
+    """Validation response for entered or pasted data rows."""
+    is_valid: bool
+    valid: Optional[bool] = None
+    total_valid: Optional[int] = 0
+    total_errors: int
+    errors: List[DataEntryErrorItem] = Field(default_factory=list)
+    energy_summary: Dict[str, Any]
+    production_summary: Dict[str, Any]
+
+
+class DataEntrySaveResponse(BaseModel):
+    """Response returned upon saving entered rows to PostgreSQL fact tables."""
+    success: bool
+    energy_saved: int
+    production_saved: int
+    energy_records_written: Optional[int] = None
+    production_records_written: Optional[int] = None
+    energy_upload_id: Optional[str] = None
+    production_upload_id: Optional[str] = None
+    message: str
+
+

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   energyApi,
   energyIntensityApi,
@@ -84,10 +84,26 @@ const INITIAL_MONTHS = [
   { value: '2026-11', label: 'November 2026 (No Data Test)', year: 2026, month: 11, count: 0 },
 ];
 
+const INITIAL_PLANTS = [
+  { value: 'IN-TN-01', label: 'Plant IN-TN-01 (Tamil Nadu)', shortLabel: 'Plant IN-TN-01' },
+  { value: 'IN-KA-01', label: 'Plant IN-KA-01 (Karnataka)', shortLabel: 'Plant IN-KA-01' },
+];
+
+const STANDARD_SHIFTS = [
+  { value: 'A', label: 'Shift A (Morning • 06:00 – 14:00)' },
+  { value: 'B', label: 'Shift B (Evening • 14:00 – 22:00)' },
+  { value: 'C', label: 'Shift C (Night • 22:00 – 06:00)' },
+];
+
 export default function Dashboard() {
-  // Filter States: Exactly two selectors (Month, Date)
+  // Filter States: Exactly four selectors (Month, Date, Plant, Shift)
   const [selectedMonth, setSelectedMonth] = useState('2026-10'); // Default to latest verified month
   const [selectedDate, setSelectedDate] = useState('ALL'); // Default to aggregated month view
+  const [selectedPlant, setSelectedPlant] = useState('ALL'); // Default to All plants
+  const [selectedShift, setSelectedShift] = useState('ALL'); // Default to All shifts
+
+  // Available plants and shifts
+  const [availablePlants, setAvailablePlants] = useState(INITIAL_PLANTS);
 
   // Dynamic date availability state derived from backend telemetry
   const [availableMonths, setAvailableMonths] = useState(INITIAL_MONTHS);
@@ -98,6 +114,7 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [backendConnected, setBackendConnected] = useState(true);
+  const [loadedPeriodKey, setLoadedPeriodKey] = useState(null);
 
   // Analytical data states
   const [energySummary, setEnergySummary] = useState(null);
@@ -114,6 +131,31 @@ export default function Dashboard() {
   });
   const [attentionFindings, setAttentionFindings] = useState([]);
   const [unavailableFeeds, setUnavailableFeeds] = useState([]);
+
+  // Race condition protection ref: ignore responses from older requests
+  const reqIdRef = useRef(0);
+
+  // Dynamically populate available shifts for selected plant & period
+  const availableShifts = useMemo(() => {
+    return STANDARD_SHIFTS;
+  }, [selectedPlant, selectedMonth]);
+
+  // Handle Plant selection with validation
+  const handleSelectPlant = (newPlant) => {
+    setSelectedPlant(newPlant);
+    // If a plant change makes the selected shift invalid, reset to "ALL"
+    const validShiftValues = availableShifts.map((s) => s.value);
+    if (selectedShift !== 'ALL' && !validShiftValues.includes(selectedShift)) {
+      setSelectedShift('ALL');
+    }
+    setLoading(true);
+  };
+
+  // Handle Shift selection
+  const handleSelectShift = (newShift) => {
+    setSelectedShift(newShift);
+    setLoading(true);
+  };
 
   // 1. Dynamic Discovery of available months and dates from backend telemetry
   useEffect(() => {
@@ -136,7 +178,8 @@ export default function Dashboard() {
             }
             map[monthKey].push({
               value: item.date,
-              label: `${item.date} (${formatOptionDate(item.date)})`,
+              label: formatOptionDate(item.date),
+              shortLabel: formatOptionDate(item.date),
             });
           });
 
@@ -200,11 +243,13 @@ export default function Dashboard() {
     if (selectedDate !== 'ALL' && !selectedDate.startsWith(newMonth)) {
       setSelectedDate('ALL');
     }
+    setLoading(true);
   };
 
   // Handle Date selection
   const handleSelectDate = (newDate) => {
     setSelectedDate(newDate);
+    setLoading(true);
   };
 
   // Compute resolved date range from active Month & Date selectors
@@ -212,8 +257,38 @@ export default function Dashboard() {
     return resolveDateRange(selectedMonth, selectedDate);
   }, [selectedMonth, selectedDate]);
 
+  const currentPeriodKey = resolvedDateRange
+    ? `${resolvedDateRange.startDate}:${resolvedDateRange.endDate}:${selectedPlant}:${selectedShift}`
+    : '';
+
+  // Determine busy, refresh, and placeholder states
+  const isBusy = loading || refreshing || (loadedPeriodKey !== null && loadedPeriodKey !== currentPeriodKey);
+  const isRefreshingSamePeriod = refreshing && loadedPeriodKey === currentPeriodKey;
+  const showPlaceholders = isBusy && !isRefreshingSamePeriod;
+
+  // Selected period formatting: "October 2026" for full month, or actual date(s)
+  const selectedPeriodText = useMemo(() => {
+    if (!resolvedDateRange) return '';
+    const dateText = (!resolvedDateRange.isDaily || selectedDate === 'ALL')
+      ? (formatMonthLabel(selectedMonth) || resolvedDateRange.label)
+      : (resolvedDateRange.startDate === resolvedDateRange.endDate
+          ? (formatOptionDate(resolvedDateRange.startDate) || resolvedDateRange.startDate)
+          : `${formatOptionDate(resolvedDateRange.startDate)} – ${formatOptionDate(resolvedDateRange.endDate)}`);
+
+    const plantLabel = selectedPlant !== 'ALL'
+      ? (availablePlants.find((p) => p.value === selectedPlant)?.shortLabel || selectedPlant)
+      : null;
+    const shiftLabel = selectedShift !== 'ALL'
+      ? (availableShifts.find((s) => s.value === selectedShift)?.label?.split(' ')[0] || `Shift ${selectedShift}`)
+      : null;
+
+    const extras = [plantLabel, shiftLabel].filter(Boolean).join(' • ');
+    return extras ? `${dateText} (${extras})` : dateText;
+  }, [resolvedDateRange, selectedMonth, selectedDate, selectedPlant, selectedShift, availablePlants, availableShifts]);
+
   // Load Dashboard analytical and operational data
   const loadDashboardData = useCallback(async (isRefresh = false) => {
+    const currentReqId = ++reqIdRef.current;
     if (isRefresh) {
       setRefreshing(true);
     } else {
@@ -225,7 +300,11 @@ export default function Dashboard() {
     const filterParams = {
       start_date: resolvedDateRange.startDate,
       end_date: resolvedDateRange.endDate,
+      ...(selectedPlant !== 'ALL' ? { plant_id: selectedPlant } : {}),
+      ...(selectedShift !== 'ALL' ? { shift_id: selectedShift } : {}),
     };
+
+    const plantScopeParams = selectedPlant !== 'ALL' ? { plant_id: selectedPlant } : {};
 
     try {
       const results = await Promise.allSettled([
@@ -234,13 +313,18 @@ export default function Dashboard() {
         productionApi.getSummary(filterParams),
         productionApi.getDailyTrend(filterParams),
         energyIntensityApi.getFactoryEnergy(filterParams),
-        findingsApi.listFindings({ status: 'ACTIVE', limit: 1 }),
-        findingsApi.listFindings({ status: 'ACTIVE', severity: 'CRITICAL', limit: 1 }),
-        findingsApi.listFindings({ status: 'ACTIVE', severity: 'HIGH', limit: 1 }),
-        recommendationsApi.listRecommendations({ status: 'OPEN', limit: 1 }),
-        recommendationsApi.listRecommendations({ status: 'IN_PROGRESS', limit: 1 }),
-        findingsApi.listFindings({ status: 'ACTIVE', limit: 10 }),
+        findingsApi.listFindings({ status: 'ACTIVE', limit: 1, ...plantScopeParams }),
+        findingsApi.listFindings({ status: 'ACTIVE', severity: 'CRITICAL', limit: 1, ...plantScopeParams }),
+        findingsApi.listFindings({ status: 'ACTIVE', severity: 'HIGH', limit: 1, ...plantScopeParams }),
+        recommendationsApi.listRecommendations({ status: 'OPEN', limit: 1, ...plantScopeParams }),
+        recommendationsApi.listRecommendations({ status: 'IN_PROGRESS', limit: 1, ...plantScopeParams }),
+        findingsApi.listFindings({ status: 'ACTIVE', limit: 10, ...plantScopeParams }),
       ]);
+
+      // If a newer request was dispatched while this request was awaiting, ignore stale result
+      if (currentReqId !== reqIdRef.current) {
+        return;
+      }
 
       const [
         eSummaryRes,
@@ -298,15 +382,18 @@ export default function Dashboard() {
         throw new Error(eSummaryRes.reason?.message || pSummaryRes.reason?.message || 'Failed to load primary dashboard data.');
       } else {
         setBackendConnected(true);
+        setLoadedPeriodKey(`${resolvedDateRange.startDate}:${resolvedDateRange.endDate}:${selectedPlant}:${selectedShift}`);
       }
     } catch (err) {
       console.error('Dashboard data load error:', err);
       setError(err.message || 'Unable to load dashboard analytics. Verify backend connection.');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (currentReqId === reqIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [resolvedDateRange]);
+  }, [resolvedDateRange, selectedPlant, selectedShift]);
 
   useEffect(() => {
     loadDashboardData(false);
@@ -326,14 +413,20 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard-container dashboard-view">
-      {/* 1. Integrated Header & Modern Filter Toolbar (Month + Date selectors) */}
+      {/* 1. Integrated Header & Modern Filter Toolbar (Month → Date → Plant → Shift → Refresh) */}
       <DashboardHeader
         selectedMonth={selectedMonth}
         onSelectMonth={handleSelectMonth}
         selectedDate={selectedDate}
         onSelectDate={handleSelectDate}
+        selectedPlant={selectedPlant}
+        onSelectPlant={handleSelectPlant}
+        selectedShift={selectedShift}
+        onSelectShift={handleSelectShift}
         availableMonths={availableMonths}
         availableDates={currentMonthAvailableDates}
+        availablePlants={availablePlants}
+        availableShifts={availableShifts}
         resolvedDateRange={resolvedDateRange}
         onRefresh={handleRefresh}
         refreshing={refreshing}
@@ -341,15 +434,28 @@ export default function Dashboard() {
         backendConnected={backendConnected}
       />
 
-      {loading ? (
-        <div className="dashboard-loading-state" role="status" aria-live="polite" aria-busy="true">
-          <div className="loading-spinner"></div>
-          <div className="loading-title">Retrieving Factory Telemetry &amp; Analytics...</div>
-          <div className="loading-subtitle">
-            Loading metrics for {resolvedDateRange.label} ({resolvedDateRange.startDate} to {resolvedDateRange.endDate})
+      {isBusy && (
+        <div
+          className="dashboard-loading-status-row"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          <div className="dashboard-loading-main">
+            <span className="dashboard-loading-spinner" aria-hidden="true" />
+            <span className="dashboard-loading-message">
+              {isRefreshingSamePeriod ? 'Updating dashboard' : 'Loading energy and production data'}
+            </span>
           </div>
+          {selectedPeriodText && (
+            <span className="dashboard-loading-period">
+              {selectedPeriodText}
+            </span>
+          )}
         </div>
-      ) : error ? (
+      )}
+
+      {error && !isBusy ? (
         <div className="dashboard-error-state" role="alert">
           <div className="error-icon">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -379,42 +485,47 @@ export default function Dashboard() {
 
           {/* 1. Four Primary KPI Cards */}
           <KpiOverview
-            energySummary={energySummary}
-            productionSummary={productionSummary}
-            factoryEnergy={factoryEnergy}
-            energyTrend={energyDailyTrend}
-            productionTrend={productionDailyTrend}
+            energySummary={showPlaceholders ? null : energySummary}
+            productionSummary={showPlaceholders ? null : productionSummary}
+            factoryEnergy={showPlaceholders ? null : factoryEnergy}
+            energyTrend={showPlaceholders ? [] : energyDailyTrend}
+            productionTrend={showPlaceholders ? [] : productionDailyTrend}
             resolvedDateRange={resolvedDateRange}
+            selectedPlant={selectedPlant}
+            selectedShift={selectedShift}
             energyAvailable={!unavailableFeeds.includes('Energy summary')}
             productionAvailable={!unavailableFeeds.includes('Production summary')}
             factoryEnergyAvailable={!unavailableFeeds.includes('Factory energy intensity')}
-            loading={isDataLoading}
+            loading={showPlaceholders}
           />
 
           {/* 2. Compact Operational Health Strip */}
           <OperationalHealthSummary
-            activeFindingsCount={operationalKpis.activeFindings}
-            criticalHighCount={operationalKpis.criticalHigh}
-            openRecommendationsCount={operationalKpis.openRecommendations}
-            productionSummary={productionSummary}
-            loading={isDataLoading}
+            activeFindingsCount={showPlaceholders ? 0 : operationalKpis.activeFindings}
+            criticalHighCount={showPlaceholders ? 0 : operationalKpis.criticalHigh}
+            openRecommendationsCount={showPlaceholders ? 0 : operationalKpis.openRecommendations}
+            productionSummary={showPlaceholders ? null : productionSummary}
+            loading={showPlaceholders}
           />
 
           {/* 3 & 4. Daily Energy Consumption & Daily Production Output */}
           <ExecutiveChartsRow
-            energyTrend={energyDailyTrend}
-            productionTrend={productionDailyTrend}
+            energyTrend={showPlaceholders ? [] : energyDailyTrend}
+            productionTrend={showPlaceholders ? [] : productionDailyTrend}
             energyAvailable={!unavailableFeeds.includes('Energy trend')}
             productionAvailable={!unavailableFeeds.includes('Production trend')}
-            loading={isDataLoading}
+            loading={showPlaceholders}
             resolvedDateRange={resolvedDateRange}
+            selectedPlant={selectedPlant}
+            selectedShift={selectedShift}
           />
 
           {/* 5. Operational Attention Required (Compact Alert List) */}
           <OperationalAttentionSection
-            findings={attentionFindings}
-            totalActiveCount={operationalKpis.activeFindings}
-            loading={isDataLoading}
+            findings={showPlaceholders ? [] : attentionFindings}
+            totalActiveCount={showPlaceholders ? 0 : operationalKpis.activeFindings}
+            loading={showPlaceholders}
+            selectedPlant={selectedPlant}
           />
 
           {/* 6. Methodology & Scope Qualifications Footer */}

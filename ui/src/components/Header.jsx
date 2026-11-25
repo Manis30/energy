@@ -85,10 +85,7 @@ export default function Header({ theme, onToggleTheme, backendStatus, onToggleSi
             <line x1="3" y1="18" x2="21" y2="18"></line>
           </svg>
         </button>
-        <h1
-          className="page-title"
-          style={isCompactHeader ? { fontSize: '18px', fontWeight: 600 } : undefined}
-        >
+        <h1 className="page-title">
           {currentTitle}
         </h1>
         {renderBadge()}

@@ -54,6 +54,7 @@ export default function EnergyTrendChart({
   dataAvailable = false,
   dateRange,
   selectedPlant,
+  selectedShift = 'ALL',
 }) {
   const chartData = (dailyTrend || []).map((item) => ({
     ...item,
@@ -96,6 +97,11 @@ export default function EnergyTrendChart({
           <span className="section-tag info">
             {plantLabel}
           </span>
+          {selectedShift && selectedShift !== 'ALL' && (
+            <span className="section-tag process">
+              Shift {selectedShift}
+            </span>
+          )}
           {peakDay && (
             <span className="section-tag process">
               Peak: {formatDate(peakDay.date)} ({formatNumber(peakDay.consumption_num, 0)} kWh)
