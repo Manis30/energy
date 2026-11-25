@@ -285,6 +285,8 @@ function formatCitationsInText(text, citations, onCitationClick) {
     }
 
     const citationObj = (citations || []).find((c) => c.id === id || c.id === `${type}:${id}`);
+    const nextChar = text.charAt(matchIndex + fullMatch.length);
+    const followedByPunct = /^[.,;:!?)]/.test(nextChar);
 
     parts.push(
       <button
@@ -294,12 +296,14 @@ function formatCitationsInText(text, citations, onCitationClick) {
           display: 'inline-flex',
           alignItems: 'center',
           gap: '0.2rem',
-          padding: '0.15rem 0.45rem',
-          margin: '0 0.2rem',
+          padding: '0.06rem 0.38rem',
+          marginLeft: '0.18rem',
+          marginRight: followedByPunct ? '0.04rem' : '0.18rem',
           borderRadius: '4px',
           background: 'rgba(79, 70, 229, 0.1)',
           color: '#4338ca',
-          fontSize: '0.78rem',
+          fontSize: '0.76rem',
+          lineHeight: 1.3,
           fontWeight: 600,
           border: '1px solid rgba(79, 70, 229, 0.25)',
           cursor: 'pointer',

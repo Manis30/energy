@@ -84,8 +84,11 @@ export default function InterventionWorkflowModal({
 
   // Focus trap and restore references
   const dialogRef = useRef(null);
+  const bodyRef = useRef(null);
   const triggerElementRef = useRef(null);
   const stepRailRef = useRef(null);
+  const implementedByRef = useRef(null);
+  const implementationNotesRef = useRef(null);
 
   // Review Form state
   const [reviewDecision, setReviewDecision] = useState(() => {
@@ -95,6 +98,7 @@ export default function InterventionWorkflowModal({
   });
   const [reviewReason, setReviewReason] = useState('');
   const [reviewerName, setReviewerName] = useState('');
+  const [isReReviewing, setIsReReviewing] = useState(false);
 
   // Implementation Form state
   const [implementedAt, setImplementedAt] = useState(new Date().toISOString().slice(0, 16));
@@ -310,88 +314,120 @@ export default function InterventionWorkflowModal({
     return () => dialogNode.removeEventListener('keydown', handleFocusTrap);
   }, [isOpen, activeStep]);
 
+  // Reset scrollable body to top whenever active step, modal open state, or action changes
+  useEffect(() => {
+    if (isOpen && bodyRef.current) {
+      bodyRef.current.scrollTop = 0;
+    }
+  }, [activeStep, isOpen, action?.action_id]);
+
   // Load existing plan & assessment when modal opens or action changes
   useEffect(() => {
     if (!action || !isOpen) return;
     setError(null);
+    setActiveStep('overview');
+    setIsReReviewing(false);
+    setIsAmendingPlan(false);
 
-    // Sync review defaults
-    if (action.review_status === 'APPROVED') {
+    // Sync review defaults from saved backend fields
+    if (action.review_status === 'APPROVED' || action.status === 'APPROVED') {
       setReviewDecision('APPROVE');
-    } else if (action.review_status === 'REJECTED') {
+    } else if (action.review_status === 'REJECTED' || action.status === 'REJECTED') {
       setReviewDecision('REJECT');
     } else {
       setReviewDecision(null);
     }
     setReviewerName(action.reviewed_by || '');
-    setReviewReason(action.review_notes || '');
+    setReviewReason(action.review_decision_reason || action.review_notes || '');
 
+    // Reset implementation form inputs on action switch; align unrecorded timestamp with plan window if needed
+    setImplementationNotes('');
+    setWorkOrderId('');
+    setDowntimeEventId('');
+    const defaultNowIso = new Date().toISOString().slice(0, 16);
+    if (action.implemented_at) {
+      try {
+        setImplementedAt(new Date(action.implemented_at).toISOString().slice(0, 16));
+      } catch {
+        setImplementedAt('');
+      }
+    } else {
+      setImplementedAt(defaultNowIso);
+    }
+
+    let cancelled = false;
     const loadPlanAndAssessment = async () => {
       setLoading(true);
+      let loadedPlan = null;
       try {
-        try {
-          const p = await recommendationsApi.getMeasurementPlan(action.action_id);
-          setPlan(p);
-          if (p) {
-            setIntendedChange(p.intended_change || action.description || '');
-            setPlanOwner(p.implementation_owner || action.owner || '');
-            if (p.process_or_line) {
-              if (isValidProductionLine(action.plant_id, p.process_or_line)) {
-                setBoundaryChoice('LINE_SPECIFIC');
-                setSelectedLine(p.process_or_line);
-              } else if (['PLANT_WIDE', 'FACTORY', 'PLANT', 'ALL'].includes(p.process_or_line.toUpperCase())) {
-                setBoundaryChoice('PLANT_WIDE');
-              } else if (['SHARED_UTILITY', 'UNKNOWN_ALLOCATION'].includes(p.process_or_line.toUpperCase())) {
-                setBoundaryChoice('SHARED_UTILITY');
-              } else {
-                setBoundaryChoice('');
+        if (action.measurement_plan_id) {
+          try {
+            const p = await recommendationsApi.getMeasurementPlan(action.action_id);
+            if (cancelled) return;
+            loadedPlan = p;
+            setPlan(p);
+            if (p) {
+              setIntendedChange(p.intended_change || action.description || '');
+              setPlanOwner(p.implementation_owner || action.owner || '');
+              if (p.process_or_line) {
+                if (isValidProductionLine(action.plant_id, p.process_or_line)) {
+                  setBoundaryChoice('LINE_SPECIFIC');
+                  setSelectedLine(p.process_or_line);
+                } else if (['PLANT_WIDE', 'FACTORY', 'PLANT', 'ALL'].includes(p.process_or_line.toUpperCase())) {
+                  setBoundaryChoice('PLANT_WIDE');
+                } else if (['SHARED_UTILITY', 'UNKNOWN_ALLOCATION'].includes(p.process_or_line.toUpperCase())) {
+                  setBoundaryChoice('SHARED_UTILITY');
+                } else {
+                  setBoundaryChoice('');
+                }
+              }
+              if (p.comparison_method) setComparisonMethod(p.comparison_method);
+              if (p.min_coverage_pct) setMinCoveragePct(p.min_coverage_pct);
+              if (p.guardrail_output_min !== undefined && p.guardrail_output_min !== null) setGuardrailOutputMin(p.guardrail_output_min);
+              if (p.guardrail_output_reason) setGuardrailOutputReason(p.guardrail_output_reason);
+              if (p.guardrail_reject_max !== undefined && p.guardrail_reject_max !== null) setGuardrailRejectMax(p.guardrail_reject_max);
+              if (p.guardrail_reject_reason) setGuardrailRejectReason(p.guardrail_reject_reason);
+              if (p.guardrail_downtime_max_min !== undefined && p.guardrail_downtime_max_min !== null) setGuardrailDowntimeMax(p.guardrail_downtime_max_min);
+              if (p.guardrail_downtime_reason) setGuardrailDowntimeReason(p.guardrail_downtime_reason);
+              if (p.guardrail_restart_max_min !== undefined && p.guardrail_restart_max_min !== null) setGuardrailRestartMax(p.guardrail_restart_max_min);
+              if (p.guardrail_restart_reason) setGuardrailRestartReason(p.guardrail_restart_reason);
+              if (p.baseline_start) setBaselineStart(p.baseline_start.slice(0, 16));
+              if (p.baseline_end) setBaselineEnd(p.baseline_end.slice(0, 16));
+              if (p.post_start) setPostStart(p.post_start.slice(0, 16));
+              if (p.post_end) setPostEnd(p.post_end.slice(0, 16));
+
+              if (!action.implemented_at && p.post_start && p.post_end) {
+                if (new Date(defaultNowIso) > new Date(p.post_end)) {
+                  setImplementedAt(p.post_start.slice(0, 16));
+                }
               }
             }
-            if (p.comparison_method) setComparisonMethod(p.comparison_method);
-            if (p.min_coverage_pct) setMinCoveragePct(p.min_coverage_pct);
-            if (p.guardrail_output_min !== undefined && p.guardrail_output_min !== null) setGuardrailOutputMin(p.guardrail_output_min);
-            if (p.guardrail_output_reason) setGuardrailOutputReason(p.guardrail_output_reason);
-            if (p.guardrail_reject_max !== undefined && p.guardrail_reject_max !== null) setGuardrailRejectMax(p.guardrail_reject_max);
-            if (p.guardrail_reject_reason) setGuardrailRejectReason(p.guardrail_reject_reason);
-            if (p.guardrail_downtime_max_min !== undefined && p.guardrail_downtime_max_min !== null) setGuardrailDowntimeMax(p.guardrail_downtime_max_min);
-            if (p.guardrail_downtime_reason) setGuardrailDowntimeReason(p.guardrail_downtime_reason);
-            if (p.guardrail_restart_max_min !== undefined && p.guardrail_restart_max_min !== null) setGuardrailRestartMax(p.guardrail_restart_max_min);
-            if (p.guardrail_restart_reason) setGuardrailRestartReason(p.guardrail_restart_reason);
-            if (p.baseline_start) setBaselineStart(p.baseline_start.slice(0, 16));
-            if (p.baseline_end) setBaselineEnd(p.baseline_end.slice(0, 16));
-            if (p.post_start) setPostStart(p.post_start.slice(0, 16));
-            if (p.post_end) setPostEnd(p.post_end.slice(0, 16));
-          }
-        } catch (planErr) {
-          const errMsg = planErr.message || '';
-          if (planErr.status === 404 && errMsg.toLowerCase().includes('no measurement plan found')) {
-            // Recognized legitimate empty plan state: render empty plan form without showing error
-            setPlan(null);
-          } else {
-            // Unknown action, permission, or server errors: keep visible
-            setPlan(null);
-            setError(errMsg || 'Failed to load measurement plan.');
-          }
-        }
-
-        if (action.implemented_at) {
-          try {
-            // Only query assessment if plan boundary is valid to avoid known invalid line 400s
-            const p = await recommendationsApi.getMeasurementPlan(action.action_id).catch(() => null);
-            if (p && isValidMeasurementBoundary(action.plant_id, p.process_or_line)) {
-              const asm = await recommendationsApi.getAssessment(action.action_id);
-              setAssessment(asm);
+          } catch (planErr) {
+            if (cancelled) return;
+            const errMsg = planErr.message || '';
+            if (planErr.status === 404 && errMsg.toLowerCase().includes('no measurement plan found')) {
+              setPlan(null);
             } else {
-              setAssessment(null);
+              setPlan(null);
+              setError(errMsg || 'Failed to load measurement plan.');
             }
-          } catch {
-            setAssessment(null);
           }
         } else {
+          setPlan(null);
+        }
+
+        if (action.implemented_at && loadedPlan && isValidMeasurementBoundary(action.plant_id, loadedPlan.process_or_line)) {
+          try {
+            const asm = await recommendationsApi.getAssessment(action.action_id);
+            if (!cancelled) setAssessment(asm);
+          } catch {
+            if (!cancelled) setAssessment(null);
+          }
+        } else if (!cancelled) {
           setAssessment(null);
         }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
@@ -400,20 +436,42 @@ export default function InterventionWorkflowModal({
     if (action) {
       setIntendedChange(action.description || 'Standby load interlock and heater setpoint optimization');
       setPlanOwner(action.owner || 'Facilities Engineering');
-      if (action.implemented_at) {
-        try {
-          setImplementedAt(new Date(action.implemented_at).toISOString().slice(0, 16));
-        } catch {
-          setImplementedAt('');
-        }
-      }
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, [action?.action_id, isOpen]);
 
   if (!isOpen || !action) return null;
 
+  // Saved workflow state & allowed transition derivations
+  const actionStatusNorm = String(action.status || 'OPEN').toUpperCase();
+  const savedReviewStatus = String(action.review_status || 'PENDING_REVIEW').toUpperCase();
+  const hasSavedApproval = savedReviewStatus === 'APPROVED' || actionStatusNorm === 'APPROVED';
+  const hasSavedRejection = savedReviewStatus === 'REJECTED' || actionStatusNorm === 'REJECTED';
+  const hasSavedReview = hasSavedApproval || hasSavedRejection;
+  const savedReviewJustification =
+    (action.review_decision_reason || action.review_notes || '').trim() || 'Justification not recorded';
+  const savedReviewerDisplay = action.reviewed_by || 'Reviewer not recorded';
+  const isDemoReviewSaved = Boolean(
+    !action.reviewed_by || String(action.reviewed_by).toLowerCase().includes('demo')
+  );
+  const canReReview = !action.implemented_at && !['COMPLETED', 'CANCELLED'].includes(actionStatusNorm);
+  const canApproveProposal = (!hasSavedApproval || isReReviewing) && !action.implemented_at && !['COMPLETED', 'CANCELLED'].includes(actionStatusNorm);
+  const isReviewFormEditable = (!hasSavedReview && canReReview) || (isReReviewing && canReReview);
+  const savedDecisionLabel = hasSavedApproval ? 'Approved' : (hasSavedRejection ? 'Rejected' : formatEnum(savedReviewStatus));
+  const savedDecisionBadgeClass = hasSavedApproval
+    ? 'workflow-badge-approved'
+    : (hasSavedRejection ? 'workflow-badge-rejected' : 'workflow-badge-review');
+  const savedDecisionCardClass = hasSavedApproval ? 'is-approved' : (hasSavedRejection ? 'is-rejected' : '');
+
   // Boundary validity and date conflict checks
   const isBoundaryValid = Boolean(plan && isValidMeasurementBoundary(action.plant_id, plan.process_or_line));
+  const isReadyForImplementation = Boolean(hasSavedApproval && plan?.is_frozen && !action.implemented_at);
+  const isAssessmentSignedOff = Boolean(
+    assessment?.signed_off_at || (action.assessment_status && action.assessment_status !== 'NONE')
+  );
   const isDateConflict = Boolean(
     plan?.post_end && (
       action.implemented_at
@@ -425,13 +483,10 @@ export default function InterventionWorkflowModal({
   // Step indices
   const currentStepIndex = WORKFLOW_STEPS.findIndex((s) => s.key === activeStep);
 
+  // Stepper & Previous/Next strictly navigate between steps without triggering mutations
   const handleStepClick = (stepKey) => {
     setError(null);
-    if (stepKey === 'assessment' && action.implemented_at && !assessment && isBoundaryValid) {
-      handleEvaluateAssessment();
-    } else {
-      setActiveStep(stepKey);
-    }
+    setActiveStep(stepKey);
   };
 
   const handlePrevStep = () => {
@@ -441,28 +496,24 @@ export default function InterventionWorkflowModal({
   };
 
   const handleNextStep = () => {
-    if (activeStep === 'implement' && !action.implemented_at) {
-      setError('Physical implementation must be recorded and saved before proceeding to Assessment.');
-      return;
-    }
     if (currentStepIndex < WORKFLOW_STEPS.length - 1) {
       handleStepClick(WORKFLOW_STEPS[currentStepIndex + 1].key);
     }
   };
 
-  // Completion statuses for stepper checkmarks
+  // Completion statuses derived strictly from saved workflow data
   const isStepCompleted = (key) => {
     switch (key) {
       case 'overview':
         return Boolean(action.action_id);
       case 'review':
-        return action.review_status === 'APPROVED' || action.review_status === 'REJECTED';
+        return hasSavedReview;
       case 'plan':
         return Boolean(plan && plan.is_frozen);
       case 'implement':
         return Boolean(action.implemented_at);
       case 'assessment':
-        return Boolean(action.assessment_status && action.assessment_status !== 'NONE');
+        return isAssessmentSignedOff;
       default:
         return false;
     }
@@ -489,6 +540,7 @@ export default function InterventionWorkflowModal({
         reviewer: finalReviewer,
       });
       if (onActionUpdated) onActionUpdated(updated);
+      setIsReReviewing(false);
       setActiveStep(reviewDecision === 'APPROVE' ? 'plan' : 'overview');
     } catch (err) {
       setError(err.message || 'Failed to submit proposal review.');
@@ -505,10 +557,13 @@ export default function InterventionWorkflowModal({
     }
     if (!implementedBy.trim() || implementedBy.trim().toLowerCase() === 'anonymous' || implementedBy.trim().toLowerCase() === 'admin') {
       setError('A genuine operator or team identifier is required (anonymous or placeholder identities are rejected).');
+      implementedByRef.current?.focus();
       return;
     }
     if (!implementationNotes.trim()) {
       setError('Please provide implementation notes describing physical actions taken on equipment.');
+      implementationNotesRef.current?.focus();
+      implementationNotesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
     setLoading(true);
@@ -703,6 +758,11 @@ export default function InterventionWorkflowModal({
         approval_notes: 'Approved prospective M&V baseline, coverage, and guardrail limits.',
       });
       setPlan(approved);
+      if (!action.implemented_at && approved?.post_start && approved?.post_end) {
+        if (!implementedAt || new Date(implementedAt) > new Date(approved.post_end)) {
+          setImplementedAt(approved.post_start.slice(0, 16));
+        }
+      }
       setActiveStep('implement');
     } catch (err) {
       setError(err.message || 'Failed to approve measurement plan.');
@@ -759,21 +819,54 @@ export default function InterventionWorkflowModal({
     }
   };
 
-  // Render primary action button in persistent footer
-  const renderPrimaryAction = () => {
-    if (activeStep === 'overview') {
-      return (
+  // Helper banner for approved actions with a frozen plan awaiting implementation
+  const renderNextImplementationCallout = () => {
+    if (!isReadyForImplementation) return null;
+    return (
+      <div className="workflow-next-step-callout">
+        <div className="workflow-next-step-text">
+          <strong>Next step: Record implementation</strong>
+          <span>Proposal is approved and measurement plan v{plan.version} is frozen. Record the physical implementation timestamp and operator identity to begin post-intervention evaluation.</span>
+        </div>
         <button
           type="button"
           className="workflow-btn workflow-btn-primary"
-          onClick={() => setActiveStep('review')}
+          onClick={() => handleStepClick('implement')}
         >
-          Proceed to Review →
+          Open Implementation →
         </button>
+      </div>
+    );
+  };
+
+  // Render primary action or saved read-only decision in persistent footer
+  const renderFooterAction = () => {
+    if (activeStep === 'overview') {
+      return (
+        <span className="workflow-footer-saved-decision">
+          Status: <strong>{formatEnum(action.status || 'OPEN')}</strong>
+        </span>
       );
     }
 
     if (activeStep === 'review') {
+      if (!isReviewFormEditable) {
+        return (
+          <span className="workflow-footer-saved-decision">
+            Saved decision: <strong>{savedDecisionLabel}</strong>
+            {isDemoReviewSaved && <span className="workflow-demo-tag">Demo review</span>}
+          </span>
+        );
+      }
+
+      if (!canApproveProposal && reviewDecision === 'APPROVE') {
+        return (
+          <span className="workflow-footer-saved-decision">
+            Action status <strong>{formatEnum(action.status)}</strong> cannot be approved
+          </span>
+        );
+      }
+
       const isReject = reviewDecision === 'REJECT';
       const label = loading
         ? 'Submitting review…'
@@ -788,7 +881,7 @@ export default function InterventionWorkflowModal({
           type="button"
           className={`workflow-btn ${isReject ? 'workflow-btn-danger' : 'workflow-btn-primary'}`}
           onClick={handleReviewSubmit}
-          disabled={loading || !reviewDecision}
+          disabled={loading || !reviewDecision || (reviewDecision === 'APPROVE' && !canApproveProposal)}
         >
           {label}
         </button>
@@ -796,6 +889,18 @@ export default function InterventionWorkflowModal({
     }
 
     if (activeStep === 'plan') {
+      if (isAmendingPlan) {
+        return (
+          <button
+            type="button"
+            className="workflow-btn workflow-btn-primary"
+            onClick={handleAmendPlanSubmit}
+            disabled={loading}
+          >
+            {loading ? 'Saving amendment…' : `Save amended plan (Rev ${(plan?.version || 1) + 1})`}
+          </button>
+        );
+      }
       if (!plan) {
         return (
           <button
@@ -821,13 +926,9 @@ export default function InterventionWorkflowModal({
         );
       }
       return (
-        <button
-          type="button"
-          className="workflow-btn workflow-btn-primary"
-          onClick={() => setActiveStep('implement')}
-        >
-          Proceed to Implementation →
-        </button>
+        <span className="workflow-footer-saved-decision">
+          Saved plan: <strong>v{plan.version} · Frozen</strong>
+        </span>
       );
     }
 
@@ -838,51 +939,32 @@ export default function InterventionWorkflowModal({
             type="button"
             className="workflow-btn workflow-btn-primary"
             onClick={handleImplementationSubmit}
-            disabled={loading || action.review_status !== 'APPROVED'}
+            disabled={loading || !hasSavedApproval}
           >
             {loading ? 'Recording…' : 'Record implementation'}
           </button>
         );
       }
       return (
-        <button
-          type="button"
-          className="workflow-btn workflow-btn-primary"
-          onClick={() => {
-            setActiveStep('assessment');
-            if (isBoundaryValid) handleEvaluateAssessment();
-          }}
-          disabled={loading}
-        >
-          {loading ? 'Loading assessment…' : 'Proceed to Assessment →'}
-        </button>
+        <span className="workflow-footer-saved-decision">
+          Implemented: <strong>{formatDateTime(action.implemented_at)}</strong>
+        </span>
       );
     }
 
     if (activeStep === 'assessment') {
       if (!action.implemented_at) {
         return (
-          <button
-            type="button"
-            className="workflow-btn workflow-btn-secondary"
-            onClick={() => setActiveStep('implement')}
-          >
-            ← Record implementation in Step 4
-          </button>
+          <span className="workflow-footer-saved-decision">
+            Prerequisite: <strong>Implementation required</strong>
+          </span>
         );
       }
       if (!isBoundaryValid) {
         return (
-          <button
-            type="button"
-            className="workflow-btn workflow-btn-secondary"
-            onClick={() => {
-              setActiveStep('plan');
-              setIsAmendingPlan(true);
-            }}
-          >
-            ← Amend plan boundary in Step 3
-          </button>
+          <span className="workflow-footer-saved-decision">
+            Prerequisite: <strong>Amend plan boundary</strong>
+          </span>
         );
       }
       if (!assessment) {
@@ -895,6 +977,13 @@ export default function InterventionWorkflowModal({
           >
             {loading ? 'Evaluating…' : 'Run assessment'}
           </button>
+        );
+      }
+      if (isAssessmentSignedOff) {
+        return (
+          <span className="workflow-footer-saved-decision">
+            Saved outcome: <strong>{formatEnum(assessment.review_decision || action.assessment_status)}</strong>
+          </span>
         );
       }
       return (
@@ -925,7 +1014,7 @@ export default function InterventionWorkflowModal({
         ref={dialogRef}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* ROW 1: HEADER (Action title, compact metadata, status badges, and stepper) */}
+        {/* ROW 1: COMPACT HEADER (Action title, compact metadata, status badges) */}
         <div className="workflow-modal-header">
           <div className="workflow-header-top">
             <div className="workflow-header-info">
@@ -933,9 +1022,11 @@ export default function InterventionWorkflowModal({
                 <span className={`workflow-badge workflow-badge-${(action.status || 'open').toLowerCase().replace('_', '-')}`}>
                   {formatEnum(action.status || 'OPEN')}
                 </span>
-                <span className="workflow-badge workflow-badge-review">
-                  {formatEnum(action.review_status || 'PENDING_REVIEW')}
-                </span>
+                {action.review_status && action.review_status !== action.status && (
+                  <span className="workflow-badge workflow-badge-review">
+                    {formatEnum(action.review_status)}
+                  </span>
+                )}
                 {action.assessment_status && action.assessment_status !== 'NONE' && (
                   <span className={`workflow-badge workflow-badge-${action.assessment_status.toLowerCase()}`}>
                     {formatEnum(action.assessment_status)}
@@ -973,53 +1064,53 @@ export default function InterventionWorkflowModal({
               </svg>
             </button>
           </div>
+        </div>
 
-          {/* Stepper: 5 equal-width columns on desktop, horizontal scroll on mobile */}
-          <div className="workflow-stepper-container">
-            <div className="workflow-stepper-scroll" ref={stepRailRef}>
-              <div className="workflow-stepper-rail" role="tablist" aria-label="Workflow Steps">
-                {WORKFLOW_STEPS.map((step, idx) => {
-                  const isSelected = activeStep === step.key;
-                  const isCompleted = isStepCompleted(step.key);
-                  const isLast = idx === WORKFLOW_STEPS.length - 1;
+        {/* ROW 2: STEPPER (5 equal-width columns on desktop, horizontal scroll on mobile) */}
+        <div className="workflow-stepper-container">
+          <div className="workflow-stepper-scroll" ref={stepRailRef}>
+            <div className="workflow-stepper-rail" role="tablist" aria-label="Workflow Steps">
+              {WORKFLOW_STEPS.map((step, idx) => {
+                const isSelected = activeStep === step.key;
+                const isCompleted = isStepCompleted(step.key);
+                const isLast = idx === WORKFLOW_STEPS.length - 1;
 
-                  return (
-                    <button
-                      key={step.key}
-                      type="button"
-                      role="tab"
-                      aria-selected={isSelected}
-                      className={`workflow-step-item ${isSelected ? 'selected' : ''}`}
-                      onClick={() => handleStepClick(step.key)}
-                      title={`Step ${idx + 1}: ${step.label}`}
-                    >
-                      <div className="workflow-step-node-wrap">
-                        {!isLast && (
-                          <div className={`workflow-step-connector ${isCompleted ? 'completed' : ''}`} />
+                return (
+                  <button
+                    key={step.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={isSelected}
+                    className={`workflow-step-item ${isSelected ? 'selected' : ''}`}
+                    onClick={() => handleStepClick(step.key)}
+                    title={`Step ${idx + 1}: ${step.label}`}
+                  >
+                    <div className="workflow-step-node-wrap">
+                      {!isLast && (
+                        <div className={`workflow-step-connector ${isCompleted ? 'completed' : ''}`} />
+                      )}
+                      <div className={`workflow-step-marker ${isCompleted ? 'completed' : ''} ${isSelected ? 'active' : ''}`}>
+                        {isCompleted ? (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        ) : (
+                          <span>{idx + 1}</span>
                         )}
-                        <div className={`workflow-step-marker ${isCompleted ? 'completed' : ''} ${isSelected ? 'active' : ''}`}>
-                          {isCompleted ? (
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true">
-                              <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                          ) : (
-                            <span>{idx + 1}</span>
-                          )}
-                        </div>
                       </div>
-                      <span className={`workflow-step-label ${isSelected ? 'active' : ''}`}>
-                        {step.label}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+                    </div>
+                    <span className={`workflow-step-label ${isSelected ? 'active' : ''}`}>
+                      {step.label}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
 
-        {/* ROW 2: SCROLLABLE CONTENT (Single vertical scrollbar for dialog content) */}
-        <div className="workflow-modal-content">
+        {/* ROW 3: SCROLLABLE BODY (Only vertical scrollbar for dialog content) */}
+        <div className="workflow-modal-content" ref={bodyRef}>
           {/* Error Banner if any error occurred */}
           {error && (
             <div className="workflow-alert-error" role="alert">
@@ -1079,180 +1170,310 @@ export default function InterventionWorkflowModal({
               <div className="workflow-card">
                 <h4 className="workflow-card-title">Workflow Lifecycle Traceability</h4>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', fontSize: '0.84rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color-light)', paddingBottom: '0.35rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem', borderBottom: '1px solid var(--border-color-light)', paddingBottom: '0.35rem' }}>
                     <span style={{ color: 'var(--text-secondary)' }}>1. Proposal Review:</span>
                     <strong>{formatEnum(action.review_status || 'PENDING_REVIEW')} {action.reviewed_by ? `by ${action.reviewed_by}` : ''}</strong>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color-light)', paddingBottom: '0.35rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem', borderBottom: '1px solid var(--border-color-light)', paddingBottom: '0.35rem' }}>
                     <span style={{ color: 'var(--text-secondary)' }}>2. Measurement Plan:</span>
                     <strong>{plan ? `v${plan.version} (${plan.is_frozen ? 'Frozen' : 'Draft'}${plan.is_retrospective ? ', Retrospective' : ''})` : 'Not Defined'}</strong>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color-light)', paddingBottom: '0.35rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem', borderBottom: '1px solid var(--border-color-light)', paddingBottom: '0.35rem' }}>
                     <span style={{ color: 'var(--text-secondary)' }}>3. Physical Implementation:</span>
                     <strong>{action.implemented_at ? `${formatDateTime(action.implemented_at)} by ${action.implemented_by}` : 'Pending Implementation'}</strong>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem' }}>
                     <span style={{ color: 'var(--text-secondary)' }}>4. Verified Outcome:</span>
                     <strong>{formatEnum(action.assessment_status || 'NONE')}</strong>
                   </div>
                 </div>
               </div>
+
+              {renderNextImplementationCallout()}
+
+              {Array.isArray(action.audit_trail) && action.audit_trail.length > 0 && (
+                <div className="workflow-card">
+                  <h4 className="workflow-card-title">Operational Audit Trail ({action.audit_trail.length})</h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', fontSize: '0.8rem' }}>
+                    {action.audit_trail.slice(0, 5).map((entry, idx) => (
+                      <div key={entry.audit_id || idx} style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', borderBottom: idx < Math.min(action.audit_trail.length, 5) - 1 ? '1px solid var(--border-color-light)' : 'none', paddingBottom: '0.35rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem' }}>
+                          <strong>{formatEnum(entry.action || 'EVENT')} {entry.to_status ? `(${formatEnum(entry.to_status)})` : ''}</strong>
+                          <span style={{ color: 'var(--text-muted)' }}>{entry.performed_at ? formatDateTime(entry.performed_at) : ''}</span>
+                        </div>
+                        {entry.comment && (
+                          <span style={{ color: 'var(--text-secondary)' }}>{entry.comment}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* STEP 2: PROPOSAL REVIEW (Redesigned) */}
+          {/* STEP 2: PROPOSAL REVIEW */}
           {activeStep === 'review' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              <div className="workflow-card">
-                <h3 className="workflow-card-title">Review proposal</h3>
-                <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                  Approval authorizes capturing a frozen measurement plan and scheduling physical implementation on the equipment.
-                </p>
-              </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+              {!isReviewFormEditable ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                  <div className={`workflow-card workflow-review-summary ${savedDecisionCardClass}`}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <span className={`workflow-badge ${savedDecisionBadgeClass}`}>
+                          {savedDecisionLabel}
+                        </span>
+                        {isDemoReviewSaved && <span className="workflow-demo-tag">Demo review</span>}
+                        {plan && (
+                          <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                            Plan v{plan.version} ({plan.is_frozen ? 'Frozen' : 'Draft'})
+                          </span>
+                        )}
+                      </div>
 
-              {/* Approve & Reject explicit choices */}
-              <div>
-                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 650, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                  Review Decision Choice <span style={{ color: '#ef4444' }}>*</span>
-                </label>
-                <div className="workflow-review-choices">
-                  <div
-                    tabIndex={0}
-                    role="button"
-                    aria-pressed={reviewDecision === 'APPROVE'}
-                    className={`workflow-choice-card approve ${reviewDecision === 'APPROVE' ? 'selected' : ''}`}
-                    onClick={() => {
-                      setReviewDecision('APPROVE');
-                      if (error) setError(null);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setReviewDecision('APPROVE');
-                      }
-                    }}
-                  >
-                    <div className="workflow-choice-header">
-                      <span className="workflow-choice-title" style={{ color: reviewDecision === 'APPROVE' ? '#059669' : 'inherit' }}>
-                        Approve proposal
-                      </span>
-                      {reviewDecision === 'APPROVE' && (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
+                      {canReReview && (
+                        <button
+                          type="button"
+                          className="workflow-btn workflow-btn-secondary"
+                          style={{ fontSize: '12px', padding: '0.3rem 0.65rem' }}
+                          onClick={() => {
+                            setIsReReviewing(true);
+                            setError(null);
+                          }}
+                        >
+                          {hasSavedApproval ? 'Re-review / Revise decision' : 'Re-review / Reopen proposal'}
+                        </button>
                       )}
                     </div>
-                    <span className="workflow-choice-desc">
-                      Authorize operational intervention and proceed to define or freeze measurement plan.
-                    </span>
+
+                    <div className="workflow-summary-grid">
+                      <div>
+                        <span className="workflow-summary-key">Reviewer</span>
+                        <div className="workflow-summary-val">{savedReviewerDisplay}</div>
+                      </div>
+                      <div>
+                        <span className="workflow-summary-key">Decision Time</span>
+                        <div className="workflow-summary-val">
+                          {action.reviewed_at ? formatDateTime(action.reviewed_at) : 'Timestamp not recorded'}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="workflow-summary-key">Action Status</span>
+                        <div className="workflow-summary-val">{formatEnum(action.status || 'OPEN')}</div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <span className="workflow-summary-key">Saved Engineering Justification</span>
+                      <p className="workflow-summary-justification">{savedReviewJustification}</p>
+                    </div>
                   </div>
 
-                  <div
-                    tabIndex={0}
-                    role="button"
-                    aria-pressed={reviewDecision === 'REJECT'}
-                    className={`workflow-choice-card reject ${reviewDecision === 'REJECT' ? 'selected' : ''}`}
-                    onClick={() => {
-                      setReviewDecision('REJECT');
-                      if (error) setError(null);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setReviewDecision('REJECT');
-                      }
-                    }}
-                  >
-                    <div className="workflow-choice-header">
-                      <span className="workflow-choice-title" style={{ color: reviewDecision === 'REJECT' ? '#dc2626' : 'inherit' }}>
-                        Reject proposal
+                  {renderNextImplementationCallout()}
+
+                  {hasSavedApproval && !plan?.is_frozen && (
+                    <div className="workflow-compact-notice info">
+                      <span>Proposal is approved. Continue to Step 3 to capture or freeze the measurement plan.</span>
+                      <button
+                        type="button"
+                        className="workflow-btn workflow-btn-secondary"
+                        style={{ marginLeft: 'auto', fontSize: '12px', padding: '0.25rem 0.6rem' }}
+                        onClick={() => handleStepClick('plan')}
+                      >
+                        Open Measurement plan →
+                      </button>
+                    </div>
+                  )}
+
+                  {!canReReview && (
+                    <div className="workflow-compact-notice info">
+                      <span>
+                        Review decision is locked because {action.implemented_at ? 'physical implementation has already been recorded' : `action status is ${formatEnum(action.status)}`}.
                       </span>
-                      {reviewDecision === 'REJECT' && (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5">
-                          <line x1="18" y1="6" x2="6" y2="18" />
-                          <line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
+                    </div>
+                  )}
+
+                  <div className="workflow-compact-notice info">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                    <span>Demo reviews are excluded from verified factory totals. All decisions are tracked in the operational audit trail.</span>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="workflow-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <h3 className="workflow-card-title">
+                        {isReReviewing ? 'Revise proposal review decision' : 'Review proposal'}
+                      </h3>
+                      {isReReviewing && (
+                        <button
+                          type="button"
+                          className="workflow-btn workflow-btn-secondary"
+                          style={{ fontSize: '12px', padding: '0.25rem 0.6rem' }}
+                          onClick={() => {
+                            setIsReReviewing(false);
+                            setError(null);
+                          }}
+                        >
+                          Cancel revision
+                        </button>
                       )}
                     </div>
-                    <span className="workflow-choice-desc">
-                      Decline operational intervention and archive the action with engineering justification.
-                    </span>
+                    <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                      Approval authorizes capturing a frozen measurement plan and scheduling physical implementation on the equipment.
+                    </p>
                   </div>
-                </div>
-              </div>
 
-              {/* Reviewer field with demo tag and example placeholder */}
-              <div>
-                <label style={{ display: 'flex', alignItems: 'center', fontSize: '0.82rem', fontWeight: 650, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                  <span>Reviewer Name &amp; Title</span>
-                  <span className="workflow-demo-tag">Demo review</span>
-                </label>
-                <input
-                  type="text"
-                  value={reviewerName}
-                  onChange={(e) => setReviewerName(e.target.value)}
-                  placeholder="e.g. A. Sharma (Facilities Engineering Lead)"
-                  style={{
-                    width: '100%',
-                    padding: '0.55rem 0.75rem',
-                    background: 'var(--bg-surface)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '6px',
-                    color: 'var(--text-primary)',
-                    fontSize: '0.85rem',
-                    boxBox: 'border-box',
-                  }}
-                />
-              </div>
+                  {/* Approve & Reject explicit choices */}
+                  <div>
+                    <label className="workflow-field-label">
+                      Review Decision Choice <span style={{ color: '#ef4444' }}>*</span>
+                    </label>
+                    <p className="workflow-field-hint">Select whether to authorize this intervention or decline it with justification.</p>
+                    <div className="workflow-review-choices">
+                      <div
+                        tabIndex={0}
+                        role="button"
+                        aria-pressed={reviewDecision === 'APPROVE'}
+                        className={`workflow-choice-card approve ${reviewDecision === 'APPROVE' ? 'selected' : ''}`}
+                        onClick={() => {
+                          setReviewDecision('APPROVE');
+                          if (error) setError(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setReviewDecision('APPROVE');
+                          }
+                        }}
+                      >
+                        <div className="workflow-choice-header">
+                          <span className="workflow-choice-title" style={{ color: reviewDecision === 'APPROVE' ? '#059669' : 'inherit' }}>
+                            Approve proposal
+                          </span>
+                          {reviewDecision === 'APPROVE' && (
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          )}
+                        </div>
+                        <span className="workflow-choice-desc">
+                          Authorize operational intervention and proceed to define or freeze measurement plan.
+                        </span>
+                      </div>
 
-              {/* Full-width justification textarea with visible label and prompt */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.35rem', flexWrap: 'wrap', gap: '0.3rem' }}>
-                  <label htmlFor="review-justification" style={{ fontSize: '0.82rem', fontWeight: 650, color: 'var(--text-primary)' }}>
-                    Engineering justification <span style={{ color: '#ef4444' }}>*</span>
-                  </label>
-                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                    Why is this action appropriate for this equipment?
-                  </span>
-                </div>
-                <textarea
-                  id="review-justification"
-                  rows={4}
-                  value={reviewReason}
-                  onChange={(e) => {
-                    setReviewReason(e.target.value);
-                    if (error) setError(null);
-                  }}
-                  placeholder="Explain the technical basis, root-cause alignment, or rejection reason for this equipment..."
-                  style={{
-                    width: '100%',
-                    padding: '0.65rem 0.75rem',
-                    background: 'var(--bg-surface)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '6px',
-                    color: 'var(--text-primary)',
-                    fontSize: '0.85rem',
-                    lineHeight: 1.45,
-                    boxSizing: 'border-box',
-                  }}
-                  required
-                />
-              </div>
+                      <div
+                        tabIndex={0}
+                        role="button"
+                        aria-pressed={reviewDecision === 'REJECT'}
+                        className={`workflow-choice-card reject ${reviewDecision === 'REJECT' ? 'selected' : ''}`}
+                        onClick={() => {
+                          setReviewDecision('REJECT');
+                          if (error) setError(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setReviewDecision('REJECT');
+                          }
+                        }}
+                      >
+                        <div className="workflow-choice-header">
+                          <span className="workflow-choice-title" style={{ color: reviewDecision === 'REJECT' ? '#dc2626' : 'inherit' }}>
+                            Reject proposal
+                          </span>
+                          {reviewDecision === 'REJECT' && (
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5">
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                          )}
+                        </div>
+                        <span className="workflow-choice-desc">
+                          Decline operational intervention and archive the action with engineering justification.
+                        </span>
+                      </div>
+                    </div>
+                  </div>
 
-              {/* Compact Notice near decision replacing oversized banner */}
-              <div className="workflow-compact-notice info">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="12" y1="16" x2="12" y2="12" />
-                  <line x1="12" y1="8" x2="12.01" y2="8" />
-                </svg>
-                <span>Demo reviews are excluded from verified factory totals. All decisions are tracked in the operational audit trail.</span>
-                {plan && (
-                  <span style={{ marginLeft: 'auto', fontWeight: 600, fontSize: '0.74rem', whiteSpace: 'nowrap' }}>
-                    Plan v{plan.version} ({plan.is_frozen ? 'Frozen' : 'Draft'})
-                  </span>
-                )}
-              </div>
+                  {/* Reviewer field with demo tag and helper text directly below label */}
+                  <div>
+                    <label htmlFor="review-reviewer-name" className="workflow-field-label" style={{ display: 'flex', alignItems: 'center' }}>
+                      <span>Reviewer Name &amp; Title</span>
+                      <span className="workflow-demo-tag">Demo review</span>
+                    </label>
+                    <p className="workflow-field-hint">Recorded in the operational audit trail; unauthenticated demo reviews are excluded from verified totals.</p>
+                    <input
+                      id="review-reviewer-name"
+                      type="text"
+                      value={reviewerName}
+                      onChange={(e) => setReviewerName(e.target.value)}
+                      placeholder="e.g. A. Sharma (Facilities Engineering Lead)"
+                      style={{
+                        width: '100%',
+                        padding: '0.55rem 0.75rem',
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '6px',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.85rem',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+
+                  {/* Full-width justification textarea with helper text directly below label */}
+                  <div>
+                    <label htmlFor="review-justification" className="workflow-field-label">
+                      Engineering justification <span style={{ color: '#ef4444' }}>*</span>
+                    </label>
+                    <p className="workflow-field-hint">
+                      Why is this action appropriate for this equipment?
+                    </p>
+                    <textarea
+                      id="review-justification"
+                      rows={4}
+                      value={reviewReason}
+                      onChange={(e) => {
+                        setReviewReason(e.target.value);
+                        if (error) setError(null);
+                      }}
+                      placeholder="Explain the technical basis, root-cause alignment, or rejection reason for this equipment..."
+                      style={{
+                        width: '100%',
+                        padding: '0.65rem 0.75rem',
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '6px',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.85rem',
+                        lineHeight: 1.45,
+                        boxSizing: 'border-box',
+                      }}
+                      required
+                    />
+                  </div>
+
+                  {/* Compact Notice near decision */}
+                  <div className="workflow-compact-notice info">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                    <span>Demo reviews are excluded from verified factory totals. All decisions are tracked in the operational audit trail.</span>
+                    {plan && (
+                      <span style={{ marginLeft: 'auto', fontWeight: 600, fontSize: '0.74rem', whiteSpace: 'nowrap' }}>
+                        Plan v{plan.version} ({plan.is_frozen ? 'Frozen' : 'Draft'})
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -1391,6 +1612,8 @@ export default function InterventionWorkflowModal({
                     <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Success Criterion Claim</span>
                     <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{plan.success_criterion}</div>
                   </div>
+
+                  {renderNextImplementationCallout()}
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -1456,13 +1679,13 @@ export default function InterventionWorkflowModal({
 
                   {/* Measurement Boundary Scope Selector */}
                   <div className="workflow-card">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.4rem' }}>
-                      <label style={{ fontSize: '0.82rem', fontWeight: 650, color: 'var(--text-primary)' }}>
+                    <div style={{ marginBottom: '0.4rem' }}>
+                      <label className="workflow-field-label">
                         Measurement Boundary Scope <span style={{ color: '#ef4444' }}>*</span>
                       </label>
-                      <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                      <p className="workflow-field-hint">
                         Select production comparison boundary
-                      </span>
+                      </p>
                     </div>
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.6rem', marginBottom: '0.75rem' }}>
@@ -1793,118 +2016,145 @@ export default function InterventionWorkflowModal({
                     </p>
                   </div>
 
-                  {action.review_status !== 'APPROVED' && (
+                  {!hasSavedApproval && (
                     <div className="workflow-alert-error">
                       Cannot record implementation: Proposal must be APPROVED first in Step 2.
                     </div>
                   )}
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.75rem' }}>
                     <div>
-                      <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.3rem' }}>Actual Implementation Timestamp</label>
+                      <label htmlFor="impl-timestamp" className="workflow-field-label">
+                        Actual Implementation Timestamp <span style={{ color: '#ef4444' }}>*</span>
+                      </label>
+                      <p className="workflow-field-hint">When the physical equipment change took effect.</p>
                       <input
+                        id="impl-timestamp"
                         type="datetime-local"
                         value={implementedAt}
-                        onChange={(e) => setImplementedAt(e.target.value)}
-                        disabled={action.review_status !== 'APPROVED'}
-                        style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
+                        onChange={(e) => {
+                          setImplementedAt(e.target.value);
+                          if (error) setError(null);
+                        }}
+                        disabled={!hasSavedApproval}
+                        style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', boxSizing: 'border-box' }}
                         required
                       />
-
-                      {/* Date Conflict Warning for unrecorded entry */}
-                      {isDateConflict && (
-                        <div className="workflow-compact-notice warning" style={{ marginTop: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                              <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-                              <line x1="12" y1="9" x2="12" y2="13" />
-                              <line x1="12" y1="17" x2="12.01" y2="17" />
-                            </svg>
-                            <strong>Date Sequence Conflict:</strong>
-                          </div>
-                          <div style={{ fontSize: '0.78rem', lineHeight: 1.45 }}>
-                            Implementation timestamp ({formatDateTime(implementedAt)}) is after frozen post window ({formatDateTime(plan?.post_start)} to {formatDateTime(plan?.post_end)}).
-                          </div>
-                          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.2rem' }}>
-                            {plan?.post_start && (
-                              <button
-                                type="button"
-                                className="workflow-btn workflow-btn-secondary"
-                                style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}
-                                onClick={() => setImplementedAt(plan.post_start.slice(0, 16))}
-                              >
-                                Set to trial execution date ({formatDateTime(plan.post_start)})
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              className="workflow-btn workflow-btn-secondary"
-                              style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}
-                              onClick={() => {
-                                setActiveStep('plan');
-                                setIsAmendingPlan(true);
-                              }}
-                            >
-                              Amend measurement plan in Step 3 →
-                            </button>
-                          </div>
-                        </div>
-                      )}
                     </div>
                     <div>
-                      <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.3rem' }}>Implemented By (Genuine Operator / Team)</label>
+                      <label htmlFor="impl-operator" className="workflow-field-label">
+                        Implemented By (Genuine Operator / Team) <span style={{ color: '#ef4444' }}>*</span>
+                      </label>
+                      <p className="workflow-field-hint">Named operator or team executing the change.</p>
                       <input
+                        id="impl-operator"
+                        ref={implementedByRef}
                         type="text"
                         value={implementedBy}
-                        onChange={(e) => setImplementedBy(e.target.value)}
-                        disabled={action.review_status !== 'APPROVED'}
+                        onChange={(e) => {
+                          setImplementedBy(e.target.value);
+                          if (error) setError(null);
+                        }}
+                        disabled={!hasSavedApproval}
                         placeholder="e.g. Facilities Lead - A. Sharma"
-                        style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
+                        style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', boxSizing: 'border-box' }}
                         required
                       />
                     </div>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  {/* Date Conflict Warning for unrecorded entry (full modal width) */}
+                  {isDateConflict && (
+                    <div className="workflow-compact-notice warning" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.35rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                          <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                          <line x1="12" y1="9" x2="12" y2="13" />
+                          <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                        <strong>Date Sequence Conflict:</strong>
+                      </div>
+                      <div style={{ fontSize: '0.78rem', lineHeight: 1.45 }}>
+                        Implementation timestamp ({formatDateTime(implementedAt)}) is after frozen post window ({formatDateTime(plan?.post_start)} to {formatDateTime(plan?.post_end)}).
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.15rem' }}>
+                        {plan?.post_start && (
+                          <button
+                            type="button"
+                            className="workflow-btn workflow-btn-secondary"
+                            style={{ fontSize: '0.72rem', padding: '0.25rem 0.6rem', height: 'auto' }}
+                            onClick={() => setImplementedAt(plan.post_start.slice(0, 16))}
+                          >
+                            Set to trial execution date ({formatDateTime(plan.post_start)})
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="workflow-btn workflow-btn-secondary"
+                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.6rem', height: 'auto' }}
+                          onClick={() => {
+                            setActiveStep('plan');
+                            setIsAmendingPlan(true);
+                          }}
+                        >
+                          Amend measurement plan in Step 3 →
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label htmlFor="impl-notes" className="workflow-field-label">
+                      Physical Implementation Notes <span style={{ color: '#ef4444' }}>*</span>
+                    </label>
+                    <p className="workflow-field-hint">Describe the physical actions taken on the equipment.</p>
+                    <textarea
+                      id="impl-notes"
+                      ref={implementationNotesRef}
+                      rows={3}
+                      value={implementationNotes}
+                      onChange={(e) => {
+                        setImplementationNotes(e.target.value);
+                        if (error) setError(null);
+                      }}
+                      disabled={!hasSavedApproval}
+                      placeholder="Describe the physical state changes made on the equipment..."
+                      style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', boxSizing: 'border-box' }}
+                      required
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.75rem' }}>
                     <div>
-                      <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.3rem' }}>
+                      <label htmlFor="impl-wo" className="workflow-field-label">
                         Linked CMMS Work Order (Optional)
                       </label>
+                      <p className="workflow-field-hint">Associate a maintenance work order identifier if available.</p>
                       <input
+                        id="impl-wo"
                         type="text"
                         value={workOrderId}
                         onChange={(e) => setWorkOrderId(e.target.value)}
-                        disabled={action.review_status !== 'APPROVED'}
+                        disabled={!hasSavedApproval}
                         placeholder="e.g. MWO-00001"
-                        style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
+                        style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', boxSizing: 'border-box' }}
                       />
                     </div>
                     <div>
-                      <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.3rem' }}>
+                      <label htmlFor="impl-dt" className="workflow-field-label">
                         Linked Downtime Event ID (Optional)
                       </label>
+                      <p className="workflow-field-hint">Reference a logged downtime event during cutover if applicable.</p>
                       <input
+                        id="impl-dt"
                         type="text"
                         value={downtimeEventId}
                         onChange={(e) => setDowntimeEventId(e.target.value)}
-                        disabled={action.review_status !== 'APPROVED'}
+                        disabled={!hasSavedApproval}
                         placeholder="e.g. DT-000001"
-                        style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
+                        style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', boxSizing: 'border-box' }}
                       />
                     </div>
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.3rem' }}>Physical Implementation Notes</label>
-                    <textarea
-                      rows={3}
-                      value={implementationNotes}
-                      onChange={(e) => setImplementationNotes(e.target.value)}
-                      disabled={action.review_status !== 'APPROVED'}
-                      placeholder="Describe the physical state changes made on the equipment..."
-                      style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
-                      required
-                    />
                   </div>
                 </div>
               )}
@@ -2331,45 +2581,85 @@ export default function InterventionWorkflowModal({
                     </div>
                   )}
 
-                  {/* Reviewer Sign-Off Form */}
-                  <div className="workflow-card">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <h4 className="workflow-card-title">Authorized Reviewer Sign-Off &amp; Ledger Finalization</h4>
-                      <span className="workflow-demo-tag">Demo mode</span>
+                  {/* Reviewer Sign-Off Form or Read-Only Completed Summary */}
+                  {isAssessmentSignedOff ? (
+                    <div className="workflow-card workflow-review-summary is-approved">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <h4 className="workflow-card-title">Signed-Off Verification Decision</h4>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          <span className="workflow-badge workflow-badge-approved">
+                            {formatEnum(assessment.review_decision || action.assessment_status)}
+                          </span>
+                          {(!assessment.signed_off_by || String(assessment.signed_off_by).toLowerCase().includes('demo')) && (
+                            <span className="workflow-demo-tag">Demo review</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="workflow-summary-grid">
+                        <div>
+                          <span className="workflow-summary-key">Signed Off By</span>
+                          <div className="workflow-summary-val">{assessment.signed_off_by || 'Reviewer not recorded'}</div>
+                        </div>
+                        <div>
+                          <span className="workflow-summary-key">Signed Off At</span>
+                          <div className="workflow-summary-val">{assessment.signed_off_at ? formatDateTime(assessment.signed_off_at) : 'Timestamp not recorded'}</div>
+                        </div>
+                        <div>
+                          <span className="workflow-summary-key">Claim Status</span>
+                          <div className="workflow-summary-val">{formatEnum(assessment.savings_claim_status || 'UNVERIFIED')}</div>
+                        </div>
+                      </div>
+                      <div>
+                        <span className="workflow-summary-key">Sign-Off Notes</span>
+                        <p className="workflow-summary-justification">
+                          {(assessment.review_notes || '').trim() || 'Justification not recorded'}
+                        </p>
+                      </div>
                     </div>
+                  ) : (
+                    <div className="workflow-card">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                        <h4 className="workflow-card-title">Authorized Reviewer Sign-Off &amp; Ledger Finalization</h4>
+                        <span className="workflow-demo-tag">Demo review</span>
+                      </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.35rem' }}>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.3rem' }}>Reviewer Decision</label>
-                        <select
-                          value={signOffDecision}
-                          onChange={(e) => setSignOffDecision(e.target.value)}
-                          style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
-                        >
-                          <option value="APPROVED_VERIFIED">APPROVED_VERIFIED — Verify savings and finalize in ledger</option>
-                          <option value="REJECTED">REJECTED — Reject verification claim</option>
-                          <option value="REQUEST_REANALYSIS">REQUEST_REANALYSIS — Request updated baseline or period</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.3rem' }}>Sign-Off Notes</label>
-                        <input
-                          type="text"
-                          value={signOffNotes}
-                          onChange={(e) => setSignOffNotes(e.target.value)}
-                          placeholder="Reviewer confirmation notes..."
-                          style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
-                        />
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.35rem' }}>
+                        <div>
+                          <label htmlFor="signoff-decision" className="workflow-field-label">Reviewer Decision</label>
+                          <p className="workflow-field-hint">Select verification outcome for the savings ledger.</p>
+                          <select
+                            id="signoff-decision"
+                            value={signOffDecision}
+                            onChange={(e) => setSignOffDecision(e.target.value)}
+                            style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', boxSizing: 'border-box' }}
+                          >
+                            <option value="APPROVED_VERIFIED">APPROVED_VERIFIED — Verify savings and finalize in ledger</option>
+                            <option value="REJECTED">REJECTED — Reject verification claim</option>
+                            <option value="REQUEST_REANALYSIS">REQUEST_REANALYSIS — Request updated baseline or period</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="signoff-notes" className="workflow-field-label">Sign-Off Notes</label>
+                          <p className="workflow-field-hint">Demo reviews are excluded from verified totals.</p>
+                          <input
+                            id="signoff-notes"
+                            type="text"
+                            value={signOffNotes}
+                            onChange={(e) => setSignOffNotes(e.target.value)}
+                            placeholder="Reviewer confirmation notes..."
+                            style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', boxSizing: 'border-box' }}
+                          />
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
           )}
         </div>
 
-        {/* ROW 3: PERSISTENT FOOTER (Always visible, explicit actions, secondary navigation) */}
+        {/* ROW 4: PERSISTENT FOOTER (One Close, compact Previous/Next, one primary action or saved decision) */}
         <div className="workflow-modal-footer">
           <div className="workflow-footer-nav">
             <button
@@ -2400,7 +2690,7 @@ export default function InterventionWorkflowModal({
           </div>
 
           <div className="workflow-footer-actions">
-            {renderPrimaryAction()}
+            {renderFooterAction()}
           </div>
         </div>
       </div>

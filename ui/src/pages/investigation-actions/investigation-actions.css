@@ -2042,15 +2042,15 @@
 }
 
 /* =========================================================================
-   AI Investigation Response Scoped Styles (~70ch desktop readability)
+   AI Investigation Response Scoped Styles
    ========================================================================= */
 
 .iac-ai-response-container {
   display: flex;
   flex-direction: column;
-  gap: 1.15rem;
+  gap: 1rem;
   width: 100%;
-  max-width: 70ch;
+  max-width: 100%;
   box-sizing: border-box;
   text-align: left;
 }
@@ -2176,7 +2176,7 @@
   flex-direction: column;
   gap: 0.75rem;
   padding: 0.85rem 0;
-  max-width: 70ch;
+  width: 100%;
 }
 
 .iac-ai-spinner-row {
@@ -2259,13 +2259,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
   flex-wrap: wrap;
   font-size: 12px;
   line-height: 18px;
   color: var(--text-muted, #64748b);
   width: 100%;
-  padding-bottom: 6px;
+  padding-bottom: 8px;
   border-bottom: 1px solid var(--border-color-light, #f1f5f9);
 }
 
@@ -2278,6 +2278,8 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
   gap: 6px;
   font-size: 12px;
   color: var(--text-secondary, #475569);
@@ -2290,6 +2292,7 @@
 .iac-ai-brief-meta-right {
   display: flex;
   align-items: center;
+  margin-left: auto;
   flex-shrink: 0;
 }
 
